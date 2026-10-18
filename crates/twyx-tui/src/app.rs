@@ -1,0 +1,298 @@
+//! The terminal client: one pane, the outer terminal, and the daemon between
+//! them.
+
+use std::io::Write;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use base64::Engine;
+use crossterm::event::{
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyModifiers, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::{execute, terminal};
+
+use twyx_protocol::client::{FromDaemon, ToDaemon};
+use twyx_protocol::grid::{Frame, Snapshot};
+use twyx_protocol::wire;
+
+use crate::client;
+use crate::emitter::{Capabilities, Emitter};
+use crate::input;
+use crate::probe;
+use crate::view::View;
+
+/// The key twyx takes from the pane. S2 makes it configurable.
+const PREFIX: char = 'g';
+
+/// Attaches the terminal client to the daemon.
+pub fn attach(paths: &twyx_daemon::paths::Paths) -> Result<()> {
+    client::ensure_daemon(paths)?;
+    let (cols, rows) = terminal::size().context("read the terminal size")?;
+
+    let mut screen = Screen::start()?;
+    let result = run(paths, cols, rows, &mut screen);
+    screen.stop();
+    result
+}
+
+/// Prints what the outer terminal says it can do.
+pub fn doctor() -> Result<()> {
+    terminal::enable_raw_mode().context("enter raw mode")?;
+    let answers = probe::interrogate(&mut tty()?);
+    terminal::disable_raw_mode().context("leave raw mode")?;
+
+    let answers = answers?;
+    println!(
+        "terminal:  {}",
+        answers.name.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "version:   {}",
+        answers.version.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "kitty keyboard: {}",
+        match answers.kitty_keyboard {
+            Some(flags) => format!("yes, flags {flags}"),
+            None => "no".to_owned(),
+        }
+    );
+    println!(
+        "synchronized output: {}",
+        yes_no(answers.synchronized_output)
+    );
+    println!("truecolor: {}", yes_no(answers.truecolor));
+    Ok(())
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+fn tty() -> Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .context("open the terminal")
+}
+
+fn run(paths: &twyx_daemon::paths::Paths, cols: u16, rows: u16, screen: &mut Screen) -> Result<()> {
+    let cols = cols.max(2);
+    let rows = rows.max(1);
+    let connection = client::connect(&paths.socket(), cols, rows)?;
+    let daemon = connection.split();
+
+    let mut view = View::new(cols, rows);
+    let mut prefix_pending = false;
+    let mut pane = daemon.hello.panes.first().map(|info| info.pane);
+    let mut title = String::new();
+
+    if let Some(info) = daemon.hello.panes.first() {
+        view.resize_grid(info.cols, info.rows);
+    } else {
+        daemon.outgoing.send(ToDaemon::NewPane {
+            argv: vec![shell()],
+            cwd: working_directory(),
+            cols,
+            rows,
+        })?;
+    }
+
+    loop {
+        let mut drew = false;
+        while let Ok(message) = daemon.incoming.try_recv() {
+            match message {
+                FromDaemon::Welcome(hello) => {
+                    if pane.is_none() {
+                        pane = hello.panes.first().map(|info| info.pane);
+                    }
+                }
+                FromDaemon::Snapshot { pane: id, body, .. } if Some(id) == pane => {
+                    view.apply_snapshot(wire::decode_body::<Snapshot>(&body)?);
+                    drew = true;
+                }
+                FromDaemon::Frame { pane: id, body, .. } if Some(id) == pane => {
+                    view.apply_frame(wire::decode_body::<Frame>(&body)?);
+                    drew = true;
+                }
+                FromDaemon::Pane(info) => {
+                    if pane.is_none() {
+                        pane = Some(info.pane);
+                    }
+                }
+                FromDaemon::Clipboard { text, .. } => {
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+                    screen.write(&format!("\x1b]52;c;{encoded}\x1b\\"))?;
+                }
+                FromDaemon::Unsupported { major, minor } => {
+                    anyhow::bail!("the daemon speaks client protocol {major}.{minor}");
+                }
+                FromDaemon::Lease { .. }
+                | FromDaemon::Snapshot { .. }
+                | FromDaemon::Frame { .. } => {}
+            }
+        }
+
+        if drew {
+            screen.emitter.draw(&mut view)?;
+            if view.title != title {
+                title.clone_from(&view.title);
+                screen.set_title(&title)?;
+            }
+        }
+
+        if !event::poll(Duration::from_millis(30)).context("poll the terminal")? {
+            continue;
+        }
+        match event::read().context("read a terminal event")? {
+            Event::Resize(new_cols, new_rows) => {
+                let new_cols = new_cols.max(2);
+                let new_rows = new_rows.max(1);
+                view.resize_grid(new_cols, new_rows);
+                daemon.outgoing.send(ToDaemon::Resize {
+                    cols: new_cols,
+                    rows: new_rows,
+                })?;
+            }
+            Event::Key(key) => {
+                if key.code == KeyCode::Char(PREFIX)
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    if prefix_pending {
+                        prefix_pending = false;
+                        if let Some(event) = input::to_input(Event::Key(key)) {
+                            daemon.outgoing.send(ToDaemon::Input(event))?;
+                        }
+                    } else {
+                        prefix_pending = true;
+                    }
+                    continue;
+                }
+                if prefix_pending {
+                    prefix_pending = false;
+                    if let KeyCode::Char('q') = key.code {
+                        return Ok(());
+                    }
+                    if let Some(event) = input::to_input(Event::Key(key)) {
+                        daemon.outgoing.send(ToDaemon::Input(event))?;
+                    }
+                    continue;
+                }
+                if let Some(event) = input::to_input(Event::Key(key)) {
+                    daemon.outgoing.send(ToDaemon::Input(event))?;
+                }
+            }
+            other => {
+                if let Some(event) = input::to_input(other) {
+                    daemon.outgoing.send(ToDaemon::Input(event))?;
+                }
+            }
+        }
+    }
+}
+
+fn shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
+}
+
+fn working_directory() -> String {
+    std::env::current_dir()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "/".to_owned())
+}
+
+/// The outer terminal, from raw mode to the restored screen.
+pub struct Screen {
+    pub emitter: Emitter<std::io::Stdout>,
+    capabilities: Capabilities,
+    active: bool,
+}
+
+impl std::fmt::Debug for Screen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Screen")
+            .field("capabilities", &self.capabilities)
+            .field("active", &self.active)
+            .finish()
+    }
+}
+
+impl Screen {
+    fn start() -> Result<Self> {
+        terminal::enable_raw_mode().context("enter raw mode")?;
+        let answers = probe::interrogate(&mut tty()?);
+        let capabilities = answers
+            .map(|answers| answers.capabilities())
+            .unwrap_or_default();
+
+        let mut stdout = std::io::stdout();
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            EnableMouseCapture,
+            EnableFocusChange
+        )
+        .context("set up the screen")?;
+        if capabilities.kitty_keyboard {
+            // Disambiguation is what makes Ctrl-I and Tab different keys.
+            execute!(
+                stdout,
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                )
+            )
+            .context("ask for the kitty keyboard protocol")?;
+        }
+
+        Ok(Self {
+            emitter: Emitter::new(std::io::stdout(), capabilities),
+            capabilities,
+            active: true,
+        })
+    }
+
+    fn write(&mut self, bytes: &str) -> Result<()> {
+        let mut stdout = std::io::stdout();
+        stdout.write_all(bytes.as_bytes()).context("write")?;
+        stdout.flush().context("flush")
+    }
+
+    fn set_title(&mut self, title: &str) -> Result<()> {
+        let title: String = title.chars().filter(|c| !c.is_control()).collect();
+        let mut stdout = std::io::stdout();
+        write!(stdout, "\x1b]2;{title}\x07").context("set the title")?;
+        stdout.flush().context("flush the title")
+    }
+
+    fn stop(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        let _ = self.emitter.leave();
+        let mut stdout = std::io::stdout();
+        if self.capabilities.kitty_keyboard {
+            let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+        }
+        let _ = execute!(
+            stdout,
+            DisableFocusChange,
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
+impl Drop for Screen {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}

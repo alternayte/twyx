@@ -3,6 +3,7 @@
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -11,17 +12,22 @@ use twyx_protocol::client::{ClientHello, FromDaemon, MAJOR, MINOR, ServerHello, 
 use twyx_protocol::wire;
 
 /// A connected client, with the daemon's greeting.
+#[derive(Debug)]
 pub struct Connection {
     pub reader: BufReader<UnixStream>,
     pub writer: UnixStream,
     pub hello: ServerHello,
 }
 
-pub fn connect(paths: &twyx_daemon::paths::Paths, cols: u16, rows: u16) -> Result<Connection> {
-    connect_to(&paths.socket(), cols, rows)
+/// A connection whose two directions run on their own threads.
+#[derive(Debug)]
+pub struct Parts {
+    pub incoming: Receiver<FromDaemon>,
+    pub outgoing: Sender<ToDaemon>,
+    pub hello: ServerHello,
 }
 
-pub fn connect_to(socket: &Path, cols: u16, rows: u16) -> Result<Connection> {
+pub fn connect(socket: &Path, cols: u16, rows: u16) -> Result<Connection> {
     let stream = UnixStream::connect(socket)
         .with_context(|| format!("connect to the daemon on {}", socket.display()))?;
     let reader = BufReader::new(stream.try_clone().context("clone the socket")?);
@@ -91,6 +97,37 @@ impl Connection {
         match wire::read::<FromDaemon>(&mut self.reader)? {
             Some(message) => Ok(message),
             None => bail!("the daemon closed the connection"),
+        }
+    }
+
+    /// Runs each direction on its own thread, so the caller never blocks on
+    /// the socket while it waits for a key.
+    pub fn split(self) -> Parts {
+        let (outgoing, outbound) = channel::<ToDaemon>();
+        let (inbound, incoming) = channel::<FromDaemon>();
+
+        let mut writer = self.writer;
+        std::thread::spawn(move || {
+            for message in outbound {
+                if wire::write(&mut writer, &message).is_err() {
+                    break;
+                }
+            }
+        });
+
+        let mut reader = self.reader;
+        std::thread::spawn(move || {
+            while let Ok(Some(message)) = wire::read::<FromDaemon>(&mut reader) {
+                if inbound.send(message).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Parts {
+            incoming,
+            outgoing,
+            hello: self.hello,
         }
     }
 }
