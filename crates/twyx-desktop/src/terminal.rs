@@ -60,7 +60,7 @@ impl Terminal {
     }
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let metrics = Metrics::measure(window, px(13.0));
+        let metrics = Metrics::measure(window.text_system(), px(13.0));
         let shared = Arc::new(Mutex::new(Shared {
             view: View::new(80, 24),
             pane: None,

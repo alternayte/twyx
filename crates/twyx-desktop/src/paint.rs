@@ -2,7 +2,7 @@
 
 use gpui::{
     App, Bounds, Font, FontWeight, Hsla, Pixels, Point, SharedString, TextAlign, TextRun,
-    UnderlineStyle, Window, fill, font, point, px, rgb,
+    TextSystem, UnderlineStyle, Window, fill, font, point, px, rgb,
 };
 use twyx_protocol::grid::{Attrs, Cell, Colour, Underline};
 use twyx_protocol::view::View;
@@ -35,18 +35,20 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    pub fn measure(window: &Window, font_size: Pixels) -> Self {
+    pub fn measure(text_system: &TextSystem, font_size: Pixels) -> Self {
         let font = font("Menlo");
-        let text_system = window.text_system();
         let font_id = text_system.resolve_font(&font);
-        let cell_width = text_system.ch_width(font_id, font_size).unwrap_or(px(8.0));
+        let cell_width = text_system
+            .ch_advance(font_id, font_size)
+            .unwrap_or(px(8.0));
+        // gpui reports the descent below the baseline as a negative value.
         let line_height =
-            text_system.ascent(font_id, font_size) + text_system.descent(font_id, font_size);
+            text_system.ascent(font_id, font_size) - text_system.descent(font_id, font_size);
         Self {
             cell_width,
             line_height,
             font_size,
-            font: font.clone(),
+            font,
         }
     }
 
@@ -110,46 +112,10 @@ fn paint_row(
     cx: &mut App,
     palette: Palette,
 ) {
-    let mut text = String::new();
-    let mut runs: Vec<TextRun> = Vec::new();
-
-    for cell in cells {
-        // The spacer after a wide cell is covered by the wide cell itself.
-        if cell.text.is_empty() {
-            continue;
-        }
-        let run = style_of(cell, metrics, palette);
-        let hidden = cell.attrs.contains(Attrs::HIDDEN);
-        match runs.last_mut() {
-            Some(last)
-                if last.color == run.color
-                    && last.background_color == run.background_color
-                    && last.underline == run.underline
-                    && last.strikethrough == run.strikethrough
-                    && last.font.weight == run.font.weight
-                    && last.font.style == run.font.style =>
-            {
-                last.len += if hidden { 1 } else { cell.text.len() };
-            }
-            _ => runs.push(TextRun {
-                len: if hidden { 1 } else { cell.text.len() },
-                ..run
-            }),
-        }
-        if hidden {
-            text.push(' ');
-        } else {
-            text.push_str(&cell.text);
-        }
-    }
-
+    let (text, runs) = shape_input(cells, metrics, palette);
     if text.is_empty() {
         return;
     }
-    if let Some(last) = runs.last_mut() {
-        last.len = text.len();
-    }
-
     let line =
         window
             .text_system()
@@ -162,6 +128,41 @@ fn paint_row(
         window,
         cx,
     );
+}
+
+/// The text of one row and its styled runs, whose lengths cover the text exactly.
+fn shape_input(cells: &[Cell], metrics: &Metrics, palette: Palette) -> (String, Vec<TextRun>) {
+    let mut text = String::new();
+    let mut runs: Vec<TextRun> = Vec::new();
+
+    for cell in cells {
+        // The spacer after a wide cell is covered by the wide cell itself.
+        if cell.text.is_empty() {
+            continue;
+        }
+        let run = style_of(cell, metrics, palette);
+        let hidden = cell.attrs.contains(Attrs::HIDDEN);
+        let len = if hidden { 1 } else { cell.text.len() };
+        match runs.last_mut() {
+            Some(last)
+                if last.color == run.color
+                    && last.background_color == run.background_color
+                    && last.underline == run.underline
+                    && last.strikethrough == run.strikethrough
+                    && last.font.weight == run.font.weight
+                    && last.font.style == run.font.style =>
+            {
+                last.len += len;
+            }
+            _ => runs.push(TextRun { len, ..run }),
+        }
+        if hidden {
+            text.push(' ');
+        } else {
+            text.push_str(&cell.text);
+        }
+    }
+    (text, runs)
 }
 
 fn style_of(cell: &Cell, metrics: &Metrics, palette: Palette) -> TextRun {
@@ -233,5 +234,38 @@ fn palette_colour(index: u8) -> Hsla {
             let level = 8 + (index - 232) * 10;
             rgb(u32::from(level) << 16 | u32::from(level) << 8 | u32::from(level)).into()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runs_cover_a_row_with_several_styles_exactly() {
+        let metrics = Metrics {
+            cell_width: px(8.0),
+            line_height: px(16.0),
+            font_size: px(13.0),
+            font: font("Menlo"),
+        };
+        let cell = |text: &str, fg: Colour| Cell {
+            text: text.to_owned(),
+            fg,
+            ..Cell::blank()
+        };
+        let cells = vec![
+            cell("➜", Colour::Palette(2)),
+            cell(" ", Colour::Default),
+            cell("字", Colour::Palette(6)),
+            cell("", Colour::Palette(6)),
+            cell("x", Colour::Default),
+        ];
+
+        let (text, runs) = shape_input(&cells, &metrics, Palette::default());
+
+        assert_eq!(text, "➜ 字x");
+        assert_eq!(runs.len(), 4);
+        assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len());
     }
 }
