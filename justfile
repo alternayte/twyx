@@ -23,11 +23,13 @@ conformance:
     cargo test --package twyx-holder --test conformance --test neovim
     cargo test --package twyx-holder --features engine-wezterm --test conformance --test neovim
 
-# Keystroke-to-screen latency through the real client, on this machine.
-# Release builds only for numbers that get published.
+# Latency, throughput, memory under a producer, and idle cost with ten panes,
+# for twyx and for Zellij and Herdr when they are on PATH. Release builds only
+# for numbers that get published.
 bench:
     cargo build --release --package twyx
-    cargo run --release --package twyx --bin twyx-bench -- --samples 20 -- ./target/release/twyx
+    ./target/release/twyx-bench --samples 20 --twyx ./target/release/twyx \
+        $(command -v zellij >/dev/null && echo zellij) $(command -v herdr >/dev/null && echo herdr)
 
 # The ghostty engine needs Zig 0.16.0 on PATH and GHOSTTY_SOURCE_DIR pointing at
 # a Ghostty checkout of the commit libghostty-rs pins (3425025e), so it runs here
