@@ -1,6 +1,6 @@
 //! The window: one pane, drawn with GPUI, talking to the daemon.
 
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -97,12 +97,14 @@ impl Terminal {
         };
         if let Err(error) = connection::ensure_daemon(&paths) {
             eprintln!("twyx-desktop: {error:#}");
+            self.retry_connect(cx);
             return;
         }
         let connection = match connection::connect(&paths.socket(), self.grid.0, self.grid.1) {
             Ok(connection) => connection,
             Err(error) => {
                 eprintln!("twyx-desktop: {error:#}");
+                self.retry_connect(cx);
                 return;
             }
         };
@@ -111,13 +113,27 @@ impl Terminal {
         let outgoing = parts.outgoing.clone();
         self.outgoing = Some(outgoing.clone());
 
-        // A client with no live pane looks dead, so ask for one.
-        let live = parts
-            .hello
-            .panes
-            .iter()
-            .find(|info| info.state == PaneState::Running)
-            .map(|info| info.pane);
+        // A pane keeps its id across daemons, so a reconnect stays on it. A
+        // client with no live pane looks dead, so ask for one.
+        let running = |pane: u64| {
+            parts
+                .hello
+                .panes
+                .iter()
+                .any(|info| info.pane == pane && info.state == PaneState::Running)
+        };
+        let live = self
+            .shared()
+            .pane
+            .filter(|pane| running(*pane))
+            .or_else(|| {
+                parts
+                    .hello
+                    .panes
+                    .iter()
+                    .find(|info| info.state == PaneState::Running)
+                    .map(|info| info.pane)
+            });
         {
             let mut shared = self.shared();
             shared.pane = live;
@@ -151,7 +167,20 @@ impl Terminal {
                     .await;
                 let mut dirty = false;
                 let debug = std::env::var_os("TWYX_DEBUG").is_some();
-                while let Ok(message) = incoming.try_recv() {
+                loop {
+                    let message = match incoming.try_recv() {
+                        Ok(message) => message,
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            // The daemon went away. Reconnect now rather than on
+                            // the next paint: a covered window does not paint.
+                            let _ = this.update(cx, |terminal, cx| {
+                                terminal.outgoing = None;
+                                terminal.connect(cx);
+                            });
+                            return;
+                        }
+                    };
                     let mut state = shared.lock().unwrap_or_else(|poison| poison.into_inner());
                     match message {
                         FromDaemon::Welcome(hello) => {
@@ -231,6 +260,17 @@ impl Terminal {
                     break;
                 }
             }
+        })
+        .detach();
+    }
+
+    /// Tries the connection again shortly.
+    fn retry_connect(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            let _ = this.update(cx, |terminal, cx| terminal.connect(cx));
         })
         .detach();
     }

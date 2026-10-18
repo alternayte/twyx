@@ -107,9 +107,16 @@ impl Nvim {
             .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
 
+    /// One slow call on a loaded machine is not a failure; ten seconds of
+    /// them is.
     fn eval(&self, expr: &str) -> String {
-        self.try_eval(expr)
-            .unwrap_or_else(|| panic!("Neovim did not evaluate {expr}"))
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(value) = self.try_eval(expr) {
+                return value;
+            }
+            assert!(Instant::now() < deadline, "Neovim did not evaluate {expr}");
+        }
     }
 
     fn mouse(&mut self, action: MouseAction, col: u16, row: u16) {

@@ -2,7 +2,8 @@
 //! them.
 
 use std::io::Write;
-use std::time::Duration;
+use std::sync::mpsc::TryRecvError;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -68,6 +69,23 @@ pub fn doctor() -> Result<()> {
     Ok(())
 }
 
+/// Waits for a daemon after the last one went away, starting one if none
+/// answers. The new daemon adopts the holders, so the panes are still there.
+fn reconnect(paths: &twyx_core::paths::Paths, size: (u16, u16)) -> Result<client::Parts> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let attempt = client::ensure_daemon(paths)
+            .and_then(|()| client::connect(&paths.socket(), size.0, size.1));
+        match attempt {
+            Ok(connection) => return Ok(connection.split()),
+            Err(error) if Instant::now() >= deadline => {
+                return Err(error.context("lost the daemon and could not start a new one"));
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
@@ -84,7 +102,8 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
     let cols = cols.max(2);
     let rows = rows.max(1);
     let connection = client::connect(&paths.socket(), cols, rows)?;
-    let daemon = connection.split();
+    let mut daemon = connection.split();
+    let mut size = (cols, rows);
 
     let mut view = View::new(cols, rows);
     screen.emitter.resize(cols, rows);
@@ -118,7 +137,16 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
 
     loop {
         let mut drew = false;
-        while let Ok(message) = daemon.incoming.try_recv() {
+        let mut lost = false;
+        loop {
+            let message = match daemon.incoming.try_recv() {
+                Ok(message) => message,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    lost = true;
+                    break;
+                }
+            };
             match message {
                 FromDaemon::Welcome(hello) => {
                     if pane.is_none() {
@@ -151,6 +179,26 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
             }
         }
 
+        if lost {
+            daemon = reconnect(paths, size)?;
+            // The pane keeps its id across daemons; take another live one only
+            // if it is gone.
+            let kept = daemon
+                .hello
+                .panes
+                .iter()
+                .any(|info| Some(info.pane) == pane && info.state == PaneState::Running);
+            if !kept {
+                pane = daemon
+                    .hello
+                    .panes
+                    .iter()
+                    .find(|info| info.state == PaneState::Running)
+                    .map(|info| info.pane);
+            }
+            continue;
+        }
+
         if drew {
             screen.emitter.draw(&mut view)?;
             if view.title != title {
@@ -169,14 +217,15 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
             Event::Resize(new_cols, new_rows) => {
                 let new_cols = new_cols.max(2);
                 let new_rows = new_rows.max(1);
+                size = (new_cols, new_rows);
                 // The view keeps the pane's screen; only the crop changes until
                 // the pane itself is resized.
                 screen.emitter.resize(new_cols, new_rows);
                 screen.emitter.draw(&mut view)?;
-                daemon.outgoing.send(ToDaemon::Resize {
+                let _ = daemon.outgoing.send(ToDaemon::Resize {
                     cols: new_cols,
                     rows: new_rows,
-                })?;
+                });
             }
             Event::Key(key) => {
                 if key.code == KeyCode::Char(PREFIX)
@@ -185,7 +234,7 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
                     if prefix_pending {
                         prefix_pending = false;
                         if let Some(event) = input::to_input(Event::Key(key)) {
-                            daemon.outgoing.send(ToDaemon::Input(event))?;
+                            let _ = daemon.outgoing.send(ToDaemon::Input(event));
                         }
                     } else {
                         prefix_pending = true;
@@ -198,17 +247,17 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
                         return Ok(());
                     }
                     if let Some(event) = input::to_input(Event::Key(key)) {
-                        daemon.outgoing.send(ToDaemon::Input(event))?;
+                        let _ = daemon.outgoing.send(ToDaemon::Input(event));
                     }
                     continue;
                 }
                 if let Some(event) = input::to_input(Event::Key(key)) {
-                    daemon.outgoing.send(ToDaemon::Input(event))?;
+                    let _ = daemon.outgoing.send(ToDaemon::Input(event));
                 }
             }
             other => {
                 if let Some(event) = input::to_input(other) {
-                    daemon.outgoing.send(ToDaemon::Input(event))?;
+                    let _ = daemon.outgoing.send(ToDaemon::Input(event));
                 }
             }
         }
