@@ -21,7 +21,7 @@ pub fn accept(stream: &UnixStream) -> Result<()> {
 fn peer_uid(stream: &UnixStream) -> Result<u32> {
     let credentials = rustix::net::sockopt::socket_peercred(stream)
         .with_context(|| "read the peer credentials")?;
-    Ok(credentials.uid().as_raw())
+    Ok(credentials.uid.as_raw())
 }
 
 #[cfg(not(target_os = "linux"))]
