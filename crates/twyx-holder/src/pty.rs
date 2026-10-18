@@ -7,9 +7,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use portable_pty::{
-    Child, CommandBuilder, ExitStatus, MasterPty, PtySize, native_pty_system,
-};
+use portable_pty::{Child, CommandBuilder, ExitStatus, MasterPty, PtySize, native_pty_system};
 
 /// What to start in a pane.
 #[derive(Debug, Clone)]
@@ -64,7 +62,9 @@ impl Pty {
     }
 
     pub fn reader(&self) -> Result<Box<dyn Read + Send>> {
-        self.master.try_clone_reader().context("clone the pty reader")
+        self.master
+            .try_clone_reader()
+            .context("clone the pty reader")
     }
 
     pub fn writer(&self) -> Result<Box<dyn Write + Send>> {

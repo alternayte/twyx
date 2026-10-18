@@ -9,7 +9,13 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["engine-alacritty"]
+engine-alacritty = ["dep:alacritty_terminal"]
+
 [dependencies]
+alacritty_terminal = { version = "0.26", optional = true }
 anyhow = "1"
 portable-pty = "0.9"
 twyx-core = { workspace = true }
+twyx-protocol = { workspace = true }
