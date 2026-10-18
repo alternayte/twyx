@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "crates/twyx",
   "crates/twyx-core",
+  "crates/twyx-desktop",
   "crates/twyx-daemon",
   "crates/twyx-holder",
   "crates/twyx-protocol",
@@ -18,6 +19,7 @@ repository = "https://github.com/alternayte/twyx"
 
 [workspace.dependencies]
 twyx-core = { path = "crates/twyx-core" }
+twyx-desktop = { path = "crates/twyx-desktop" }
 twyx-daemon = { path = "crates/twyx-daemon" }
 twyx-holder = { path = "crates/twyx-holder" }
 twyx-protocol = { path = "crates/twyx-protocol" }

@@ -10,6 +10,9 @@ allow = [
   "MPL-2.0",
   "Unicode-3.0",
   "Unicode-DFS-2016",
+  # GPUI pulls hexf-parse, which is a public domain dedication and imposes
+  # nothing on twyx.
+  "CC0-1.0",
 ]
 confidence-threshold = 0.9
 unused-allowed-license = "allow"

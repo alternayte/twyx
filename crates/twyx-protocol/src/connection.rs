@@ -63,12 +63,28 @@ pub fn connect(socket: &Path, cols: u16, rows: u16) -> Result<Connection> {
     }
 }
 
+/// The `twyx` binary, which carries the daemon. A client binary sits next to
+/// it, and `TWYX_BINARY` overrides the search.
+fn daemon_binary() -> Result<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("TWYX_BINARY") {
+        return Ok(path.into());
+    }
+    let current = std::env::current_exe().context("find the twyx binary")?;
+    if let Some(directory) = current.parent() {
+        let sibling = directory.join("twyx");
+        if sibling.is_file() {
+            return Ok(sibling);
+        }
+    }
+    Ok(current)
+}
+
 /// Waits for a daemon to answer, starting one first when there is none.
 pub fn ensure_daemon(paths: &twyx_core::paths::Paths) -> Result<()> {
     if UnixStream::connect(paths.socket()).is_ok() {
         return Ok(());
     }
-    let binary = std::env::current_exe().context("find the twyx binary")?;
+    let binary = daemon_binary()?;
     std::process::Command::new(binary)
         .arg("daemon")
         .arg("run")

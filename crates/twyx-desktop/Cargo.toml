@@ -1,0 +1,17 @@
+[package]
+name = "twyx-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.98"
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+gpui = { package = "gpui-pre", version = "=0.3.9" }
+gpui-platform = { package = "gpui-pre-platform", version = "=0.3.9" }
+twyx-core = { workspace = true }
+twyx-protocol = { workspace = true }
