@@ -2,3 +2,5 @@
 //! scrollback and the input queue.
 //!
 //! This crate is the only place that touches a PTY or a terminal engine.
+
+pub mod pty;

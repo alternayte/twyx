@@ -8,3 +8,8 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+anyhow = "1"
+portable-pty = "0.9"
+twyx-core = { workspace = true }
