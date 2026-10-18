@@ -128,8 +128,14 @@ impl Client {
     }
 
     /// The process name its client, server and holders run under.
-    fn process_name(&self) -> &'static str {
-        self.name()
+    fn process_name(&self) -> String {
+        match self {
+            Client::Twyx(path) => path.file_name().map_or_else(
+                || "twyx".to_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            ),
+            other => other.name().to_owned(),
+        }
     }
 
     fn command(&self, run: &Run) -> Vec<String> {
@@ -349,7 +355,7 @@ fn measure(client: &Client, samples: usize) -> anyhow::Result<Report> {
     let big = run.root.join("big.txt");
     write_big_file(&big)?;
 
-    let before = processes(client.process_name())?
+    let before = processes(&client.process_name())?
         .into_iter()
         .map(|process| process.pid)
         .collect::<HashSet<_>>();
@@ -359,7 +365,7 @@ fn measure(client: &Client, samples: usize) -> anyhow::Result<Report> {
     let _ = terminal.child.kill();
     client.stop(&run);
     // Whatever the run started and the stop left behind.
-    if let Ok(left) = processes(client.process_name()) {
+    if let Ok(left) = processes(&client.process_name()) {
         for process in left.iter().filter(|process| !before.contains(&process.pid)) {
             let _ = Command::new("kill")
                 .arg("-9")
@@ -394,6 +400,11 @@ fn measure_in(
         std::thread::sleep(Duration::from_millis(40));
     }
     latencies.sort();
+    eprintln!(
+        "  {}: latency p50 {:.1} ms",
+        client.name(),
+        percentile(&latencies, 50).as_secs_f64() * 1000.0
+    );
 
     terminal.drain();
     terminal.type_text(&format!("cat {}; {PRINT_MARKER}\r", big.display()))?;
@@ -402,6 +413,7 @@ fn measure_in(
         .wait_for(MARKER, Duration::from_secs(300))
         .context("the large cat never finished")?;
     let throughput_mib_s = CAT_BYTES as f64 / (1024.0 * 1024.0) / started.elapsed().as_secs_f64();
+    eprintln!("  {}: cat {throughput_mib_s:.1} MiB/s", client.name());
     terminal.type_text("clear\r")?;
     std::thread::sleep(Duration::from_millis(500));
 
@@ -415,11 +427,18 @@ fn measure_in(
         producer_peak_kib = producer_peak_kib.max(total(client, before)?.rss_kib);
         std::thread::sleep(Duration::from_millis(100));
     }
+    eprintln!(
+        "  {}: producer peak {:.1} MiB",
+        client.name(),
+        producer_peak_kib as f64 / 1024.0
+    );
     terminal.type_text("\x03")?;
     std::thread::sleep(Duration::from_millis(500));
     terminal.drain();
     terminal.type_text(&format!("clear; {PRINT_MARKER}\r"))?;
-    terminal.wait_for(MARKER, Duration::from_secs(30))?;
+    terminal
+        .wait_for(MARKER, Duration::from_secs(30))
+        .context("the pane did not recover within 30 s of stopping the producer")?;
 
     for index in 1..PANES {
         client.add_pane(run, index)?;
@@ -477,7 +496,7 @@ fn total(client: &Client, before: &HashSet<u32>) -> anyhow::Result<Total> {
         rss_kib: 0,
         cpu: Duration::ZERO,
     };
-    for process in processes(client.process_name())? {
+    for process in processes(&client.process_name())? {
         if before.contains(&process.pid) {
             continue;
         }
