@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+portable-pty = "0.9"
 rustix = { version = "1", features = ["process"] }
 twyx-daemon = { workspace = true }
 twyx-core = { workspace = true }

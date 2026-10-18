@@ -17,6 +17,12 @@ test:
     cargo test --workspace
     cargo test --package twyx-holder --features engine-wezterm
 
+# Keystroke-to-screen latency through the real client, on this machine.
+# Release builds only for numbers that get published.
+bench:
+    cargo build --release --package twyx
+    cargo run --release --package twyx --bin twyx-bench -- --samples 20 -- ./target/release/twyx
+
 # The ghostty engine needs Zig 0.16.0 on PATH and GHOSTTY_SOURCE_DIR pointing at
 # a Ghostty checkout, so it runs here rather than in `test`.
 test-ghostty:

@@ -158,7 +158,10 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
             }
         }
 
-        if !event::poll(Duration::from_millis(30)).context("poll the terminal")? {
+        // Frames are only drained on each turn, so this timeout is a latency
+        // floor for every keystroke-to-screen path. It matches the holder's
+        // frame interval.
+        if !event::poll(Duration::from_millis(8)).context("poll the terminal")? {
             continue;
         }
         match event::read().context("read a terminal event")? {
