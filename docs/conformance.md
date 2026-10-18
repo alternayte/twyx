@@ -48,7 +48,7 @@ Local only, because they need credentials.
 
 | Item | Runs as | Oracle |
 |---|---|---|
-| A subset of esctest | the expected-screen cases of esctest | the expected screen in the engine's model |
+| Cursor, erase, insert and delete, scroll regions, origin mode, tab stops, autowrap, save and restore, alternate screen | `crates/twyx-holder/tests/escapes.rs`: twyx's own cases in esctest's categories, written from the xterm control sequence documentation | the expected screen and cursor in the engine's model |
 | Clipboard read refused | OSC 52 read from pane output | nothing is returned to the pane |
 | Link targets outside `http`, `https`, `file` | an OSC 8 link with `javascript:` | the client does not offer to open it |
 

@@ -211,7 +211,9 @@ fn cell(cell: &AlacrittyCell, links: &mut Links) -> Cell {
         String::new()
     } else {
         let mut text = String::new();
-        text.push(cell.c);
+        // alacritty_terminal keeps the tab character in the cell a tab
+        // started from, so a copy can give the tab back; on screen it is blank.
+        text.push(if cell.c == '\t' { ' ' } else { cell.c });
         if let Some(zerowidth) = cell.zerowidth() {
             text.extend(zerowidth);
         }

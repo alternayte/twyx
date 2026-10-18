@@ -20,8 +20,8 @@ test:
 # The automated conformance cases: bytes in, screen out, against the default
 # engine and then wezterm. Ghostty runs under `test-ghostty`.
 conformance:
-    cargo test --package twyx-holder --test conformance --test neovim
-    cargo test --package twyx-holder --features engine-wezterm --test conformance --test neovim
+    cargo test --package twyx-holder --test conformance --test escapes --test neovim
+    cargo test --package twyx-holder --features engine-wezterm --test conformance --test escapes --test neovim
 
 # Latency, throughput, memory under a producer, and idle cost with ten panes,
 # for twyx and for Zellij and Herdr when they are on PATH. Release builds only
