@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/twyx",
+  "crates/twyx-core",
+  "crates/twyx-daemon",
+  "crates/twyx-desktop",
+  "crates/twyx-holder",
+  "crates/twyx-protocol",
+  "crates/twyx-tui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT"
+repository = "https://github.com/alternayte/twyx"
+
+[workspace.dependencies]
+twyx-core = { path = "crates/twyx-core" }
+twyx-daemon = { path = "crates/twyx-daemon" }
+twyx-desktop = { path = "crates/twyx-desktop" }
+twyx-holder = { path = "crates/twyx-holder" }
+twyx-protocol = { path = "crates/twyx-protocol" }
+twyx-tui = { path = "crates/twyx-tui" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_qualifications = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
