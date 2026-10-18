@@ -322,3 +322,21 @@ impl Drop for Screen {
         self.stop();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_terminal_that_reports_no_size_falls_back_to_eighty_by_twenty_four() {
+        assert_eq!(clamp_size((0, 0)), (80, 24));
+        assert_eq!(clamp_size((0, 40)), (80, 24));
+        assert_eq!(clamp_size((120, 0)), (80, 24));
+    }
+
+    #[test]
+    fn a_real_size_is_kept() {
+        assert_eq!(clamp_size((120, 40)), (120, 40));
+        assert_eq!(clamp_size((1, 1)), (1, 1));
+    }
+}
