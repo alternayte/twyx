@@ -23,6 +23,12 @@ conformance:
     cargo test --package twyx-holder --test conformance --test escapes --test neovim
     cargo test --package twyx-holder --features engine-wezterm --test conformance --test escapes --test neovim
 
+# The agent CLI items, with the Claude Code, Pi and OpenCode installed and signed
+# in on this machine. Each case runs a real agent against a real model, so this
+# never runs in CI.
+conformance-agents:
+    cargo test --package twyx-holder --test agents -- --ignored --test-threads=3
+
 # Latency, throughput, memory under a producer, and idle cost with ten panes,
 # for twyx and for Zellij and Herdr when they are on PATH. Release builds only
 # for numbers that get published.

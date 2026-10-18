@@ -38,9 +38,9 @@ Local only, because they need credentials.
 
 | Item | Runs as | Oracle |
 |---|---|---|
-| Multiline input | a prompt with three lines | the agent's rendered input box |
-| Ctrl-C during streaming output | interrupt a long answer | the agent returns to its prompt |
-| Resize during streaming output | resize the window mid-answer | no lost glyphs, no wrong cursor |
+| Multiline input | three lines typed with Shift+Enter between them | the three lines on three rows of the input, nothing submitted |
+| Interrupt during streaming output | the agent's own interrupt key mid-answer: Ctrl-C for Claude Code, Escape for Pi, Escape twice for OpenCode | the answer stops short and the agent keeps running |
+| Resize during streaming output | resize to 70x24 and back mid-answer | the pane is back at its size and the last line of the answer is on screen |
 | A permission prompt | an agent asks for approval | status `awaiting-approval` in the inbox |
 | Done detection | an agent finishes a turn | status `awaiting-prompt`, then `idle` once seen |
 

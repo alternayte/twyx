@@ -7,43 +7,45 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::io::BufReader;
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+mod support;
+
+use std::ops::{Deref, DerefMut};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use twyx_core::pane::PaneId;
-use twyx_holder::engine::{self, Geometry};
-use twyx_holder::pty::Spawn;
-use twyx_holder::runtime::{self, Config};
-use twyx_protocol::grid::{Cell, Colour, Frame, MouseMode, Row, Screen, Snapshot, Underline};
-use twyx_protocol::holder::{FromHolder, Hello, MAJOR, MINOR, Signal, ToHolder, Welcome};
+use twyx_protocol::grid::{Colour, MouseMode, Underline};
 use twyx_protocol::input::{
     InputEvent, KeyCode, KeyEvent, Modifiers, MouseAction, MouseButton, MouseEvent,
 };
-use twyx_protocol::wire;
+
+use support::Pane;
 
 const COLS: u16 = 80;
 const ROWS: u16 = 24;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Default)]
-struct Seen {
-    screen: Option<Screen>,
-    rows: Vec<Row>,
-    clipboard: Vec<String>,
-}
-
 struct Nvim {
     dir: PathBuf,
     server: PathBuf,
-    writer: UnixStream,
-    seen: Arc<Mutex<Seen>>,
+    pane: Pane,
+}
+
+impl Deref for Nvim {
+    type Target = Pane;
+
+    fn deref(&self) -> &Pane {
+        &self.pane
+    }
+}
+
+impl DerefMut for Nvim {
+    fn deref_mut(&mut self) -> &mut Pane {
+        &mut self.pane
+    }
 }
 
 impl Nvim {
@@ -54,68 +56,18 @@ impl Nvim {
         let init = dir.join("init.lua");
         std::fs::write(&init, init_lua).expect("write init.lua");
         let server = dir.join("nvim.sock");
-        let socket = dir.join("pane.sock");
 
-        let spawn = Spawn {
-            argv: vec![
-                "nvim".to_owned(),
-                "--clean".to_owned(),
-                "-n".to_owned(),
-                "-u".to_owned(),
-                init.display().to_string(),
-                "--listen".to_owned(),
-                server.display().to_string(),
-            ],
-            cwd: dir.clone(),
-            env: vec![
-                ("TERM".to_owned(), "xterm-256color".to_owned()),
-                ("COLORTERM".to_owned(), "truecolor".to_owned()),
-            ],
-            cols: COLS,
-            rows: ROWS,
-        };
-        let config = Config {
-            socket: socket.clone(),
-            pane: PaneId::from_raw(1),
-            build: "test".to_owned(),
-            spawn,
-            scrollback_lines: 100,
-            exit_grace: Duration::from_millis(100),
-        };
-        let geometry = Geometry {
-            cols: COLS,
-            rows: ROWS,
-            scrollback_lines: 100,
-        };
-        thread::spawn(move || {
-            runtime::run(config, move |answerback| {
-                engine::create(geometry, answerback)
-            })
-            .expect("the holder runs");
-        });
-
-        let (reader, mut writer) = connect(&socket);
-        wire::write(
-            &mut writer,
-            &ToHolder::Hello(Hello {
-                major: MAJOR,
-                minor: MINOR,
-                pane: 1,
-                build: "test".to_owned(),
-            }),
-        )
-        .expect("send the hello");
-
-        let seen = Arc::new(Mutex::new(Seen::default()));
-        let sink = Arc::clone(&seen);
-        thread::spawn(move || follow(reader, &sink));
-
-        let nvim = Self {
-            dir,
-            server,
-            writer,
-            seen,
-        };
+        let argv = vec![
+            "nvim".to_owned(),
+            "--clean".to_owned(),
+            "-n".to_owned(),
+            "-u".to_owned(),
+            init.display().to_string(),
+            "--listen".to_owned(),
+            server.display().to_string(),
+        ];
+        let pane = Pane::start(argv, &dir, COLS, ROWS);
+        let nvim = Self { dir, server, pane };
         // Eight Neovims start at once, and a small CI runner is slow to
         // bring them all up.
         nvim.wait_for_within(
@@ -160,14 +112,6 @@ impl Nvim {
             .unwrap_or_else(|| panic!("Neovim did not evaluate {expr}"))
     }
 
-    fn send(&mut self, event: InputEvent) {
-        wire::write(&mut self.writer, &ToHolder::Input(event)).expect("send an input event");
-    }
-
-    fn key(&mut self, code: KeyCode, mods: Modifiers) {
-        self.send(InputEvent::Key(KeyEvent::press(code, mods)));
-    }
-
     fn mouse(&mut self, action: MouseAction, col: u16, row: u16) {
         self.send(InputEvent::Mouse(MouseEvent {
             col,
@@ -178,18 +122,6 @@ impl Nvim {
             pixel_col: None,
             pixel_row: None,
         }));
-    }
-
-    fn wait_for(&self, what: &str, done: impl FnMut() -> bool) {
-        self.wait_for_within(what, Duration::from_secs(10), done);
-    }
-
-    fn wait_for_within(&self, what: &str, limit: Duration, mut done: impl FnMut() -> bool) {
-        let deadline = Instant::now() + limit;
-        while !done() {
-            assert!(Instant::now() < deadline, "timed out waiting: {what}");
-            thread::sleep(Duration::from_millis(20));
-        }
     }
 
     fn wait_for_eval(&self, expr: &str, expected: &str) {
@@ -207,64 +139,11 @@ impl Nvim {
             thread::sleep(Duration::from_millis(20));
         }
     }
-
-    fn screen(&self) -> Option<Screen> {
-        self.seen.lock().unwrap().screen.clone()
-    }
-
-    fn rows(&self) -> Vec<Row> {
-        self.seen.lock().unwrap().rows.clone()
-    }
-
-    fn any_cell(&self, matches: impl Fn(&Cell) -> bool) -> bool {
-        self.rows().iter().flat_map(|row| &row.cells).any(matches)
-    }
 }
 
 impl Drop for Nvim {
     fn drop(&mut self) {
-        let _ = wire::write(&mut self.writer, &ToHolder::Kill);
-        let _ = wire::write(&mut self.writer, &ToHolder::AckExit);
         let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-fn connect(socket: &Path) -> (BufReader<UnixStream>, UnixStream) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Ok(stream) = UnixStream::connect(socket) {
-            let reader = BufReader::new(stream.try_clone().expect("clone the stream"));
-            return (reader, stream);
-        }
-        assert!(Instant::now() < deadline, "the holder never listened");
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn follow(mut reader: BufReader<UnixStream>, seen: &Mutex<Seen>) {
-    while let Ok(Some(message)) = wire::read::<FromHolder>(&mut reader) {
-        let mut seen = seen.lock().unwrap();
-        match message {
-            FromHolder::Welcome(Welcome { snapshot, .. })
-            | FromHolder::Snapshot { body: snapshot, .. } => {
-                let snapshot: Snapshot = wire::decode_body(&snapshot).expect("decode a snapshot");
-                seen.screen = Some(snapshot.screen);
-                seen.rows = snapshot.rows;
-            }
-            FromHolder::Frame { body, .. } => {
-                let frame: Frame = wire::decode_body(&body).expect("decode a frame");
-                seen.rows
-                    .resize(usize::from(frame.screen.rows), Row { cells: Vec::new() });
-                for update in frame.changed {
-                    if let Some(row) = seen.rows.get_mut(usize::from(update.row)) {
-                        row.cells = update.cells;
-                    }
-                }
-                seen.screen = Some(frame.screen);
-            }
-            FromHolder::Signal(Signal::ClipboardWrite(text)) => seen.clipboard.push(text),
-            _ => {}
-        }
     }
 }
 
@@ -391,7 +270,8 @@ fn an_osc_52_yank_reaches_the_holder_as_a_clipboard_write() {
         nvim.key(KeyCode::Char(code), Modifiers::empty());
     }
     nvim.wait_for("a clipboard write with the yanked line", || {
-        nvim.seen
+        nvim.pane
+            .seen
             .lock()
             .unwrap()
             .clipboard
