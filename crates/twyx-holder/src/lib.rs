@@ -3,5 +3,6 @@
 //!
 //! This crate is the only place that touches a PTY or a terminal engine.
 
+pub mod encode;
 pub mod engine;
 pub mod pty;
