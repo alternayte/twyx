@@ -67,6 +67,11 @@ Local only, because they need credentials.
 - `just conformance` runs the automated items: escape-sequence cases, paste,
   focus, mouse, clipboard policy and lifecycle. It drives the real binaries on
   real PTYs in a temporary runtime directory.
+- `crates/twyx-holder/tests/neovim.rs` runs the Neovim items in a holder: it
+  starts Neovim on a real PTY, sends input events as a client does, and reads
+  Neovim's state over its RPC socket and the screen from the holder's frames.
+  It needs Neovim 0.11 or later on PATH. The OSC 52 item checks the yank inside
+  the pane; the SSH leg runs by hand.
 - `just conformance-agents` runs the agent CLI items with the agent CLIs
   installed and signed in on this machine. It never runs in CI.
 - CI runs the Neovim items on Ubuntu and macOS, in Ghostty and inside tmux where
