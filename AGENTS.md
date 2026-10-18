@@ -16,7 +16,7 @@ It runs Neovim, shells and agent CLIs unmodified, locally or over SSH, with no a
 - Storage is SQLite, and only the daemon opens it. No Postgres.
 - twyx ships as local binaries for macOS and Linux. No Kubernetes.
 - Git runs only as the Git CLI in a subprocess, never through a Git library.
-- The licence is MIT. While writing code, never read the source of Herdr, muxel, ThinkTerm, or Zed outside its gpui crate; they are GPL or AGPL.
+- The licence is MIT. Reading the source of Herdr, muxel, ThinkTerm and Zed is allowed; copying or adapting their code line by line is not, because they are GPL or AGPL.
 
 ## Domain words
 - daemon: the one per-user twyx process that owns layouts, workspaces, agents, review, checks, the API and the database. Avoid: coordinator, mux server.
