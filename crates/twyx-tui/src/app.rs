@@ -18,17 +18,17 @@ use twyx_protocol::client::{FromDaemon, ToDaemon};
 use twyx_protocol::grid::{Frame, Snapshot};
 use twyx_protocol::wire;
 
-use crate::client;
 use crate::emitter::{Capabilities, Emitter};
 use crate::input;
 use crate::probe;
 use crate::view::View;
+use twyx_protocol::connection as client;
 
 /// The key twyx takes from the pane. S2 makes it configurable.
 const PREFIX: char = 'g';
 
 /// Attaches the terminal client to the daemon.
-pub fn attach(paths: &twyx_daemon::paths::Paths) -> Result<()> {
+pub fn attach(paths: &twyx_core::paths::Paths) -> Result<()> {
     client::ensure_daemon(paths)?;
     let (cols, rows) = terminal::size().context("read the terminal size")?;
 
@@ -80,7 +80,7 @@ fn tty() -> Result<std::fs::File> {
         .context("open the terminal")
 }
 
-fn run(paths: &twyx_daemon::paths::Paths, cols: u16, rows: u16, screen: &mut Screen) -> Result<()> {
+fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Screen) -> Result<()> {
     let cols = cols.max(2);
     let rows = rows.max(1);
     let connection = client::connect(&paths.socket(), cols, rows)?;

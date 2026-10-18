@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use twyx_protocol::client::{ClientHello, FromDaemon, MAJOR, MINOR, ServerHello, ToDaemon};
-use twyx_protocol::wire;
+use crate::client::{ClientHello, FromDaemon, MAJOR, MINOR, ServerHello, ToDaemon};
+use crate::wire;
 
 /// A connected client, with the daemon's greeting.
 #[derive(Debug)]
@@ -64,7 +64,7 @@ pub fn connect(socket: &Path, cols: u16, rows: u16) -> Result<Connection> {
 }
 
 /// Waits for a daemon to answer, starting one first when there is none.
-pub fn ensure_daemon(paths: &twyx_daemon::paths::Paths) -> Result<()> {
+pub fn ensure_daemon(paths: &twyx_core::paths::Paths) -> Result<()> {
     if UnixStream::connect(paths.socket()).is_ok() {
         return Ok(());
     }

@@ -6,11 +6,11 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 use twyx_core::pane::PaneId;
-use twyx_daemon::paths::Paths;
+use twyx_core::paths::Paths;
 use twyx_holder::engine::{Engine, Geometry};
 use twyx_holder::pty::Spawn;
 use twyx_protocol::client::{PaneState, ToDaemon};
-use twyx_tui::client;
+use twyx_protocol::connection as client;
 
 #[derive(Debug, Parser)]
 #[command(name = "twyx", version, about = "A developer workspace")]

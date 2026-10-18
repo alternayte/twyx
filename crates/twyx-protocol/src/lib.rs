@@ -4,6 +4,7 @@
 //! uses JSON and is documented separately.
 
 pub mod client;
+pub mod connection;
 pub mod grid;
 pub mod holder;
 pub mod input;

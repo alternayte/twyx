@@ -8,3 +8,7 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+anyhow = "1"
+rustix = { version = "1", features = ["fs", "process"] }

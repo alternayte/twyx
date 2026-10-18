@@ -15,5 +15,4 @@ base64 = "0.22"
 crossterm = "0.29"
 rustix = { version = "1", features = ["fs"] }
 twyx-core = { workspace = true }
-twyx-daemon = { workspace = true }
 twyx-protocol = { workspace = true }

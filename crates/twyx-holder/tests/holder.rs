@@ -63,6 +63,9 @@ impl Fixture {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Ok(stream) = UnixStream::connect(&self.socket) {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .expect("set a read timeout");
                 let reader = BufReader::new(stream.try_clone().expect("clone the stream"));
                 return (reader, stream);
             }

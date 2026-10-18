@@ -25,8 +25,8 @@ use twyx_protocol::client::{
 use twyx_protocol::holder::{ExitState, FromHolder, Hello, ToHolder, Welcome};
 use twyx_protocol::wire;
 
-use crate::paths::Paths;
 use crate::peer;
+use twyx_core::paths::Paths;
 
 static CLIENTS: AtomicU64 = AtomicU64::new(1);
 

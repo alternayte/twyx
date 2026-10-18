@@ -133,6 +133,11 @@ impl Core<'_> {
                         };
                         let _ = sender.send(FromHolder::Welcome(welcome));
                         out = Some(sender);
+                        // A pane that ended before the daemon attached still
+                        // owes it the exit status.
+                        if let Some(state) = &exited {
+                            send(&mut out, FromHolder::Exited(state.clone()));
+                        }
                         dirty = true;
                         last_frame = Instant::now() - tuning::FRAME_INTERVAL;
                     }

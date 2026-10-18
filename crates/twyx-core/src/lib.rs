@@ -4,4 +4,5 @@
 //! AST, theme tokens, tuning values. No I/O beyond config parsing.
 
 pub mod pane;
+pub mod paths;
 pub mod tuning;

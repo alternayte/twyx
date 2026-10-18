@@ -1,4 +1,7 @@
 //! The paths twyx uses, and the rules the runtime directory must keep.
+//!
+//! The daemon and both clients agree on these, so they live in the shared
+//! models.
 
 use std::ffi::OsString;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -6,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use twyx_core::pane::PaneId;
+use crate::pane::PaneId;
 
 /// The same layout on macOS and Linux.
 #[derive(Debug, Clone, PartialEq, Eq)]
