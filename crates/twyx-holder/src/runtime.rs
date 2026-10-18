@@ -25,6 +25,7 @@ use crate::engine::{Engine, EngineSignal};
 use crate::frame::FrameBuilder;
 use crate::pty::{Master, Pty, Spawn};
 use crate::queue::InputQueue;
+use crate::signals::{PaneSignal, Scanner};
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -64,6 +65,7 @@ pub fn run(config: Config, engine: Box<dyn Engine>) -> Result<()> {
         input: &input,
         killer,
         builder: FrameBuilder::new(config.spawn.cols, config.spawn.rows),
+        scanner: Scanner::default(),
     }
     .run(&inbound)
 }
@@ -75,6 +77,7 @@ struct Core<'a> {
     input: &'a InputQueue,
     killer: Box<dyn ChildKiller + Send + Sync>,
     builder: FrameBuilder,
+    scanner: Scanner,
 }
 
 impl Core<'_> {
@@ -169,6 +172,19 @@ impl Core<'_> {
     }
 
     fn output(&mut self, bytes: &[u8], out: &mut Option<Sender<FromHolder>>) {
+        for signal in self.scanner.scan(bytes) {
+            let signal = match signal {
+                PaneSignal::Notification { title, body } => Signal::Notification {
+                    title: trim_to(&title, tuning::NOTIFICATION_CHARS),
+                    body: trim_to(&body, tuning::NOTIFICATION_CHARS),
+                },
+                PaneSignal::PromptMark(mark) => Signal::PromptMark(mark),
+                PaneSignal::WorkingDirectory(directory) => Signal::WorkingDirectory(directory),
+                PaneSignal::Link(target) => Signal::Link(target),
+            };
+            send(out, FromHolder::Signal(signal));
+        }
+
         for signal in self.engine.advance(bytes) {
             match signal {
                 EngineSignal::WriteToPane(bytes) => self.input.send(bytes),
@@ -279,7 +295,11 @@ fn send(out: &mut Option<Sender<FromHolder>>, message: FromHolder) {
 }
 
 fn trim(text: &str) -> String {
-    text.chars().take(tuning::TITLE_CHARS).collect()
+    trim_to(text, tuning::TITLE_CHARS)
+}
+
+fn trim_to(text: &str, limit: usize) -> String {
+    text.chars().take(limit).collect()
 }
 
 fn listen(path: &Path) -> Result<UnixListener> {

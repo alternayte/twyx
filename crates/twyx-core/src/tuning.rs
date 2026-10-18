@@ -24,6 +24,9 @@ pub const SCROLLBACK_BYTES: usize = 512 << 20;
 /// waits for the daemon to acknowledge them.
 pub const EXIT_GRACE: Duration = Duration::from_secs(30);
 
+/// The longest operating system command the holder reads from pane output.
+pub const MAX_OSC_BYTES: usize = 4096;
+
 /// The longest title a pane reports, in characters.
 pub const TITLE_CHARS: usize = 512;
 

@@ -10,3 +10,4 @@ pub mod pty;
 pub mod queue;
 pub mod runtime;
 pub mod session;
+pub mod signals;
