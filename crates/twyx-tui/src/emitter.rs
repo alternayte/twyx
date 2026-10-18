@@ -8,7 +8,7 @@ use std::io::Write;
 use anyhow::{Context, Result};
 use twyx_protocol::grid::{Attrs, Cell, Colour, CursorShape, Underline};
 
-use crate::view::View;
+use twyx_protocol::view::View;
 
 /// What the outer terminal said it can do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

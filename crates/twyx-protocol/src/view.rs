@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use twyx_protocol::grid::{Cell, Cursor, CursorShape, Frame, Modes, Snapshot};
+use crate::grid::{Cell, Cursor, CursorShape, Frame, Modes, Snapshot};
 
 /// What a client knows about the pane's screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,19 +92,27 @@ impl View {
     /// Takes the rows that changed since the last draw.
     pub fn take_dirty(&mut self) -> (bool, Vec<usize>) {
         let fresh = std::mem::replace(&mut self.fresh, false);
-        let dirty = self
+        let dirty: Vec<usize> = self
             .dirty
             .iter()
             .enumerate()
             .filter(|(_, dirty)| **dirty)
             .map(|(row, _)| row)
             .collect();
-        if fresh {
-            self.dirty.iter_mut().for_each(|dirty| *dirty = false);
-        } else {
-            self.dirty.iter_mut().for_each(|dirty| *dirty = false);
-        }
+        self.dirty.iter_mut().for_each(|dirty| *dirty = false);
         (fresh, dirty)
+    }
+
+    /// The cell at a grid position.
+    pub fn cell(&self, col: u16, row: u16) -> Option<&Cell> {
+        self.cells
+            .get(row as usize)
+            .and_then(|cells| cells.get(col as usize))
+    }
+
+    /// How many rows and columns the view holds.
+    pub fn size(&self) -> (u16, u16) {
+        (self.cols, self.rows)
     }
 
     pub fn resize_grid(&mut self, cols: u16, rows: u16) {
@@ -133,7 +141,7 @@ fn blank_rows(cols: u16, rows: u16) -> Vec<Vec<Cell>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use twyx_protocol::grid::{Row, RowUpdate, Screen};
+    use crate::grid::{Row, RowUpdate, Screen};
 
     fn screen(cols: u16, rows: u16) -> Screen {
         Screen {

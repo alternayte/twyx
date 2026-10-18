@@ -919,10 +919,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "twyx-desktop"
-version = "0.1.0"
-
-[[package]]
 name = "twyx-holder"
 version = "0.1.0"
 dependencies = [

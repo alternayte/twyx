@@ -21,8 +21,8 @@ use twyx_protocol::wire;
 use crate::emitter::{Capabilities, Emitter};
 use crate::input;
 use crate::probe;
-use crate::view::View;
 use twyx_protocol::connection as client;
+use twyx_protocol::view::View;
 
 /// The key twyx takes from the pane. S2 makes it configurable.
 const PREFIX: char = 'g';

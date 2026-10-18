@@ -4,7 +4,6 @@ members = [
   "crates/twyx",
   "crates/twyx-core",
   "crates/twyx-daemon",
-  "crates/twyx-desktop",
   "crates/twyx-holder",
   "crates/twyx-protocol",
   "crates/twyx-tui",
@@ -20,7 +19,6 @@ repository = "https://github.com/alternayte/twyx"
 [workspace.dependencies]
 twyx-core = { path = "crates/twyx-core" }
 twyx-daemon = { path = "crates/twyx-daemon" }
-twyx-desktop = { path = "crates/twyx-desktop" }
 twyx-holder = { path = "crates/twyx-holder" }
 twyx-protocol = { path = "crates/twyx-protocol" }
 twyx-tui = { path = "crates/twyx-tui" }

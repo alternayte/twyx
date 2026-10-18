@@ -1,5 +1,8 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# twyx-desktop needs Xcode's Metal toolchain, which is not on this machine yet;
+# CI builds it on macOS. Drop the exclusions when it is.
+
 default:
     @just --list
 
@@ -7,10 +10,10 @@ default:
 check:
     for script in checks/*.sh; do "$script"; done
     cargo fmt --all --check
-    cargo clippy --workspace --all-targets -- -D warnings
-    cargo test --workspace
+    cargo clippy --workspace --exclude twyx-desktop --all-targets -- -D warnings
+    cargo test --workspace --exclude twyx-desktop
     cargo deny check licenses
 
 # Full suite: every crate, every invariant test, the automated conformance items.
 test:
-    cargo test --workspace --all-features
+    cargo test --workspace --exclude twyx-desktop --all-features

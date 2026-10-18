@@ -8,4 +8,5 @@ pub mod connection;
 pub mod grid;
 pub mod holder;
 pub mod input;
+pub mod view;
 pub mod wire;

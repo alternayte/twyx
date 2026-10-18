@@ -7,4 +7,3 @@ pub mod app;
 pub mod emitter;
 pub mod input;
 pub mod probe;
-pub mod view;
