@@ -231,6 +231,12 @@ impl Daemon {
             );
             self.next_pane = self.next_pane.max(pane.raw() + 1);
         }
+        // Input goes to the focused pane, so a restarted daemon focuses one
+        // of the panes it adopted; the oldest, as the directory order is not
+        // stable.
+        if self.focused.is_none() {
+            self.focused = self.panes.keys().min_by_key(|pane| pane.raw()).copied();
+        }
     }
 
     fn serve(&mut self, inbound: &Receiver<Event>) -> Result<()> {

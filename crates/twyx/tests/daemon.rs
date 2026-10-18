@@ -328,6 +328,31 @@ fn a_pane_outlives_the_daemon_and_a_new_daemon_adopts_it() {
 }
 
 #[test]
+fn input_reaches_an_adopted_pane() {
+    let mut sandbox = Sandbox::new("input");
+    sandbox.start();
+    let mut client = sandbox.connect(40, 6);
+    new_pane(&mut client, &sandbox.cwd(), "exec cat", 40, 6);
+    client.wait_for_pane();
+
+    sandbox.kill();
+    drop(client);
+    sandbox.start();
+    let mut client = sandbox.connect(40, 6);
+    let adopted = client.hello.panes[0].pane;
+
+    for ch in "typed-after-adoption".chars() {
+        client
+            .send(&ToDaemon::Input(InputEvent::Key(KeyEvent::press(
+                KeyCode::Char(ch),
+                Modifiers::empty(),
+            ))))
+            .expect("send input");
+    }
+    client.wait_for_text(adopted, "typed-after-adoption");
+}
+
+#[test]
 fn invariant_3_only_the_leaseholder_sets_the_pane_size() {
     let mut sandbox = Sandbox::new("lease");
     sandbox.start();
