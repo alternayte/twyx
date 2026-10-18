@@ -116,9 +116,13 @@ impl Nvim {
             writer,
             seen,
         };
-        nvim.wait_for("Neovim answers on its socket", || {
-            nvim.try_eval("v:vim_did_enter").as_deref() == Some("1")
-        });
+        // Eight Neovims start at once, and a small CI runner is slow to
+        // bring them all up.
+        nvim.wait_for_within(
+            "Neovim answers on its socket",
+            Duration::from_secs(30),
+            || nvim.try_eval("v:vim_did_enter").as_deref() == Some("1"),
+        );
         nvim
     }
 
@@ -176,8 +180,12 @@ impl Nvim {
         }));
     }
 
-    fn wait_for(&self, what: &str, mut done: impl FnMut() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+    fn wait_for(&self, what: &str, done: impl FnMut() -> bool) {
+        self.wait_for_within(what, Duration::from_secs(10), done);
+    }
+
+    fn wait_for_within(&self, what: &str, limit: Duration, mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + limit;
         while !done() {
             assert!(Instant::now() < deadline, "timed out waiting: {what}");
             thread::sleep(Duration::from_millis(20));
