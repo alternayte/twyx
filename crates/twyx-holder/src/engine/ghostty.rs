@@ -1,5 +1,7 @@
 //! `libghostty-vt` behind the engine boundary.
 
+use std::io::Write;
+
 use libghostty_vt::render::{CellIterator, RowIterator};
 use libghostty_vt::style::{Style, StyleColor, Underline as GhosttyUnderline};
 use libghostty_vt::{RenderState, Terminal, TerminalOptions};
@@ -26,11 +28,15 @@ impl std::fmt::Debug for Ghostty {
 }
 
 impl Ghostty {
-    pub fn new(geometry: Geometry) -> Option<Self> {
-        let term = Terminal::new(TerminalOptions {
+    pub fn new(geometry: Geometry, mut answerback: Box<dyn Write + Send>) -> Option<Self> {
+        let mut term = Terminal::new(TerminalOptions {
             cols: geometry.cols.max(2),
             rows: geometry.rows.max(1),
             max_scrollback: geometry.scrollback_lines as usize,
+        })
+        .ok()?;
+        term.on_pty_write(move |_, reply: &[u8]| {
+            let _ = answerback.write_all(reply);
         })
         .ok()?;
         let render = RenderState::new().ok()?;
@@ -151,7 +157,7 @@ impl Engine for Ghostty {
             kitty_keyboard: self
                 .term
                 .kitty_keyboard_flags()
-                .map(|flags| flags.bits() as u8)
+                .map(|flags| flags.bits())
                 .unwrap_or(0),
             ..Modes::default()
         }
@@ -213,11 +219,14 @@ mod tests {
     use super::*;
 
     fn engine() -> Ghostty {
-        Ghostty::new(Geometry {
-            cols: 20,
-            rows: 5,
-            scrollback_lines: 100,
-        })
+        Ghostty::new(
+            Geometry {
+                cols: 20,
+                rows: 5,
+                scrollback_lines: 100,
+            },
+            Box::new(std::io::sink()),
+        )
         .expect("the engine starts")
     }
 

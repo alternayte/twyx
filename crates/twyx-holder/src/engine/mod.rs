@@ -49,8 +49,7 @@ pub fn create(
 ) -> anyhow::Result<Box<dyn Engine>> {
     #[cfg(feature = "engine-ghostty")]
     {
-        let _ = answerback;
-        match ghostty::Ghostty::new(geometry) {
+        match ghostty::Ghostty::new(geometry, answerback) {
             Some(engine) => Ok(Box::new(engine)),
             None => anyhow::bail!("libghostty-vt refused the terminal options"),
         }
