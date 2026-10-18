@@ -24,7 +24,7 @@ use crate::encode;
 use crate::engine::{Engine, EngineSignal};
 use crate::frame::FrameBuilder;
 use crate::pty::{Master, Pty, Spawn};
-use crate::queue::InputQueue;
+use crate::queue::{InputQueue, QueueWriter};
 use crate::signals::{PaneSignal, Scanner};
 
 #[derive(Debug, Clone)]
@@ -44,7 +44,10 @@ enum Event {
     Command(ToHolder, Sender<FromHolder>),
 }
 
-pub fn run(config: Config, engine: Box<dyn Engine>) -> Result<()> {
+pub fn run(
+    config: Config,
+    make_engine: impl FnOnce(Box<dyn std::io::Write + Send>) -> Result<Box<dyn Engine>>,
+) -> Result<()> {
     let listener = listen(&config.socket)?;
     let (events, inbound) = mpsc::channel::<Event>();
 
@@ -53,6 +56,7 @@ pub fn run(config: Config, engine: Box<dyn Engine>) -> Result<()> {
     let killer = crate::pty::killer(child.as_ref());
 
     let input = InputQueue::start(master.writer()?)?;
+    let engine = make_engine(Box::new(QueueWriter::new(input.clone())))?;
 
     spawn_reader(master.reader()?, events.clone())?;
     spawn_waiter(child, events.clone())?;

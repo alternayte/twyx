@@ -5,6 +5,8 @@ use twyx_protocol::grid::{Cursor, Modes, Row};
 
 #[cfg(feature = "engine-alacritty")]
 pub mod alacritty;
+#[cfg(feature = "engine-wezterm")]
+pub mod wezterm;
 
 /// What an engine reports from the pane's output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +38,27 @@ pub struct Geometry {
     pub cols: u16,
     pub rows: u16,
     pub scrollback_lines: u32,
+}
+
+/// The engine this build was compiled with.
+pub fn create(
+    geometry: Geometry,
+    answerback: Box<dyn std::io::Write + Send>,
+) -> anyhow::Result<Box<dyn Engine>> {
+    #[cfg(feature = "engine-wezterm")]
+    {
+        Ok(Box::new(wezterm::Wezterm::new(geometry, answerback)))
+    }
+    #[cfg(all(not(feature = "engine-wezterm"), feature = "engine-alacritty"))]
+    {
+        let _ = answerback;
+        Ok(Box::new(alacritty::Alacritty::new(geometry)))
+    }
+    #[cfg(all(not(feature = "engine-wezterm"), not(feature = "engine-alacritty")))]
+    {
+        let _ = (geometry, answerback);
+        anyhow::bail!("no terminal engine is compiled in")
+    }
 }
 
 pub trait Engine: Send {

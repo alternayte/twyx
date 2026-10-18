@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 
 use twyx_core::pane::PaneId;
 use twyx_core::paths::Paths;
-use twyx_holder::engine::{Engine, Geometry};
+use twyx_holder::engine::Geometry;
 use twyx_holder::pty::Spawn;
 use twyx_protocol::client::{PaneState, ToDaemon};
 use twyx_protocol::connection as client;
@@ -286,22 +286,21 @@ fn holder(
     // daemon's session.
     twyx_holder::session::detach();
 
-    let engine: Box<dyn Engine> =
-        Box::new(twyx_holder::engine::alacritty::Alacritty::new(Geometry {
-            cols,
-            rows,
-            scrollback_lines,
-        }));
+    let geometry = Geometry {
+        cols,
+        rows,
+        scrollback_lines,
+    };
+    let config = twyx_holder::runtime::Config {
+        socket,
+        pane,
+        build: twyx_holder::runtime::build_id(),
+        spawn,
+        scrollback_lines,
+        exit_grace: twyx_core::tuning::EXIT_GRACE,
+    };
 
-    twyx_holder::runtime::run(
-        twyx_holder::runtime::Config {
-            socket,
-            pane,
-            build: twyx_holder::runtime::build_id(),
-            spawn,
-            scrollback_lines,
-            exit_grace: twyx_core::tuning::EXIT_GRACE,
-        },
-        engine,
-    )
+    twyx_holder::runtime::run(config, |answerback| {
+        twyx_holder::engine::create(geometry, answerback)
+    })
 }

@@ -44,3 +44,27 @@ impl InputQueue {
         let _ = self.sender.send(bytes);
     }
 }
+
+/// A `Write` that puts bytes on the input queue, for an engine that answers
+/// the pane itself instead of reporting the bytes it wants to send.
+#[derive(Debug, Clone)]
+pub struct QueueWriter {
+    queue: InputQueue,
+}
+
+impl QueueWriter {
+    pub fn new(queue: InputQueue) -> Self {
+        Self { queue }
+    }
+}
+
+impl Write for QueueWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.queue.send(bytes.to_vec());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}

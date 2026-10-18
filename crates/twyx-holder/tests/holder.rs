@@ -54,7 +54,7 @@ impl Fixture {
             scrollback_lines: 100,
         }));
         let handle = thread::spawn(move || {
-            runtime::run(config, engine).expect("the holder runs");
+            runtime::run(config, move |_answerback| Ok(engine)).expect("the holder runs");
         });
         (Self { socket, pane }, handle)
     }
