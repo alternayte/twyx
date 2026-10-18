@@ -14,7 +14,7 @@ use crossterm::event::{
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, terminal};
 
-use twyx_protocol::client::{FromDaemon, ToDaemon};
+use twyx_protocol::client::{FromDaemon, PaneState, ToDaemon};
 use twyx_protocol::grid::{Frame, Snapshot};
 use twyx_protocol::wire;
 
@@ -30,7 +30,7 @@ const PREFIX: char = 'g';
 /// Attaches the terminal client to the daemon.
 pub fn attach(paths: &twyx_core::paths::Paths) -> Result<()> {
     client::ensure_daemon(paths)?;
-    let (cols, rows) = terminal::size().context("read the terminal size")?;
+    let (cols, rows) = clamp_size(terminal::size().context("read the terminal size")?);
 
     let mut screen = Screen::start()?;
     let result = run(paths, cols, rows, &mut screen);
@@ -88,10 +88,23 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
 
     let mut view = View::new(cols, rows);
     let mut prefix_pending = false;
-    let mut pane = daemon.hello.panes.first().map(|info| info.pane);
+    // A pane that has ended keeps its screen but takes no input, so a client
+    // that attached to one would look dead. Take the first live pane, and ask
+    // for one when there is none.
+    let mut pane = daemon
+        .hello
+        .panes
+        .iter()
+        .find(|info| info.state == PaneState::Running)
+        .map(|info| info.pane);
     let mut title = String::new();
 
-    if let Some(info) = daemon.hello.panes.first() {
+    if let Some(info) = daemon
+        .hello
+        .panes
+        .iter()
+        .find(|info| info.pane == pane.unwrap_or(u64::MAX))
+    {
         view.resize_grid(info.cols, info.rows);
     } else {
         daemon.outgoing.send(ToDaemon::NewPane {
@@ -120,7 +133,7 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
                     drew = true;
                 }
                 FromDaemon::Pane(info) => {
-                    if pane.is_none() {
+                    if pane.is_none() && info.state == PaneState::Running {
                         pane = Some(info.pane);
                     }
                 }
@@ -192,6 +205,16 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
                 }
             }
         }
+    }
+}
+
+/// A terminal that reports no size is not one twyx can lay out; fall back to
+/// the usual 80 by 24 rather than creating a one cell pane.
+fn clamp_size((cols, rows): (u16, u16)) -> (u16, u16) {
+    if cols == 0 || rows == 0 {
+        (80, 24)
+    } else {
+        (cols, rows)
     }
 }
 
