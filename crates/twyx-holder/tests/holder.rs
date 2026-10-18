@@ -11,8 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use twyx_core::pane::PaneId;
+use twyx_holder::engine::Geometry;
 use twyx_holder::engine::alacritty::Alacritty;
-use twyx_holder::engine::{Engine, Geometry};
 use twyx_holder::pty::Spawn;
 use twyx_holder::runtime::{self, Config};
 use twyx_protocol::grid::{Row, Snapshot};
@@ -48,13 +48,18 @@ impl Fixture {
             scrollback_lines: 100,
             exit_grace,
         };
-        let engine: Box<dyn Engine> = Box::new(Alacritty::new(Geometry {
+        let geometry = Geometry {
             cols: 40,
             rows: 6,
             scrollback_lines: 100,
-        }));
+        };
         let handle = thread::spawn(move || {
-            runtime::run(config, move |_answerback| Ok(engine)).expect("the holder runs");
+            // The engine is built inside the holder's thread: the boundary is
+            // not `Send`, because one candidate's handles are single-threaded.
+            runtime::run(config, move |_answerback| {
+                Ok(Box::new(Alacritty::new(geometry)))
+            })
+            .expect("the holder runs");
         });
         (Self { socket, pane }, handle)
     }

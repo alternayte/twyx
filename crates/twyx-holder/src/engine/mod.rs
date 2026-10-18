@@ -5,6 +5,8 @@ use twyx_protocol::grid::{Cursor, Modes, Row};
 
 #[cfg(feature = "engine-alacritty")]
 pub mod alacritty;
+#[cfg(feature = "engine-ghostty")]
+pub mod ghostty;
 #[cfg(feature = "engine-wezterm")]
 pub mod wezterm;
 
@@ -45,23 +47,43 @@ pub fn create(
     geometry: Geometry,
     answerback: Box<dyn std::io::Write + Send>,
 ) -> anyhow::Result<Box<dyn Engine>> {
-    #[cfg(feature = "engine-wezterm")]
+    #[cfg(feature = "engine-ghostty")]
+    {
+        let _ = answerback;
+        match ghostty::Ghostty::new(geometry) {
+            Some(engine) => Ok(Box::new(engine)),
+            None => anyhow::bail!("libghostty-vt refused the terminal options"),
+        }
+    }
+    #[cfg(all(not(feature = "engine-ghostty"), feature = "engine-wezterm"))]
     {
         Ok(Box::new(wezterm::Wezterm::new(geometry, answerback)))
     }
-    #[cfg(all(not(feature = "engine-wezterm"), feature = "engine-alacritty"))]
+    #[cfg(all(
+        not(feature = "engine-ghostty"),
+        not(feature = "engine-wezterm"),
+        feature = "engine-alacritty"
+    ))]
     {
         let _ = answerback;
         Ok(Box::new(alacritty::Alacritty::new(geometry)))
     }
-    #[cfg(all(not(feature = "engine-wezterm"), not(feature = "engine-alacritty")))]
+    #[cfg(all(
+        not(feature = "engine-ghostty"),
+        not(feature = "engine-wezterm"),
+        not(feature = "engine-alacritty")
+    ))]
     {
         let _ = (geometry, answerback);
         anyhow::bail!("no terminal engine is compiled in")
     }
 }
 
-pub trait Engine: Send {
+/// One terminal engine, owned by the holder's core thread.
+///
+/// Not `Send`: `libghostty-vt` handles are single-threaded, and the boundary
+/// never moves an engine between threads.
+pub trait Engine {
     /// Parses output bytes and returns the signals they carried.
     fn advance(&mut self, bytes: &[u8]) -> Vec<EngineSignal>;
 
