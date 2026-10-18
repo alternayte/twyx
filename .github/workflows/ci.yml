@@ -27,6 +27,8 @@ jobs:
         with:
           tool: just,cargo-deny
       - uses: Swatinem/rust-cache@v2
+      # checks/linux-target.sh type-checks the Linux build from macOS too.
+      - run: rustup target add x86_64-unknown-linux-gnu
       - run: just check
 
   full:
