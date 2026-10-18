@@ -87,6 +87,7 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
     let daemon = connection.split();
 
     let mut view = View::new(cols, rows);
+    screen.emitter.resize(cols, rows);
     let mut prefix_pending = false;
     // A pane that has ended keeps its screen but takes no input, so a client
     // that attached to one would look dead. Take the first live pane, and ask
@@ -168,7 +169,10 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
             Event::Resize(new_cols, new_rows) => {
                 let new_cols = new_cols.max(2);
                 let new_rows = new_rows.max(1);
-                view.resize_grid(new_cols, new_rows);
+                // The view keeps the pane's screen; only the crop changes until
+                // the pane itself is resized.
+                screen.emitter.resize(new_cols, new_rows);
+                screen.emitter.draw(&mut view)?;
                 daemon.outgoing.send(ToDaemon::Resize {
                     cols: new_cols,
                     rows: new_rows,

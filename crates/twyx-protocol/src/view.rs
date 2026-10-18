@@ -64,6 +64,8 @@ impl View {
             self.rows = frame.screen.rows;
             self.cells = blank_rows(self.cols, self.rows);
             self.dirty = vec![true; self.rows as usize];
+            // Whatever the old size covered outside the new one is stale.
+            self.fresh = true;
         }
         for (id, uri) in frame.links {
             self.links.insert(id, uri);

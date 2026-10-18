@@ -22,6 +22,13 @@ pub struct Emitter<W: Write> {
     out: W,
     capabilities: Capabilities,
     current: String,
+    /// The outer terminal's size; nothing is drawn outside it.
+    size: (u16, u16),
+    /// The terminal changed size, so every row is drawn again.
+    redraw: bool,
+    /// The first pane row on screen: a pane taller than the terminal shows
+    /// the rows that end at its cursor.
+    top: usize,
 }
 
 impl<W: Write> std::fmt::Debug for Emitter<W> {
@@ -39,7 +46,15 @@ impl<W: Write> Emitter<W> {
             out,
             capabilities,
             current: String::new(),
+            size: (u16::MAX, u16::MAX),
+            redraw: false,
+            top: 0,
         }
+    }
+
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        self.size = (cols, rows);
+        self.redraw = true;
     }
 
     pub fn writer(&self) -> &W {
@@ -50,16 +65,30 @@ impl<W: Write> Emitter<W> {
         self.capabilities
     }
 
-    /// Draws the rows that changed since the last call.
+    /// Draws the rows that changed since the last call, cropped to the
+    /// terminal: a pane larger than the terminal shows its top left corner.
     pub fn draw(&mut self, view: &mut View) -> Result<()> {
         let (fresh, dirty) = view.take_dirty();
-        if fresh {
+        let height = usize::from(self.size.1);
+        let top = (usize::from(view.cursor.row) + 1).saturating_sub(height);
+        let moved = std::mem::replace(&mut self.top, top) != top;
+        let redraw = fresh || moved || std::mem::take(&mut self.redraw);
+        if redraw {
             // A stale grid from before a resize or a detach can hold anything.
             write!(self.out, "\x1b[0m\x1b[H\x1b[2J").context("clear the screen")?;
             self.current.clear();
         }
-        if dirty.is_empty() {
-            return Ok(());
+        let rows: Vec<usize> = if redraw {
+            (0..usize::from(view.rows)).collect()
+        } else {
+            dirty
+        };
+        let rows: Vec<usize> = rows
+            .into_iter()
+            .filter(|row| (top..top + height).contains(row))
+            .collect();
+        if rows.is_empty() {
+            return self.out.flush().context("flush the frame");
         }
 
         let sync = self.capabilities.synchronized_output;
@@ -67,7 +96,7 @@ impl<W: Write> Emitter<W> {
             write!(self.out, "\x1b[?2026h").context("begin synchronized output")?;
         }
 
-        for row in dirty {
+        for row in rows {
             self.draw_row(view, row)?;
         }
         self.draw_cursor(view)?;
@@ -82,8 +111,9 @@ impl<W: Write> Emitter<W> {
         let Some(cells) = view.cells.get(row) else {
             return Ok(());
         };
+        let limit = cells.len().min(usize::from(self.size.0));
         let mut col = 0;
-        while col < cells.len() {
+        while col < limit {
             let cell = &cells[col];
             // The second half of a wide cell is covered by the first.
             if cell.text.is_empty() {
@@ -93,7 +123,7 @@ impl<W: Write> Emitter<W> {
 
             let link = view.link(cell);
             let mut end = col + 1;
-            while end < cells.len()
+            while end < limit
                 && !cells[end].text.is_empty()
                 && view.link(&cells[end]) == link
                 && same_attributes(cell, &cells[end])
@@ -101,7 +131,8 @@ impl<W: Write> Emitter<W> {
                 end += 1;
             }
 
-            write!(self.out, "\x1b[{};{}H", row + 1, col + 1).context("position the cursor")?;
+            write!(self.out, "\x1b[{};{}H", row - self.top + 1, col + 1)
+                .context("position the cursor")?;
 
             if let Some(target) = link {
                 write!(self.out, "\x1b]8;;{target}\x1b\\").context("open a link")?;
@@ -115,9 +146,13 @@ impl<W: Write> Emitter<W> {
                 self.current.clone_from(&sgr);
             }
 
-            for cell in &cells[col..end] {
-                if cell.attrs.contains(Attrs::HIDDEN) {
-                    self.out.write_all(b" ").context("write a hidden cell")?;
+            for (offset, cell) in cells[col..end].iter().enumerate() {
+                let at = col + offset;
+                // A wide cell whose second half falls past the edge would wrap.
+                let cut =
+                    at + 1 == limit && cells.get(at + 1).is_some_and(|next| next.text.is_empty());
+                if cell.attrs.contains(Attrs::HIDDEN) || cut {
+                    self.out.write_all(b" ").context("write a blank cell")?;
                 } else {
                     self.out
                         .write_all(cell.text.as_bytes())
@@ -137,7 +172,12 @@ impl<W: Write> Emitter<W> {
 
     fn draw_cursor(&mut self, view: &View) -> Result<()> {
         let cursor = view.cursor;
-        if !cursor.visible || cursor.row >= view.rows || cursor.col >= view.cols {
+        let row = usize::from(cursor.row).saturating_sub(self.top);
+        if !cursor.visible
+            || cursor.row >= view.rows
+            || row >= usize::from(self.size.1)
+            || cursor.col >= view.cols.min(self.size.0)
+        {
             return self.out.write_all(b"\x1b[?25l").context("hide the cursor");
         }
         let shape = match cursor.shape {
@@ -148,7 +188,7 @@ impl<W: Write> Emitter<W> {
         write!(
             self.out,
             "\x1b[{};{}H\x1b[{} q\x1b[?25h",
-            cursor.row + 1,
+            row + 1,
             cursor.col + 1,
             shape
         )
@@ -402,5 +442,87 @@ mod tests {
             "{bytes:?}"
         );
         assert!(bytes.contains("\x1b]8;;\x1b\\"), "{bytes:?}");
+    }
+
+    /// What a terminal of the given size shows after the emitter's bytes.
+    fn shown(bytes: &str, cols: u16, rows: u16) -> Vec<String> {
+        let mut engine = twyx_holder::engine::create(
+            twyx_holder::engine::Geometry {
+                cols,
+                rows,
+                scrollback_lines: 0,
+            },
+            Box::new(std::io::sink()),
+        )
+        .expect("an engine");
+        engine.advance(bytes.as_bytes());
+        engine
+            .view()
+            .rows
+            .iter()
+            .map(|row| row.cells.iter().map(|cell| cell.text.as_str()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_pane_larger_than_the_terminal_is_cropped() {
+        let mut view = view(&["abcdef", "ghijkl", "mnopqr", "stuvwx"]);
+        let mut emitter = Emitter::new(Vec::new(), Capabilities::default());
+        emitter.resize(4, 2);
+        emitter.draw(&mut view).expect("draw");
+        let bytes = String::from_utf8(emitter.writer().clone()).expect("utf8");
+        assert_eq!(shown(&bytes, 4, 2), ["abcd", "ghij"]);
+    }
+
+    #[test]
+    fn a_pane_that_shrinks_leaves_no_stale_cells() {
+        let mut view = view(&["abcd", "efgh"]);
+        let mut emitter = Emitter::new(Vec::new(), Capabilities::default());
+        emitter.resize(4, 2);
+        emitter.draw(&mut view).expect("draw");
+        view.apply_frame(twyx_protocol::grid::Frame {
+            seq: 2,
+            screen: Screen {
+                cols: 2,
+                rows: 1,
+                cursor: Cursor {
+                    col: 0,
+                    row: 0,
+                    shape: CursorShape::Beam,
+                    visible: true,
+                },
+                modes: Modes::default(),
+                title: String::new(),
+            },
+            changed: vec![RowUpdate {
+                row: 0,
+                cells: vec![
+                    Cell {
+                        text: "x".to_owned(),
+                        ..Cell::blank()
+                    },
+                    Cell {
+                        text: "y".to_owned(),
+                        ..Cell::blank()
+                    },
+                ],
+            }],
+            links: Vec::new(),
+            scrollback: 0,
+        });
+        emitter.draw(&mut view).expect("draw");
+        let bytes = String::from_utf8(emitter.writer().clone()).expect("utf8");
+        assert_eq!(shown(&bytes, 4, 2), ["xy  ", "    "]);
+    }
+
+    #[test]
+    fn the_crop_follows_the_cursor_below_the_terminal() {
+        let mut view = view(&["abcd", "efgh", "ijkl", "mnop"]);
+        view.cursor.row = 3;
+        let mut emitter = Emitter::new(Vec::new(), Capabilities::default());
+        emitter.resize(4, 2);
+        emitter.draw(&mut view).expect("draw");
+        let bytes = String::from_utf8(emitter.writer().clone()).expect("utf8");
+        assert_eq!(shown(&bytes, 4, 2), ["ijkl", "mnop"]);
     }
 }

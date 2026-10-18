@@ -16,3 +16,6 @@ crossterm = "0.29"
 rustix = { version = "1", features = ["fs"] }
 twyx-core = { workspace = true }
 twyx-protocol = { workspace = true }
+
+[dev-dependencies]
+twyx-holder = { workspace = true }

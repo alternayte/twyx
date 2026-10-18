@@ -5704,6 +5704,7 @@ dependencies = [
  "crossterm",
  "rustix",
  "twyx-core",
+ "twyx-holder",
  "twyx-protocol",
 ]
 

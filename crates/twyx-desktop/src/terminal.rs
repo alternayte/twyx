@@ -334,8 +334,9 @@ impl Terminal {
             self.metrics.rows(size.height),
         );
         if grid != self.grid {
+            // The view keeps the pane's screen at the pane's size; the pane
+            // follows only if this client holds the lease.
             self.grid = grid;
-            self.shared().view.resize_grid(grid.0, grid.1);
             if let Some(outgoing) = &self.outgoing {
                 let _ = outgoing.send(ToDaemon::Resize {
                     cols: grid.0,
