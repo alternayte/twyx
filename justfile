@@ -17,6 +17,12 @@ test:
     cargo test --workspace
     cargo test --package twyx-holder --features engine-wezterm
 
+# The automated conformance cases: bytes in, screen out, against the default
+# engine and then wezterm. Ghostty runs under `test-ghostty`.
+conformance:
+    cargo test --package twyx-holder --test conformance
+    cargo test --package twyx-holder --features engine-wezterm --test conformance
+
 # Keystroke-to-screen latency through the real client, on this machine.
 # Release builds only for numbers that get published.
 bench:
