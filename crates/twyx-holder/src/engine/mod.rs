@@ -1,6 +1,8 @@
 //! The engine boundary. One terminal engine sits behind it until GATE 1 picks
 //! one, then the others and this trait are deleted.
 
+use std::collections::HashMap;
+
 use twyx_protocol::grid::{Cursor, Modes, Row};
 
 #[cfg(feature = "engine-alacritty")]
@@ -94,4 +96,45 @@ pub trait Engine {
 
     /// One cell of the grid, by display line and column, for copy mode.
     fn line(&mut self, line: i32) -> Row;
+}
+
+/// Interns the link targets the grid refers to, so a cell carries a number.
+#[derive(Debug, Default)]
+pub(crate) struct Links {
+    ids: HashMap<String, u32>,
+    targets: Vec<String>,
+    used: Vec<bool>,
+}
+
+impl Links {
+    pub(crate) fn intern(&mut self, uri: &str) -> u32 {
+        if let Some(id) = self.ids.get(uri) {
+            return *id;
+        }
+        let id = self.targets.len() as u32;
+        self.targets.push(uri.to_owned());
+        self.ids.insert(uri.to_owned(), id);
+        id
+    }
+
+    pub(crate) fn mark(&mut self, id: u32) {
+        let index = id as usize;
+        if index >= self.used.len() {
+            self.used.resize(index + 1, false);
+        }
+        self.used[index] = true;
+    }
+
+    pub(crate) fn take_used(&mut self) -> Vec<(u32, String)> {
+        let used = std::mem::take(&mut self.used);
+        used.iter()
+            .enumerate()
+            .filter(|(_, used)| **used)
+            .filter_map(|(id, _)| {
+                self.targets
+                    .get(id)
+                    .map(|target| (id as u32, target.clone()))
+            })
+            .collect()
+    }
 }

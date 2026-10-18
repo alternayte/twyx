@@ -1,21 +1,27 @@
 //! `libghostty-vt` behind the engine boundary.
 
+use std::cell::RefCell;
 use std::io::Write;
+use std::rc::Rc;
 
 use libghostty_vt::render::{CellIterator, RowIterator};
+use libghostty_vt::screen::CellWide;
 use libghostty_vt::style::{Style, StyleColor, Underline as GhosttyUnderline};
-use libghostty_vt::{RenderState, Terminal, TerminalOptions};
+use libghostty_vt::terminal::{Mode, Point, PointCoordinate};
+use libghostty_vt::{RenderState, Terminal};
 
 use twyx_protocol::grid::{
     Attrs, Cell, Colour, Cursor, CursorShape, Modes, MouseEncoding, MouseMode, Row, Underline,
 };
 
-use super::{Engine, EngineSignal, Geometry, View};
+use super::{Engine, EngineSignal, Geometry, Links, View};
 
 pub struct Ghostty {
     term: Terminal<'static, 'static>,
     render: RenderState<'static>,
     size: (u16, u16),
+    links: Links,
+    signals: Rc<RefCell<Vec<EngineSignal>>>,
 }
 
 impl std::fmt::Debug for Ghostty {
@@ -29,14 +35,34 @@ impl std::fmt::Debug for Ghostty {
 
 impl Ghostty {
     pub fn new(geometry: Geometry, mut answerback: Box<dyn Write + Send>) -> Option<Self> {
-        let mut term = Terminal::new(TerminalOptions {
-            cols: geometry.cols.max(2),
-            rows: geometry.rows.max(1),
-            max_scrollback: geometry.scrollback_lines as usize,
-        })
-        .ok()?;
+        let mut term = Terminal::new(geometry.cols.max(2), geometry.rows.max(1)).ok()?;
+        term.set_scrollback_max_lines(Some(geometry.scrollback_lines as usize))
+            .ok()?;
         term.on_pty_write(move |_, reply: &[u8]| {
             let _ = answerback.write_all(reply);
+        })
+        .ok()?;
+        let signals: Rc<RefCell<Vec<EngineSignal>>> = Rc::default();
+        let sink = Rc::clone(&signals);
+        term.on_bell(move |_| sink.borrow_mut().push(EngineSignal::Bell))
+            .ok()?;
+        let sink = Rc::clone(&signals);
+        term.on_title_changed(move |term| {
+            let title = term.title().unwrap_or_default().to_owned();
+            sink.borrow_mut().push(EngineSignal::Title(title));
+        })
+        .ok()?;
+        let sink = Rc::clone(&signals);
+        term.on_clipboard_write(move |_, write| {
+            let text = write
+                .contents()
+                .find(|content| content.mime.starts_with("text/plain"))
+                .map(|content| String::from_utf8_lossy(content.data).into_owned());
+            // The daemon applies the clipboard policy; the engine only reports.
+            if let Some(text) = text {
+                sink.borrow_mut().push(EngineSignal::ClipboardWrite(text));
+                write.reply(Ok(()), false);
+            }
         })
         .ok()?;
         let render = RenderState::new().ok()?;
@@ -44,6 +70,8 @@ impl Ghostty {
             term,
             render,
             size: (geometry.cols.max(2), geometry.rows.max(1)),
+            links: Links::default(),
+            signals,
         })
     }
 
@@ -74,7 +102,7 @@ impl Ghostty {
 impl Engine for Ghostty {
     fn advance(&mut self, bytes: &[u8]) -> Vec<EngineSignal> {
         self.term.vt_write(bytes);
-        Vec::new()
+        std::mem::take(&mut *self.signals.borrow_mut())
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
@@ -98,18 +126,34 @@ impl Engine for Ghostty {
 
         let cols = usize::from(self.size.0);
         let mut grid = Vec::with_capacity(usize::from(self.size.1));
+        let mut linked = Vec::new();
         while let Some(row) = row_iteration.next() {
             let mut line = Vec::with_capacity(cols);
             let Ok(mut cell_iteration) = cells.update(row) else {
                 break;
             };
             while let Some(cell) = cell_iteration.next() {
+                if cell
+                    .raw_cell()
+                    .and_then(|raw| raw.has_hyperlink())
+                    .unwrap_or(false)
+                {
+                    linked.push((grid.len(), line.len()));
+                }
                 let style = cell.style().unwrap_or_default();
-                // A spacer after a wide cell has no graphemes of its own.
-                let text = cell
+                let spacer = cell
+                    .raw_cell()
+                    .and_then(|raw| raw.wide())
+                    .is_ok_and(|wide| wide == CellWide::SpacerTail);
+                let mut text = cell
                     .graphemes()
                     .map(|graphemes| graphemes.into_iter().collect::<String>())
                     .unwrap_or_default();
+                // Only the spacer after a wide cell stays empty; a cell that was
+                // never written is a blank.
+                if text.is_empty() && !spacer {
+                    text.push(' ');
+                }
                 line.push(Cell {
                     text,
                     fg: colour(style.fg_color),
@@ -126,6 +170,20 @@ impl Engine for Ghostty {
             grid.push(Row { cells: line });
         }
 
+        for (row, col) in linked {
+            let Some(uri) = hyperlink_at(&self.term, col as u16, row as u32) else {
+                continue;
+            };
+            let id = self.links.intern(&uri);
+            self.links.mark(id);
+            if let Some(cell) = grid
+                .get_mut(row)
+                .and_then(|line: &mut Row| line.cells.get_mut(col))
+            {
+                cell.link = Some(id);
+            }
+        }
+
         let cursor = snapshot.cursor_viewport().ok().flatten();
         View {
             cols: self.size.0,
@@ -139,27 +197,49 @@ impl Engine for Ghostty {
             modes: self.modes(),
             title: self.term.title().unwrap_or_default().to_owned(),
             scrollback: self.term.scrollback_rows().unwrap_or(0) as u32,
-            links: Vec::new(),
+            links: self.links.take_used(),
         }
     }
 
     fn modes(&self) -> Modes {
+        let on = |mode| self.term.mode(mode).unwrap_or(false);
+        let mouse = if on(Mode::ANY_MOUSE) {
+            MouseMode::Motion
+        } else if on(Mode::BUTTON_MOUSE) {
+            MouseMode::Drag
+        } else if on(Mode::NORMAL_MOUSE) || on(Mode::X10_MOUSE) {
+            MouseMode::Click
+        } else {
+            MouseMode::Off
+        };
+        let mouse_encoding = if on(Mode::SGR_PIXELS_MOUSE) {
+            MouseEncoding::SgrPixels
+        } else if on(Mode::SGR_MOUSE) {
+            MouseEncoding::Sgr
+        } else if on(Mode::URXVT_MOUSE) {
+            MouseEncoding::Urxvt
+        } else if on(Mode::UTF8_MOUSE) {
+            MouseEncoding::Utf8
+        } else {
+            MouseEncoding::X10
+        };
         Modes {
-            mouse: if self.term.is_mouse_tracking().unwrap_or(false) {
-                MouseMode::Drag
-            } else {
-                MouseMode::Off
-            },
-            // `Terminal::mode` and `get_mouse_encoding` cannot be used here:
-            // see the note in the gate notes. Every mode that comes from a
-            // `Mode` query therefore reports its default.
-            mouse_encoding: MouseEncoding::Sgr,
+            bracketed_paste: on(Mode::BRACKETED_PASTE),
+            app_cursor: on(Mode::DECCKM),
+            app_keypad: on(Mode::KEYPAD_KEYS),
+            focus_events: on(Mode::FOCUS_EVENT),
+            mouse,
+            mouse_encoding,
             kitty_keyboard: self
                 .term
                 .kitty_keyboard_flags()
                 .map(|flags| flags.bits())
                 .unwrap_or(0),
-            ..Modes::default()
+            alt_screen: on(Mode::ALT_SCREEN)
+                || on(Mode::ALT_SCREEN_SAVE)
+                || on(Mode::ALT_SCREEN_LEGACY),
+            insert: on(Mode::INSERT),
+            reverse_video: on(Mode::REVERSE_COLORS),
         }
     }
 
@@ -212,6 +292,23 @@ fn underline(underline: GhosttyUnderline) -> Underline {
         GhosttyUnderline::Dashed => Underline::Dashed,
         _ => Underline::Single,
     }
+}
+
+fn hyperlink_at(term: &Terminal<'_, '_>, x: u16, y: u32) -> Option<String> {
+    let cell = term
+        .grid_ref(Point::Viewport(PointCoordinate { x, y }))
+        .ok()?;
+    let mut buf = vec![0_u8; 256];
+    let len = match cell.hyperlink_uri(&mut buf) {
+        Ok(len) => len,
+        Err(libghostty_vt::Error::OutOfSpace { required }) if required > buf.len() => {
+            buf.resize(required, 0);
+            cell.hyperlink_uri(&mut buf).ok()?
+        }
+        Err(_) => return None,
+    };
+    buf.truncate(len);
+    String::from_utf8(buf).ok()
 }
 
 #[cfg(test)]

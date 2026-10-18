@@ -1,6 +1,5 @@
 //! `alacritty_terminal` behind the engine boundary.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event as AlacrittyEvent, EventListener};
@@ -16,7 +15,7 @@ use twyx_protocol::grid::{
     Attrs, Cell, Colour, Cursor, CursorShape, Modes, MouseEncoding, MouseMode, Row, Underline,
 };
 
-use super::{Engine, EngineSignal, Geometry, View};
+use super::{Engine, EngineSignal, Geometry, Links, View};
 
 pub struct Alacritty {
     term: Term<Listener>,
@@ -25,47 +24,6 @@ pub struct Alacritty {
     size: Size,
     title: String,
     links: Links,
-}
-
-/// Interns the link targets the grid refers to, so a cell carries a number.
-#[derive(Debug, Default)]
-struct Links {
-    ids: HashMap<String, u32>,
-    targets: Vec<String>,
-    used: Vec<bool>,
-}
-
-impl Links {
-    fn intern(&mut self, uri: &str) -> u32 {
-        if let Some(id) = self.ids.get(uri) {
-            return *id;
-        }
-        let id = self.targets.len() as u32;
-        self.targets.push(uri.to_owned());
-        self.ids.insert(uri.to_owned(), id);
-        id
-    }
-
-    fn mark(&mut self, id: u32) {
-        let index = id as usize;
-        if index >= self.used.len() {
-            self.used.resize(index + 1, false);
-        }
-        self.used[index] = true;
-    }
-
-    fn take_used(&mut self) -> Vec<(u32, String)> {
-        let used = std::mem::take(&mut self.used);
-        used.iter()
-            .enumerate()
-            .filter(|(_, used)| **used)
-            .filter_map(|(id, _)| {
-                self.targets
-                    .get(id)
-                    .map(|target| (id as u32, target.clone()))
-            })
-            .collect()
-    }
 }
 
 impl std::fmt::Debug for Alacritty {

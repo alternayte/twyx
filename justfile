@@ -30,6 +30,7 @@ bench:
     cargo run --release --package twyx --bin twyx-bench -- --samples 20 -- ./target/release/twyx
 
 # The ghostty engine needs Zig 0.16.0 on PATH and GHOSTTY_SOURCE_DIR pointing at
-# a Ghostty checkout, so it runs here rather than in `test`.
+# a Ghostty checkout of the commit libghostty-rs pins (3425025e), so it runs here
+# rather than in `test`.
 test-ghostty:
     cargo test --package twyx-holder --features engine-ghostty

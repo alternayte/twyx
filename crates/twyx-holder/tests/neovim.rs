@@ -278,11 +278,15 @@ fn truecolor_reaches_the_screen_model() {
     });
 }
 
-// A known gap, not a passing case: with TERM=xterm-256color, which has no
-// Smulx, Neovim draws a plain underline with no colour on alacritty_terminal
-// and wezterm-term. Recorded for GATE 1.
+// A known gap on two engines: with TERM=xterm-256color, which has no Smulx,
+// Neovim draws undercurl only when the terminal itself reports support.
+// libghostty-vt does; alacritty_terminal and wezterm-term get a plain
+// underline with no colour. Recorded for GATE 1.
 #[test]
-#[ignore = "Neovim falls back to a plain underline; see the gate notes"]
+#[cfg_attr(
+    not(feature = "engine-ghostty"),
+    ignore = "the engine does not report undercurl support; see the gate notes"
+)]
 fn undercurl_and_underline_colour_reach_the_screen_model() {
     let nvim = Nvim::start(
         "vim.o.termguicolors = true\n\
