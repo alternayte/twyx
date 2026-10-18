@@ -5,13 +5,14 @@
 
 use std::io::Read;
 
-use twyx_holder::pty::{Pty, Spawn};
+use portable_pty::Child;
+use twyx_holder::pty::{Master, Pty, Spawn};
 
 const SCRIPT: &str = r#"printf 'tty:%s\n' "$(tty)"; \
 if printf '' >/dev/tty 2>/dev/null; then printf 'ctty:yes\n'; else printf 'ctty:no\n'; fi; \
 ps -o pid=,pgid=,tpgid= -p $$"#;
 
-fn spawn_probe() -> (Pty, Box<dyn Read + Send>) {
+fn spawn_probe() -> (Master, Box<dyn Child + Send + Sync>, Box<dyn Read + Send>) {
     let pty = Pty::spawn(&Spawn {
         argv: vec!["/bin/sh".into(), "-c".into(), SCRIPT.into()],
         cwd: std::env::temp_dir(),
@@ -20,8 +21,9 @@ fn spawn_probe() -> (Pty, Box<dyn Read + Send>) {
         rows: 24,
     })
     .expect("spawn the probe");
-    let reader = pty.reader().expect("clone the pty reader");
-    (pty, reader)
+    let (master, child) = pty.split();
+    let reader = master.reader().expect("clone the pty reader");
+    (master, child, reader)
 }
 
 fn read_to_end(reader: &mut dyn Read) -> String {
@@ -59,9 +61,9 @@ fn process_ids(output: &str) -> (i64, i64, i64) {
 
 #[test]
 fn pane_child_runs_in_a_new_session_with_its_pty_as_controlling_terminal() {
-    let (mut pty, mut reader) = spawn_probe();
+    let (_master, mut child, mut reader) = spawn_probe();
     let output = read_to_end(reader.as_mut());
-    pty.wait().expect("the probe exits");
+    child.wait().expect("the probe exits");
 
     assert!(
         output.contains("ctty:yes"),

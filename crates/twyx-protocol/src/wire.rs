@@ -8,6 +8,24 @@ use serde::de::DeserializeOwned;
 
 use twyx_core::tuning;
 
+/// Encodes a frame or snapshot body that the daemon relays without reading.
+pub fn encode_body<T: Serialize>(message: &T) -> Result<Vec<u8>> {
+    let body = postcard::to_stdvec(message).context("encode a body")?;
+    if body.len() > tuning::MAX_MESSAGE_BYTES {
+        bail!(
+            "body of {} bytes exceeds the {} byte limit",
+            body.len(),
+            tuning::MAX_MESSAGE_BYTES
+        );
+    }
+    Ok(body)
+}
+
+/// Decodes a frame or snapshot body a holder published.
+pub fn decode_body<T: DeserializeOwned>(body: &[u8]) -> Result<T> {
+    postcard::from_bytes(body).context("decode a body")
+}
+
 pub fn write<T: Serialize>(writer: &mut impl Write, message: &T) -> Result<()> {
     let body = postcard::to_stdvec(message).context("encode a message")?;
     if body.len() > tuning::MAX_MESSAGE_BYTES {

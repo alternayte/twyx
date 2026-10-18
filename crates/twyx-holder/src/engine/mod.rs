@@ -27,6 +27,8 @@ pub struct View {
     pub title: String,
     /// Lines kept above the top of the viewport.
     pub scrollback: u32,
+    /// The link targets the rows above refer to.
+    pub links: Vec<(u32, String)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,8 +44,10 @@ pub trait Engine: Send {
 
     fn resize(&mut self, cols: u16, rows: u16);
 
-    fn view(&self) -> View;
+    fn view(&mut self) -> View;
+
+    fn modes(&self) -> Modes;
 
     /// One cell of the grid, by display line and column, for copy mode.
-    fn line(&self, line: i32) -> Row;
+    fn line(&mut self, line: i32) -> Row;
 }

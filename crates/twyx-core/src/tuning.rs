@@ -13,6 +13,10 @@ pub const MAX_MESSAGE_BYTES: usize = 16 << 20;
 /// The most scrollback one pane may hold, in bytes.
 pub const PANE_SCROLLBACK_BYTES: usize = 8 << 20;
 
+/// The bytes one scrollback cell is budgeted at. A generous bound, so a wide
+/// cell cannot exceed the pane's budget.
+pub const SCROLLBACK_CELL_BYTES: usize = 64;
+
 /// The most scrollback all panes may hold together, in bytes.
 pub const SCROLLBACK_BYTES: usize = 512 << 20;
 

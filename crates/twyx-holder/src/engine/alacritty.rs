@@ -1,5 +1,6 @@
 //! `alacritty_terminal` behind the engine boundary.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event as AlacrittyEvent, EventListener};
@@ -23,6 +24,48 @@ pub struct Alacritty {
     signals: Arc<Mutex<Vec<EngineSignal>>>,
     size: Size,
     title: String,
+    links: Links,
+}
+
+/// Interns the link targets the grid refers to, so a cell carries a number.
+#[derive(Debug, Default)]
+struct Links {
+    ids: HashMap<String, u32>,
+    targets: Vec<String>,
+    used: Vec<bool>,
+}
+
+impl Links {
+    fn intern(&mut self, uri: &str) -> u32 {
+        if let Some(id) = self.ids.get(uri) {
+            return *id;
+        }
+        let id = self.targets.len() as u32;
+        self.targets.push(uri.to_owned());
+        self.ids.insert(uri.to_owned(), id);
+        id
+    }
+
+    fn mark(&mut self, id: u32) {
+        let index = id as usize;
+        if index >= self.used.len() {
+            self.used.resize(index + 1, false);
+        }
+        self.used[index] = true;
+    }
+
+    fn take_used(&mut self) -> Vec<(u32, String)> {
+        let used = std::mem::take(&mut self.used);
+        used.iter()
+            .enumerate()
+            .filter(|(_, used)| **used)
+            .filter_map(|(id, _)| {
+                self.targets
+                    .get(id)
+                    .map(|target| (id as u32, target.clone()))
+            })
+            .collect()
+    }
 }
 
 impl std::fmt::Debug for Alacritty {
@@ -57,6 +100,7 @@ impl Alacritty {
             signals,
             size,
             title: String::new(),
+            links: Links::default(),
         }
     }
 
@@ -85,25 +129,53 @@ impl Engine for Alacritty {
         self.term.resize(self.size);
     }
 
-    fn view(&self) -> View {
-        let grid = self.term.grid();
+    fn view(&mut self) -> View {
+        let Self {
+            term,
+            size,
+            title,
+            links,
+            ..
+        } = self;
+        let grid = term.grid();
         let offset = grid.display_offset();
-        let rows = (0..self.size.screen_lines)
-            .map(|row| line_row(grid, Line(row as i32 - offset as i32), self.size.columns))
+        let mut scratch = AlacrittyCell::default();
+        let rows = (0..size.screen_lines)
+            .map(|row| {
+                line_row(
+                    grid,
+                    Line(row as i32 - offset as i32),
+                    size.columns,
+                    links,
+                    &mut scratch,
+                )
+            })
             .collect();
 
         View {
-            cols: self.size.columns as u16,
+            cols: size.columns as u16,
             rows,
-            cursor: cursor(&self.term, self.size),
-            modes: modes(*self.term.mode()),
-            title: self.title.clone(),
+            cursor: cursor(term, *size),
+            modes: modes(*term.mode()),
+            title: title.clone(),
             scrollback: grid.history_size() as u32,
+            links: links.take_used(),
         }
     }
 
-    fn line(&self, line: i32) -> Row {
-        line_row(self.term.grid(), Line(line), self.size.columns)
+    fn modes(&self) -> Modes {
+        modes(*self.term.mode())
+    }
+
+    fn line(&mut self, line: i32) -> Row {
+        let mut scratch = AlacrittyCell::default();
+        line_row(
+            self.term.grid(),
+            Line(line),
+            self.size.columns,
+            &mut self.links,
+            &mut scratch,
+        )
     }
 }
 
@@ -157,14 +229,23 @@ impl Dimensions for Size {
     }
 }
 
-fn line_row(grid: &alacritty_terminal::grid::Grid<AlacrittyCell>, line: Line, cols: usize) -> Row {
+fn line_row(
+    grid: &alacritty_terminal::grid::Grid<AlacrittyCell>,
+    line: Line,
+    cols: usize,
+    links: &mut Links,
+    scratch: &mut AlacrittyCell,
+) -> Row {
     let cells = (0..cols)
-        .map(|col| cell(&grid[Point::new(line, Column(col))]))
+        .map(|col| {
+            *scratch = grid[Point::new(line, Column(col))].clone();
+            cell(scratch, links)
+        })
         .collect();
     Row { cells }
 }
 
-fn cell(cell: &AlacrittyCell) -> Cell {
+fn cell(cell: &AlacrittyCell, links: &mut Links) -> Cell {
     let text = if cell
         .flags
         .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
@@ -186,7 +267,11 @@ fn cell(cell: &AlacrittyCell) -> Cell {
         attrs: attrs(cell.flags),
         underline: underline(cell.flags),
         underline_colour: cell.underline_color().map(colour),
-        link: None,
+        link: cell.hyperlink().map(|hyperlink| {
+            let id = links.intern(hyperlink.uri());
+            links.mark(id);
+            id
+        }),
     }
 }
 

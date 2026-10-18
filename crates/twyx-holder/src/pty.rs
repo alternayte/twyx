@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use portable_pty::{Child, CommandBuilder, ExitStatus, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 /// What to start in a pane.
 #[derive(Debug, Clone)]
@@ -21,14 +21,14 @@ pub struct Spawn {
 
 /// One PTY and its child process.
 pub struct Pty {
-    master: Box<dyn MasterPty + Send>,
+    master: Master,
     child: Box<dyn Child + Send + Sync>,
 }
 
 impl std::fmt::Debug for Pty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Pty")
-            .field("tty", &self.master.tty_name())
+            .field("tty", &self.master.tty_name)
             .field("pid", &self.child.process_id())
             .finish()
     }
@@ -48,6 +48,12 @@ impl Pty {
             command.env(key, value);
         }
 
+        let master = Master {
+            tty_name: pair.master.tty_name(),
+            session_leader: pair.master.process_group_leader(),
+            inner: pair.master,
+        };
+
         let child = pair
             .slave
             .spawn_command(command)
@@ -55,53 +61,61 @@ impl Pty {
         // Dropping the slave end is what lets the master see EOF after exit.
         drop(pair.slave);
 
-        Ok(Self {
-            master: pair.master,
-            child,
-        })
+        Ok(Self { master, child })
     }
 
+    /// Splits the handle so one thread can wait for the child while another
+    /// reads and writes the terminal.
+    pub fn split(self) -> (Master, Box<dyn Child + Send + Sync>) {
+        (self.master, self.child)
+    }
+}
+
+/// The terminal end of a pane.
+pub struct Master {
+    inner: Box<dyn MasterPty + Send>,
+    tty_name: Option<PathBuf>,
+    session_leader: Option<i32>,
+}
+
+impl std::fmt::Debug for Master {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Master")
+            .field("tty", &self.tty_name)
+            .field("session_leader", &self.session_leader)
+            .finish()
+    }
+}
+
+impl Master {
     pub fn reader(&self) -> Result<Box<dyn Read + Send>> {
-        self.master
+        self.inner
             .try_clone_reader()
             .context("clone the pty reader")
     }
 
     pub fn writer(&self) -> Result<Box<dyn Write + Send>> {
-        self.master.take_writer().context("take the pty writer")
+        self.inner.take_writer().context("take the pty writer")
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
-        self.master
+        self.inner
             .resize(size(cols, rows))
             .context("resize the pty")
     }
 
-    /// Blocks until the child exits.
-    pub fn wait(&mut self) -> Result<ExitStatus> {
-        self.child.wait().context("wait for the pane child")
+    pub fn tty_name(&self) -> Option<&std::path::Path> {
+        self.tty_name.as_deref()
     }
 
-    pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
-        self.child.try_wait().context("poll the pane child")
-    }
-
-    pub fn kill(&mut self) -> Result<()> {
-        self.child.kill().context("kill the pane child")
-    }
-
-    pub fn child_pid(&self) -> Option<u32> {
-        self.child.process_id()
-    }
-
-    pub fn tty_name(&self) -> Option<PathBuf> {
-        self.master.tty_name()
-    }
-
-    /// The local process group or session leader of the child.
     pub fn session_leader(&self) -> Option<i32> {
-        self.master.process_group_leader()
+        self.session_leader
     }
+}
+
+/// A handle that can end the pane's process tree from another thread.
+pub fn killer(child: &(dyn Child + Send + Sync)) -> Box<dyn ChildKiller + Send + Sync> {
+    child.clone_killer()
 }
 
 fn size(cols: u16, rows: u16) -> PtySize {
