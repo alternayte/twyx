@@ -25,13 +25,24 @@ pub struct Alacritty {
     title: String,
 }
 
+impl std::fmt::Debug for Alacritty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Alacritty")
+            .field("size", &self.size)
+            .field("title", &self.title)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Alacritty {
     pub fn new(geometry: Geometry) -> Self {
-        let mut config = Config::default();
-        config.scrolling_history = geometry.scrollback_lines as usize;
-        config.kitty_keyboard = true;
-        // OSC 52 reads are refused; writes reach the clipboard.
-        config.osc52 = Osc52::OnlyCopy;
+        let config = Config {
+            scrolling_history: geometry.scrollback_lines as usize,
+            kitty_keyboard: true,
+            // OSC 52 reads are refused; writes reach the clipboard.
+            osc52: Osc52::OnlyCopy,
+            ..Config::default()
+        };
 
         let signals = Arc::new(Mutex::new(Vec::new()));
         let listener = Listener {
@@ -54,11 +65,6 @@ impl Alacritty {
             return Vec::new();
         };
         std::mem::take(&mut *signals)
-    }
-
-    fn display_line(&self, row: u16) -> Line {
-        let offset = self.term.grid().display_offset();
-        Line(row as i32 - offset as i32)
     }
 }
 
@@ -101,6 +107,7 @@ impl Engine for Alacritty {
     }
 }
 
+#[derive(Debug)]
 struct Listener {
     signals: Arc<Mutex<Vec<EngineSignal>>>,
 }

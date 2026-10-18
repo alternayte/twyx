@@ -1,6 +1,8 @@
 //! Spike: the pane child runs in a new session, and the PTY it was given is
 //! its controlling terminal.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::io::Read;
 
 use twyx_holder::pty::{Pty, Spawn};

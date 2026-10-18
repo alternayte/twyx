@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn pane_id_rejects_what_is_not_a_pane_id() {
         assert!(PaneId::from_str("").is_err());
-        assert!(PaneId::from_str("twyx").is_err());
+        assert!(PaneId::from_str("Twyx").is_err());
         assert!(PaneId::from_str("zzzzzzzzzzzzzz").is_err());
     }
 }
