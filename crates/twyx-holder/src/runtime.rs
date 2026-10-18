@@ -349,55 +349,53 @@ fn spawn_acceptor(listener: UnixListener, events: Sender<Event>) -> Result<()> {
                 let Ok(stream) = stream else {
                     continue;
                 };
-                let Ok(reader_stream) = stream.try_clone() else {
-                    continue;
-                };
-                let mut reader = BufReader::new(reader_stream);
-
-                let hello = match wire::read::<ToHolder>(&mut reader) {
-                    Ok(Some(ToHolder::Hello(hello))) => hello,
-                    _ => continue,
-                };
-                if hello.major != MAJOR {
-                    let mut writer = BufWriter::new(stream);
-                    let _ = wire::write(
-                        &mut writer,
-                        &FromHolder::Unsupported {
-                            major: MAJOR,
-                            minor: MINOR,
-                        },
-                    );
-                    continue;
-                }
-
-                let (out_sender, out_receiver) = mpsc::channel::<FromHolder>();
-                let mut writer = BufWriter::new(stream);
-                thread::spawn(move || {
-                    for message in out_receiver {
-                        if wire::write(&mut writer, &message).is_err() {
-                            break;
-                        }
-                    }
-                });
-
-                if events
-                    .send(Event::Attach(hello, out_sender.clone()))
-                    .is_err()
-                {
-                    return;
-                }
-
-                // A daemon that goes away leaves the pane running.
-                while let Ok(Some(command)) = wire::read::<ToHolder>(&mut reader) {
-                    if events
-                        .send(Event::Command(command, out_sender.clone()))
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
+                let events = events.clone();
+                thread::spawn(move || serve_daemon(stream, events));
             }
         })
         .context("start the holder socket")?;
     Ok(())
+}
+
+fn serve_daemon(stream: std::os::unix::net::UnixStream, events: Sender<Event>) {
+    let Ok(reader_stream) = stream.try_clone() else {
+        return;
+    };
+    let mut reader = BufReader::new(reader_stream);
+    let hello = match wire::read::<ToHolder>(&mut reader) {
+        Ok(Some(ToHolder::Hello(hello))) => hello,
+        _ => return,
+    };
+    if hello.major != MAJOR {
+        let mut writer = BufWriter::new(stream);
+        let _ = wire::write(
+            &mut writer,
+            &FromHolder::Unsupported {
+                major: MAJOR,
+                minor: MINOR,
+            },
+        );
+        return;
+    }
+
+    let (out, queued) = mpsc::channel::<FromHolder>();
+    let mut writer = BufWriter::new(stream);
+    thread::spawn(move || {
+        for message in queued {
+            if wire::write(&mut writer, &message).is_err() {
+                break;
+            }
+        }
+    });
+
+    if events.send(Event::Attach(hello, out.clone())).is_err() {
+        return;
+    }
+
+    // A daemon that goes away leaves the pane running.
+    while let Ok(Some(command)) = wire::read::<ToHolder>(&mut reader) {
+        if events.send(Event::Command(command, out.clone())).is_err() {
+            return;
+        }
+    }
 }

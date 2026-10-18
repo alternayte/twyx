@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+rustix = { version = "1", features = ["process"] }
+twyx-daemon = { workspace = true }
 twyx-core = { workspace = true }
 twyx-holder = { workspace = true }
 twyx-protocol = { workspace = true }
