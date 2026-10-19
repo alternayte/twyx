@@ -5,14 +5,20 @@ twyx is a developer workspace: a terminal multiplexer TUI and a native GPUI desk
 It runs Neovim, shells and agent CLIs unmodified, locally or over SSH, with no account and no AI requirement.
 
 ## Run
-- No code exists yet.
+- `cargo run -p twyx --bin twyx` starts the TUI and starts the daemon when none answers.
+- `cargo run -p twyx-desktop` starts the desktop client.
+- `cargo run -p twyx --bin twyx -- --help` lists the daemon and pane subcommands.
 
 ## Test
-- No code exists yet.
+- `just test` runs the full suite. `just conformance` runs the conformance cases alone.
+- `just conformance-agents` runs real agent CLIs with this machine's sign-in. Never in CI.
+- `just bench` measures twyx against Zellij and Herdr when they are on PATH.
+- The Neovim conformance tests need Neovim 0.11 or later on PATH.
 
 ## Stack rules
 - Rust stable in one Cargo workspace, not Go.
-- The desktop client uses GPUI. The TUI uses Ratatui and Crossterm for its chrome only; pane cells go through the twyx emitter.
+- The terminal engine is libghostty-vt through libghostty-rs. Only twyx-holder touches the PTY and the engine.
+- The desktop client uses GPUI. TUI chrome uses Ratatui and Crossterm; pane cells go only through the twyx emitter.
 - Storage is SQLite, and only the daemon opens it. No Postgres.
 - twyx ships as local binaries for macOS and Linux. No Kubernetes.
 - Git runs only as the Git CLI in a subprocess, never through a Git library.
