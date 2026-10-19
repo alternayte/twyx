@@ -132,9 +132,18 @@ pub struct WorkspaceSummary {
     pub project: Option<u64>,
     pub worktree: Option<u64>,
     pub tabs: u32,
-    pub panes: u32,
+    /// The panes its tabs show, tab by tab.
+    pub panes: Vec<PaneRef>,
     /// Interactive clients that show it.
     pub clients: u32,
+}
+
+/// One pane where a workspace shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneRef {
+    pub pane: u64,
+    pub tab: u64,
+    pub leaf: LeafId,
 }
 
 /// Every project, worktree and workspace.
@@ -438,6 +447,8 @@ pub enum ToDaemon {
     },
     /// Ask the daemon to exit. Panes keep running.
     Shutdown,
+    /// Sends an `Overview` now and after every change to it, for a sidebar.
+    WatchOverview,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

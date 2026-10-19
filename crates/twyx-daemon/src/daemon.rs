@@ -105,6 +105,8 @@ pub(crate) struct Client {
     pub focus: BTreeMap<u64, LeafId>,
     /// When the client last sent input, on the daemon's use counter.
     pub used: u64,
+    /// Whether the client gets every change to the overview.
+    pub watching: bool,
 }
 
 #[derive(Debug)]
@@ -133,6 +135,8 @@ pub struct Daemon {
     pub(crate) waiting: Vec<Waiting>,
     /// Counts input, to find the client that last sent some.
     pub(crate) uses: u64,
+    /// The overview watchers last got.
+    pub(crate) overview: Option<twyx_protocol::client::Overview>,
     pub(crate) next_leaf: u64,
     pub(crate) store: Store,
     /// Holders of a protocol major this daemon cannot adopt.
@@ -175,6 +179,7 @@ pub fn run(paths: Paths) -> Result<()> {
         removals: Vec::new(),
         waiting: Vec::new(),
         uses: 0,
+        overview: None,
         next_leaf: saved.next_leaf,
         store,
         outbox: RefCell::new(Vec::new()),
@@ -519,6 +524,7 @@ impl Daemon {
             }
             if persist {
                 self.save();
+                self.send_overview();
             }
             for (out, message) in self.outbox.take() {
                 let _ = out.send(message);
@@ -562,6 +568,7 @@ impl Daemon {
                 tab,
                 focus: BTreeMap::new(),
                 used: self.uses,
+                watching: false,
             },
         );
         if !hello.interactive {
@@ -596,6 +603,12 @@ impl Daemon {
     fn client_message(&mut self, id: u64, message: ToDaemon) {
         match message {
             ToDaemon::Hello(_) | ToDaemon::Shutdown => {}
+            ToDaemon::WatchOverview => {
+                if let Some(client) = self.clients.get_mut(&id) {
+                    client.watching = true;
+                }
+                self.reply(id, FromDaemon::Overview(self.overview_now()));
+            }
             ToDaemon::Resize { cols, rows } => {
                 if let Some(client) = self.clients.get_mut(&id) {
                     client.cols = cols;

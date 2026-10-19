@@ -219,7 +219,7 @@ fn counts(workspace: &WorkspaceSummary) -> String {
         "workspace {}, {}, {}",
         workspace.workspace,
         plural(workspace.tabs, "tab"),
-        plural(workspace.panes, "pane")
+        plural(workspace.panes.len() as u32, "pane")
     );
     if workspace.clients > 0 {
         text.push_str(&format!(

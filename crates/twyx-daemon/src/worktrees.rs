@@ -511,7 +511,22 @@ impl Daemon {
         self.answer_overviews();
     }
 
-    fn overview_now(&self) -> Overview {
+    /// Sends the overview to the clients that watch it, when it changed.
+    pub(crate) fn send_overview(&mut self) {
+        if !self.clients.values().any(|client| client.watching) {
+            return;
+        }
+        let overview = self.overview_now();
+        if self.overview.as_ref() == Some(&overview) {
+            return;
+        }
+        for client in self.clients.values().filter(|client| client.watching) {
+            self.post(&client.out, FromDaemon::Overview(overview.clone()));
+        }
+        self.overview = Some(overview);
+    }
+
+    pub(crate) fn overview_now(&self) -> Overview {
         Overview {
             projects: self
                 .projects

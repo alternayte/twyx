@@ -1,7 +1,7 @@
 //! Workspaces: the tabs for one worktree or plain directory, which client
 //! shows which, and switching between them. No process stops on a switch.
 
-use twyx_protocol::client::{FromDaemon, TabInfo, WorkspaceInfo, WorkspaceSummary};
+use twyx_protocol::client::{FromDaemon, PaneRef, TabInfo, WorkspaceInfo, WorkspaceSummary};
 
 use crate::daemon::Daemon;
 
@@ -190,11 +190,17 @@ impl Daemon {
                     project: entry.project,
                     worktree: entry.worktree,
                     tabs: tabs.len() as u32,
-                    panes: self
-                        .panes
-                        .values()
-                        .filter(|pane| pane.workspace == *id)
-                        .count() as u32,
+                    panes: tabs
+                        .iter()
+                        .filter_map(|tab| Some((*tab, self.tab(*tab)?)))
+                        .flat_map(|(tab, entry)| {
+                            entry.layout.leaves().into_iter().map(move |leaf| PaneRef {
+                                pane: leaf.pane.raw(),
+                                tab,
+                                leaf: leaf.id,
+                            })
+                        })
+                        .collect(),
                     clients: self
                         .clients
                         .values()
