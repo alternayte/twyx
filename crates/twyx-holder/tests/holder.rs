@@ -126,7 +126,7 @@ fn text(rows: &[Row]) -> String {
 }
 
 #[test]
-fn a_holder_publishes_frames_and_keeps_the_final_screen_until_the_daemon_acknowledges() {
+fn invariant_7_a_holder_keeps_the_exit_and_final_screen_until_the_daemon_acknowledges() {
     let (fixture, handle) = Fixture::new("printf 'hello'; exec sleep 30", Duration::from_secs(5));
     let (mut reader, mut writer, snapshot) = fixture.attach();
 
@@ -188,7 +188,7 @@ fn read_until_exit(reader: &mut BufReader<UnixStream>) -> ExitState {
 }
 
 #[test]
-fn a_holder_keeps_the_pane_after_the_daemon_goes_away() {
+fn invariant_1_a_holder_keeps_the_pane_after_the_daemon_goes_away() {
     let (fixture, handle) = Fixture::new("exec sleep 30", Duration::from_secs(5));
     let (reader, writer, _) = fixture.attach();
     drop(reader);
@@ -214,7 +214,7 @@ fn a_holder_keeps_the_pane_after_the_daemon_goes_away() {
 }
 
 #[test]
-fn a_holder_exits_at_the_end_of_the_grace_period_without_an_acknowledgement() {
+fn invariant_7_a_holder_exits_at_the_end_of_the_grace_period_without_an_acknowledgement() {
     let (fixture, handle) = Fixture::new("exit 0", Duration::from_millis(200));
     let (mut reader, writer, _) = fixture.attach();
     read_until_exit(&mut reader);

@@ -283,6 +283,33 @@ mod tests {
     }
 
     #[test]
+    fn invariant_2_a_writer_that_falls_behind_costs_a_gap_never_a_wait() {
+        // A writer that takes nothing: the queue fills and stays full.
+        let (records, inbound) = mpsc::sync_channel(2);
+        let mut history = History {
+            records,
+            gap: false,
+            changed: false,
+            last_checkpoint: Instant::now(),
+            logged: 0,
+        };
+        let started = Instant::now();
+        for _ in 0..1000 {
+            history.output(b"output");
+        }
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
+        assert!(history.gap);
+        // Once the writer catches up, the gap is recorded before new output.
+        let drained: Vec<Record> = inbound.try_iter().collect();
+        assert_eq!(drained.len(), 2);
+        history.output(b"later");
+        let next: Vec<Record> = inbound.try_iter().collect();
+        assert!(
+            matches!(next.as_slice(), [Record::Gap, Record::Output(bytes)] if bytes == b"later")
+        );
+    }
+
+    #[test]
     fn a_log_cut_short_ends_at_its_last_whole_record() {
         let dir = std::env::temp_dir().join(format!("twyx-history-cut-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);

@@ -317,7 +317,7 @@ fn new_pane(client: &mut Client, cwd: &str, script: &str) {
 }
 
 #[test]
-fn a_pane_outlives_the_daemon_and_a_new_daemon_adopts_it() {
+fn invariant_1_a_pane_outlives_the_daemon_and_a_new_daemon_adopts_it() {
     let mut sandbox = Sandbox::new("adopt");
     sandbox.start();
 
