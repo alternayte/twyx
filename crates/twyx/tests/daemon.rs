@@ -958,9 +958,9 @@ fn invariant_21_a_pane_whose_holder_died_shows_its_last_screen_from_history() {
     client.wait_for_text(pane, "history line 3");
     sandbox.wait_for_history(pane);
     // Output after the checkpoint lands in the log.
+    // The terminal echoes the line, and cat writes it again.
     client.type_text("logged-after\r");
-    client.wait_for_text(pane, "logged-after");
-    std::thread::sleep(Duration::from_millis(300));
+    client.wait_for_text(pane, "logged-after\nlogged-after");
     let before = client.text(pane);
     drop(client);
 
