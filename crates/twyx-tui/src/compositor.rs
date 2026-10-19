@@ -21,6 +21,7 @@ use crate::chrome::bars::{HintBar, StatusBar, Tab, TabBar};
 use crate::chrome::frames::{Frame, Frames};
 use crate::emitter::Grid;
 use crate::mouse::Selection;
+use crate::overlay::Overlay;
 
 /// A buffer cell no widget wrote: the cell below shows through.
 const UNTOUCHED: &str = "\u{0}";
@@ -43,6 +44,8 @@ pub struct Scene<'a> {
     pub keymap: &'a Keymap,
     /// Text the mouse is selecting, shown in reverse.
     pub selection: Option<Selection>,
+    /// The palette or a prompt, over everything else.
+    pub overlay: Option<&'a Overlay>,
 }
 
 /// The tab area: the screen between the tab bar and the status bar.
@@ -115,7 +118,7 @@ impl Scene<'_> {
         tab.layout.place(area)
     }
 
-    fn title(&self, pane: u64) -> String {
+    pub fn title(&self, pane: u64) -> String {
         let Some(info) = self.panes.get(&pane) else {
             return String::new();
         };
@@ -133,7 +136,7 @@ impl Scene<'_> {
     }
 
     /// The keys that run a command, from the prefix: `ctrl-g p a`.
-    fn keys_for(&self, command: Command) -> Option<String> {
+    pub fn keys_for(&self, command: Command) -> Option<String> {
         let prefix = self.keymap.prefix.to_string();
         let direct = self
             .keymap
@@ -191,7 +194,7 @@ impl Scene<'_> {
             focused: tiled.iter().position(|p| Some(p.leaf.id) == self.focus),
         }
         .render(panes_area, &mut chrome);
-        overlay(&mut grid, &chrome);
+        overlay_cells(&mut grid, &chrome);
 
         for placed in tiled.iter().filter(|p| p.content) {
             self.pane(&mut grid, &mut links, placed, panes_area);
@@ -209,7 +212,7 @@ impl Scene<'_> {
                 focused: (Some(placed.leaf.id) == self.focus).then_some(0),
             }
             .render(panes_area, &mut layer);
-            overlay(&mut grid, &layer);
+            overlay_cells(&mut grid, &layer);
             self.pane(&mut grid, &mut links, placed, panes_area);
         }
 
@@ -224,11 +227,19 @@ impl Scene<'_> {
                 Rect::new(0, panes_area.bottom() - 1, self.cols, 1),
                 &mut layer,
             );
-            overlay(&mut grid, &layer);
+            overlay_cells(&mut grid, &layer);
+        }
+
+        let mut cursor = self.cursor(&placed, panes_area);
+        if let Some(overlay) = self.overlay {
+            let mut layer = sentinel(screen);
+            overlay.render(self, panes_area, &mut layer);
+            overlay_cells(&mut grid, &layer);
+            cursor = None;
         }
 
         grid.links = links.targets;
-        grid.cursor = self.cursor(&placed, panes_area);
+        grid.cursor = cursor;
         grid
     }
 
@@ -367,7 +378,7 @@ impl Scene<'_> {
             hints: &words,
         }
         .render(row, &mut layer);
-        overlay(grid, &layer);
+        overlay_cells(grid, &layer);
     }
 
     fn cursor(&self, placed: &[Placed], area: Rect) -> Option<Cursor> {
@@ -442,7 +453,7 @@ fn clear(grid: &mut Grid, area: Rect) {
 }
 
 /// Copies every cell a widget wrote into the grid.
-fn overlay(grid: &mut Grid, buf: &Buffer) {
+fn overlay_cells(grid: &mut Grid, buf: &Buffer) {
     let area = buf.area;
     for y in area.top()..area.bottom().min(grid.rows) {
         for x in area.left()..area.right().min(grid.cols) {
@@ -576,6 +587,7 @@ mod tests {
             views: &views,
             keymap: &keymap,
             selection: None,
+            overlay: None,
         }
         .compose();
         grid.cells

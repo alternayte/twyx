@@ -256,6 +256,8 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
             index: usize::from(number.saturating_sub(1)),
         },
         Command::CloseTab => ToDaemon::CloseFocusedTab,
-        Command::Detach | Command::Enter(_) => return None,
+        Command::Detach | Command::Enter(_) | Command::Palette | Command::RenameTab => {
+            return None;
+        }
     })
 }

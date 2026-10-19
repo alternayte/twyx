@@ -22,6 +22,8 @@ pub struct Entry<'a> {
 #[derive(Debug)]
 pub struct Palette<'a> {
     pub pen: &'a Pen,
+    /// The name on the top rule: what the palette is for.
+    pub title: &'a str,
     pub query: &'a str,
     pub entries: &'a [Entry<'a>],
     pub selected: usize,
@@ -34,7 +36,13 @@ impl Palette<'_> {
     /// Where the palette sits in `area`: centred, a third of the way down.
     pub fn place(&self, area: Rect) -> Rect {
         let width = area.width.saturating_sub(4).min(WIDTH);
-        let height = (self.entries.len() as u16 + 4).min(area.height.saturating_sub(2));
+        // The query line alone needs no rule under it.
+        let height = if self.entries.is_empty() {
+            3
+        } else {
+            self.entries.len() as u16 + 4
+        }
+        .min(area.height.saturating_sub(2));
         Rect {
             x: area.x + (area.width - width) / 2,
             y: area.y + (area.height - height) / 3,
@@ -47,7 +55,7 @@ impl Palette<'_> {
 impl Widget for Palette<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let outer = self.place(area);
-        if outer.width < 8 || outer.height < 4 {
+        if outer.width < 8 || outer.height < 3 {
             return;
         }
         let pen = self.pen;
@@ -60,7 +68,10 @@ impl Widget for Palette<'_> {
         }
         Frames {
             pen,
-            frames: &[Frame { outer, title: "" }],
+            frames: &[Frame {
+                outer,
+                title: self.title,
+            }],
             focused: Some(0),
         }
         .render(outer, buf);
@@ -71,6 +82,9 @@ impl Widget for Palette<'_> {
         let x = put(buf, left, y, right, "› ", pen.accent());
         put(buf, x, y, right, self.query, pen.face(kind.label));
 
+        if self.entries.is_empty() || outer.height < 4 {
+            return;
+        }
         let rule = outer.y + 2;
         buf[(outer.x, rule)]
             .set_char(RULES.tee_right)

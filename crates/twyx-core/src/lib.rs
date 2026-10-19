@@ -6,6 +6,7 @@
 pub mod config;
 pub mod keys;
 pub mod layout;
+pub mod palette;
 pub mod pane;
 pub mod paths;
 pub mod theme;

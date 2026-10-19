@@ -373,6 +373,7 @@ fn palette(pen: &Pen, sheet: Rect, buf: &mut Buffer) {
     ];
     Palette {
         pen,
+        title: "palette",
         query: "spe",
         entries: &entries,
         selected: 0,

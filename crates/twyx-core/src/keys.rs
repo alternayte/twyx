@@ -198,6 +198,8 @@ pub enum Command {
     PreviousTab,
     GoToTab(u8),
     CloseTab,
+    RenameTab,
+    Palette,
     Detach,
     Enter(Mode),
 }
@@ -236,6 +238,8 @@ impl Command {
             Command::PreviousTab => "previous-tab".to_owned(),
             Command::GoToTab(n) => format!("go-to-tab-{n}"),
             Command::CloseTab => "close-tab".to_owned(),
+            Command::RenameTab => "rename-tab".to_owned(),
+            Command::Palette => "palette".to_owned(),
             Command::Detach => "detach".to_owned(),
             Command::Enter(mode) => format!("mode-{}", mode.name()),
         }
@@ -260,12 +264,15 @@ impl Command {
             Command::NextTab => "next".to_owned(),
             Command::PreviousTab => "previous".to_owned(),
             Command::GoToTab(_) => "tab".to_owned(),
+            Command::RenameTab => "rename".to_owned(),
+            Command::Palette => "palette".to_owned(),
             Command::Detach => "detach".to_owned(),
             Command::Enter(mode) => mode.name().to_owned(),
         }
     }
 
-    fn every() -> Vec<Command> {
+    /// Every command, in the order the palette lists them.
+    pub fn every() -> Vec<Command> {
         let mut all = vec![
             Command::SplitRight,
             Command::SplitDown,
@@ -279,6 +286,8 @@ impl Command {
             Command::NextTab,
             Command::PreviousTab,
             Command::CloseTab,
+            Command::RenameTab,
+            Command::Palette,
             Command::Detach,
         ];
         for (side, _) in SIDES {
@@ -356,6 +365,7 @@ impl Default for Keymap {
             key('n', C::SplitRight),
             key('x', C::ClosePane),
             key('z', C::ToggleZoom),
+            key(':', C::Palette),
             key('d', C::Detach),
         ];
         command.extend(arrows(C::Focus));
@@ -374,6 +384,7 @@ impl Default for Keymap {
 
         let mut tab = vec![
             key('n', C::NewTab),
+            key('r', C::RenameTab),
             key('x', C::CloseTab),
             key('h', C::PreviousTab),
             (Chord::plain(Left), C::PreviousTab),

@@ -31,6 +31,7 @@ use crate::compositor::{CHROME_ROWS, Scene, tab_area};
 use crate::emitter::{Capabilities, Emitter};
 use crate::input;
 use crate::mouse::{Action, Mouse};
+use crate::overlay::{Choice, Outcome as OverlayOutcome, Overlay};
 use crate::probe;
 use twyx_protocol::connection as client;
 use twyx_protocol::view::View;
@@ -171,6 +172,26 @@ fn run(
     known(&mut panes, &daemon.hello.panes);
     let mut dirty = true;
     let mut mouse = Mouse::default();
+    let mut overlay: Option<Overlay> = None;
+    // Everything the compositor and the mouse need to know, now.
+    macro_rules! scene {
+        () => {
+            Scene {
+                pen: &screen.pen,
+                cols: size.0,
+                rows: size.1,
+                client: client_id,
+                workspace: follow.workspace.as_ref(),
+                tab: follow.tab,
+                focus: follow.leaf,
+                panes: &panes,
+                views: &views,
+                keymap: &keymap,
+                selection: mouse.selection(),
+                overlay: overlay.as_ref(),
+            }
+        };
+    }
 
     loop {
         let mut lost = false;
@@ -263,20 +284,8 @@ fn run(
 
         if dirty {
             dirty = false;
-            let scene = Scene {
-                pen: &screen.pen,
-                cols: size.0,
-                rows: size.1,
-                client: client_id,
-                workspace: follow.workspace.as_ref(),
-                tab: follow.tab,
-                focus: follow.leaf,
-                panes: &panes,
-                views: &views,
-                keymap: &keymap,
-                selection: mouse.selection(),
-            };
-            screen.emitter.draw(&scene.compose())?;
+            let grid = scene!().compose();
+            screen.emitter.draw(&grid)?;
             let focused_title = follow
                 .shown
                 .and_then(|pane| views.get(&pane))
@@ -310,19 +319,75 @@ fn run(
                     InputEvent::Key(key) => key.chord(),
                     _ => None,
                 };
-                let outcome = match chord {
-                    Some(chord) => keymap.press(chord),
-                    // A release goes to the pane only outside the modes.
-                    None if keymap.mode() == Mode::Normal => Outcome::ToPane,
-                    None => Outcome::Consumed,
-                };
-                match outcome {
-                    Outcome::ToPane => {
-                        let _ = daemon.outgoing.send(ToDaemon::Input(event));
+                let command = if let Some(open) = &mut overlay {
+                    let Some(chord) = chord else {
+                        continue;
+                    };
+                    let mut open = open.clone();
+                    let outcome = open.key(&scene!(), chord);
+                    overlay = Some(open);
+                    match outcome {
+                        OverlayOutcome::Stay => None,
+                        OverlayOutcome::Close => {
+                            overlay = None;
+                            None
+                        }
+                        OverlayOutcome::Rename { tab, name } => {
+                            overlay = None;
+                            let _ = daemon.outgoing.send(ToDaemon::RenameTab { tab, name });
+                            None
+                        }
+                        OverlayOutcome::Choose(choice) => {
+                            overlay = None;
+                            match choice {
+                                Choice::Command(command) => Some(command),
+                                Choice::Tab(tab) => {
+                                    let _ = daemon.outgoing.send(ToDaemon::SelectTab { tab });
+                                    None
+                                }
+                                Choice::Leaf(leaf) => {
+                                    let _ = daemon.outgoing.send(ToDaemon::FocusLeaf { leaf });
+                                    None
+                                }
+                            }
+                        }
                     }
-                    Outcome::Consumed => {}
-                    Outcome::Run(Command::Detach) => return Ok(()),
-                    Outcome::Run(command) => {
+                } else {
+                    let outcome = match chord {
+                        Some(chord) => keymap.press(chord),
+                        // A release goes to the pane only outside the modes.
+                        None if keymap.mode() == Mode::Normal => Outcome::ToPane,
+                        None => Outcome::Consumed,
+                    };
+                    match outcome {
+                        Outcome::ToPane => {
+                            let _ = daemon.outgoing.send(ToDaemon::Input(event));
+                            None
+                        }
+                        Outcome::Consumed => None,
+                        Outcome::Run(command) => Some(command),
+                    }
+                };
+                match command {
+                    None => {}
+                    Some(Command::Detach) => return Ok(()),
+                    Some(Command::Palette) => {
+                        keymap.reset();
+                        overlay = Some(Overlay::palette());
+                    }
+                    Some(Command::RenameTab) => {
+                        keymap.reset();
+                        if let Some(tab) = follow.tab {
+                            let name = follow
+                                .workspace
+                                .as_ref()
+                                .and_then(|workspace| workspace.tabs.iter().find(|t| t.tab == tab))
+                                .map(|tab| tab.name.clone())
+                                .unwrap_or_default();
+                            overlay = Some(Overlay::Rename { tab, name });
+                        }
+                    }
+                    Some(command) => {
                         let focused = follow.shown.and_then(|pane| panes.get(&pane));
                         if let Some(request) = request(command, focused) {
                             let _ = daemon.outgoing.send(request);
@@ -331,20 +396,11 @@ fn run(
                 }
             }
             Event::Mouse(event) => {
-                let scene = Scene {
-                    pen: &screen.pen,
-                    cols: size.0,
-                    rows: size.1,
-                    client: client_id,
-                    workspace: follow.workspace.as_ref(),
-                    tab: follow.tab,
-                    focus: follow.leaf,
-                    panes: &panes,
-                    views: &views,
-                    keymap: &keymap,
-                    selection: mouse.selection(),
-                };
-                for action in mouse.handle(&scene, event) {
+                if overlay.is_some() {
+                    continue;
+                }
+                let actions = mouse.handle(&scene!(), event);
+                for action in actions {
                     match action {
                         Action::Send(request) => {
                             let _ = daemon.outgoing.send(request);
@@ -355,6 +411,11 @@ fn run(
                             screen.write(&format!("\x1b]52;c;{encoded}\x1b\\"))?;
                         }
                     }
+                }
+            }
+            Event::Paste(text) if overlay.is_some() => {
+                if let Some(open) = &mut overlay {
+                    open.paste(&text);
                 }
             }
             other => {

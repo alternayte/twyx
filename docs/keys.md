@@ -42,6 +42,7 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 | `n` | `split-right` |
 | `x` | `close-pane` |
 | `z` | `toggle-zoom` |
+| `:` | `palette` |
 | `d` | `detach` |
 | `h` | `focus-left` |
 | `left` | `focus-left` |
@@ -86,6 +87,7 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 | Key | Command |
 |---|---|
 | `n` | `new-tab` |
+| `r` | `rename-tab` |
 | `x` | `close-tab` |
 | `h` | `previous-tab` |
 | `left` | `previous-tab` |
