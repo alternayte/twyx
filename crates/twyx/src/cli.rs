@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
+use twyx_core::layout::Axis;
 use twyx_core::pane::PaneId;
 use twyx_core::paths::Paths;
 use twyx_core::theme::Variant;
 use twyx_holder::engine::Geometry;
 use twyx_holder::pty::Spawn;
-use twyx_protocol::client::{PaneState, ToDaemon};
+use twyx_protocol::client::{FromDaemon, Launch, PaneState, Place, ToDaemon};
 use twyx_protocol::connection as client;
 
 #[derive(Debug, Parser)]
@@ -70,6 +71,20 @@ enum Command {
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum PanePlace {
+    /// Split the focused pane, the new one to the right.
+    Right,
+    /// Split the focused pane, the new one below.
+    Down,
+    /// Stack it with the focused pane.
+    Stack,
+    /// Float it over the tab.
+    Float,
+    /// Open it in a new tab.
+    Tab,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum Paper {
     Light,
     Dark,
@@ -94,12 +109,9 @@ enum PaneCommand {
         /// Directory the command starts in.
         #[arg(long)]
         cwd: Option<PathBuf>,
-        /// Columns of the pane.
-        #[arg(long, default_value_t = 80)]
-        cols: u16,
-        /// Rows of the pane.
-        #[arg(long, default_value_t = 24)]
-        rows: u16,
+        /// Where the pane goes, next to the tab's focused pane.
+        #[arg(long, value_enum, default_value_t = PanePlace::Right)]
+        place: PanePlace,
         /// The command and its arguments. The login shell when empty.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         argv: Vec<String>,
@@ -148,7 +160,7 @@ fn daemon(command: DaemonCommand) -> Result<()> {
         }
         DaemonCommand::Start => {
             client::ensure_daemon(&paths)?;
-            let connection = client::connect(&paths.socket(), 80, 24)?;
+            let connection = client::connect(&paths.socket(), 80, 24, false)?;
             println!("daemon running, pid {}", connection.hello.pid);
             Ok(())
         }
@@ -157,12 +169,12 @@ fn daemon(command: DaemonCommand) -> Result<()> {
                 println!("daemon stopped");
                 return Ok(());
             }
-            let mut connection = client::connect(&paths.socket(), 80, 24)?;
+            let mut connection = client::connect(&paths.socket(), 80, 24, false)?;
             connection.send(&ToDaemon::Shutdown)?;
             Ok(())
         }
         DaemonCommand::Status => {
-            match client::connect(&paths.socket(), 80, 24) {
+            match client::connect(&paths.socket(), 80, 24, false) {
                 Ok(connection) => println!(
                     "running pid {} with {} pane{}",
                     connection.hello.pid,
@@ -184,48 +196,47 @@ fn pane(command: PaneCommand) -> Result<()> {
     let paths = Paths::discover()?;
     client::ensure_daemon(&paths)?;
     match command {
-        PaneCommand::New {
-            cwd,
-            cols,
-            rows,
-            argv,
-        } => {
-            let mut connection = client::connect(&paths.socket(), cols, rows)?;
+        PaneCommand::New { cwd, place, argv } => {
+            let mut connection = client::connect(&paths.socket(), 80, 24, false)?;
             let known: Vec<u64> = connection
                 .hello
                 .panes
                 .iter()
                 .map(|pane| pane.pane)
                 .collect();
-            let argv = if argv.is_empty() {
-                vec![login_shell()]
+            let launch = if argv.is_empty() {
+                Launch::Shell
             } else {
-                argv
+                Launch::Command(argv)
             };
             let cwd = match cwd {
                 Some(cwd) => cwd,
                 None => std::env::current_dir().context("current directory")?,
             };
             connection.send(&ToDaemon::NewPane {
-                argv,
+                launch,
                 cwd: cwd.to_string_lossy().into_owned(),
-                cols,
-                rows,
+                place: match place {
+                    PanePlace::Right => Place::Split(Axis::Row),
+                    PanePlace::Down => Place::Split(Axis::Column),
+                    PanePlace::Stack => Place::Stack,
+                    PanePlace::Float => Place::Floating,
+                    PanePlace::Tab => Place::NewTab,
+                },
             })?;
             loop {
                 match connection.receive()? {
-                    twyx_protocol::client::FromDaemon::Pane(info)
-                        if !known.contains(&info.pane) =>
-                    {
+                    FromDaemon::Pane(info) if !known.contains(&info.pane) => {
                         println!("{}", info.pane);
                         return Ok(());
                     }
+                    FromDaemon::Refused { reason } => bail!("{reason}"),
                     _ => {}
                 }
             }
         }
         PaneCommand::List => {
-            let connection = client::connect(&paths.socket(), 80, 24)?;
+            let connection = client::connect(&paths.socket(), 80, 24, false)?;
             if connection.hello.panes.is_empty() {
                 println!("no panes");
                 return Ok(());
@@ -242,7 +253,7 @@ fn pane(command: PaneCommand) -> Result<()> {
             Ok(())
         }
         PaneCommand::Kill { pane } => {
-            let mut connection = client::connect(&paths.socket(), 80, 24)?;
+            let mut connection = client::connect(&paths.socket(), 80, 24, false)?;
             connection.send(&ToDaemon::KillPane { pane })?;
             Ok(())
         }
@@ -256,10 +267,6 @@ fn state(state: &PaneState) -> String {
         PaneState::Killed { signal } => format!("killed by {signal}"),
         PaneState::Lost => "lost".to_owned(),
     }
-}
-
-fn login_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
 }
 
 fn holder(

@@ -15,8 +15,9 @@ use crossterm::event::{
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, terminal};
 
+use twyx_core::layout::LeafId;
 use twyx_core::theme::Rgb;
-use twyx_protocol::client::{FromDaemon, PaneState, ToDaemon};
+use twyx_protocol::client::{FromDaemon, Launch, Place, ToDaemon, WorkspaceInfo};
 use twyx_protocol::grid::{Frame, Snapshot};
 use twyx_protocol::wire;
 
@@ -78,7 +79,7 @@ fn reconnect(paths: &twyx_core::paths::Paths, size: (u16, u16)) -> Result<client
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let attempt = client::ensure_daemon(paths)
-            .and_then(|()| client::connect(&paths.socket(), size.0, size.1));
+            .and_then(|()| client::connect(&paths.socket(), size.0, size.1, true));
         match attempt {
             Ok(connection) => return Ok(connection.split()),
             Err(error) if Instant::now() >= deadline => {
@@ -110,42 +111,51 @@ fn tty() -> Result<std::fs::File> {
         .context("open the terminal")
 }
 
+/// What the client follows: the workspace, its own focus, and the pane on
+/// screen.
+#[derive(Debug, Default)]
+struct Follow {
+    workspace: Option<WorkspaceInfo>,
+    tab: Option<u64>,
+    leaf: Option<LeafId>,
+    /// The pane drawn now.
+    shown: Option<u64>,
+    /// Whether the workspace held a pane since this client attached.
+    had_panes: bool,
+    /// Whether this client asked for a first pane.
+    asked: bool,
+}
+
+impl Follow {
+    fn focused_pane(&self) -> Option<u64> {
+        let tab = self
+            .workspace
+            .as_ref()?
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.tab) == self.tab)?;
+        Some(tab.layout.leaf(self.leaf?)?.pane.raw())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.tabs.is_empty())
+    }
+}
+
 fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Screen) -> Result<()> {
     let cols = cols.max(2);
     let rows = rows.max(1);
-    let connection = client::connect(&paths.socket(), cols, rows)?;
+    let connection = client::connect(&paths.socket(), cols, rows, true)?;
     let mut daemon = connection.split();
     let mut size = (cols, rows);
 
     let mut view = View::new(cols, rows);
     screen.emitter.resize(cols, rows);
     let mut prefix_pending = false;
-    // A pane that has ended keeps its screen but takes no input, so a client
-    // that attached to one would look dead. Take the first live pane, and ask
-    // for one when there is none.
-    let mut pane = daemon
-        .hello
-        .panes
-        .iter()
-        .find(|info| info.state == PaneState::Running)
-        .map(|info| info.pane);
+    let mut follow = Follow::default();
     let mut title = String::new();
-
-    if let Some(info) = daemon
-        .hello
-        .panes
-        .iter()
-        .find(|info| info.pane == pane.unwrap_or(u64::MAX))
-    {
-        view.resize_grid(info.cols, info.rows);
-    } else {
-        daemon.outgoing.send(ToDaemon::NewPane {
-            argv: vec![shell()],
-            cwd: working_directory(),
-            cols,
-            rows,
-        })?;
-    }
 
     loop {
         let mut drew = false;
@@ -160,23 +170,18 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
                 }
             };
             match message {
-                FromDaemon::Welcome(hello) => {
-                    if pane.is_none() {
-                        pane = hello.panes.first().map(|info| info.pane);
-                    }
+                FromDaemon::Workspace(workspace) => follow.workspace = Some(workspace),
+                FromDaemon::Focus { tab, leaf } => {
+                    follow.tab = tab;
+                    follow.leaf = leaf;
                 }
-                FromDaemon::Snapshot { pane: id, body, .. } if Some(id) == pane => {
+                FromDaemon::Snapshot { pane, body, .. } if Some(pane) == follow.shown => {
                     view.apply_snapshot(wire::decode_body::<Snapshot>(&body)?);
                     drew = true;
                 }
-                FromDaemon::Frame { pane: id, body, .. } if Some(id) == pane => {
+                FromDaemon::Frame { pane, body, .. } if Some(pane) == follow.shown => {
                     view.apply_frame(wire::decode_body::<Frame>(&body)?);
                     drew = true;
-                }
-                FromDaemon::Pane(info) => {
-                    if pane.is_none() && info.state == PaneState::Running {
-                        pane = Some(info.pane);
-                    }
                 }
                 FromDaemon::Clipboard { text, .. } => {
                     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
@@ -185,7 +190,12 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
                 FromDaemon::Unsupported { major, minor } => {
                     anyhow::bail!("the daemon speaks client protocol {major}.{minor}");
                 }
-                FromDaemon::Lease { .. }
+                // Only a first pane that could not start leaves nothing to show.
+                FromDaemon::Refused { reason } if follow.is_empty() => anyhow::bail!("{reason}"),
+                FromDaemon::Refused { .. }
+                | FromDaemon::Welcome(_)
+                | FromDaemon::Pane(_)
+                | FromDaemon::PaneClosed { .. }
                 | FromDaemon::Snapshot { .. }
                 | FromDaemon::Frame { .. } => {}
             }
@@ -193,22 +203,38 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
 
         if lost {
             daemon = reconnect(paths, size)?;
-            // The pane keeps its id across daemons; take another live one only
-            // if it is gone.
-            let kept = daemon
-                .hello
-                .panes
-                .iter()
-                .any(|info| Some(info.pane) == pane && info.state == PaneState::Running);
-            if !kept {
-                pane = daemon
-                    .hello
-                    .panes
-                    .iter()
-                    .find(|info| info.state == PaneState::Running)
-                    .map(|info| info.pane);
-            }
+            // The new daemon adopts the panes; it says again what to show.
+            follow = Follow {
+                had_panes: follow.had_panes,
+                asked: true,
+                ..Follow::default()
+            };
             continue;
+        }
+
+        if follow.is_empty() {
+            // The last pane closed: the client has nothing left to show.
+            if follow.had_panes {
+                return Ok(());
+            }
+            if !follow.asked {
+                follow.asked = true;
+                let _ = daemon.outgoing.send(ToDaemon::NewPane {
+                    launch: Launch::Shell,
+                    cwd: working_directory(),
+                    place: Place::NewTab,
+                });
+            }
+        } else if follow.workspace.is_some() {
+            follow.had_panes = true;
+        }
+
+        let focused = follow.focused_pane();
+        if focused != follow.shown {
+            follow.shown = focused;
+            if let Some(pane) = focused {
+                let _ = daemon.outgoing.send(ToDaemon::Snapshot { pane });
+            }
         }
 
         if drew {
@@ -284,10 +310,6 @@ fn clamp_size((cols, rows): (u16, u16)) -> (u16, u16) {
     } else {
         (cols, rows)
     }
-}
-
-fn shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
 }
 
 fn working_directory() -> String {

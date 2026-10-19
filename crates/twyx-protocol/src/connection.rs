@@ -27,7 +27,9 @@ pub struct Parts {
     pub hello: ServerHello,
 }
 
-pub fn connect(socket: &Path, cols: u16, rows: u16) -> Result<Connection> {
+/// Connects as a client. An interactive client is a TUI or desktop client;
+/// a CLI command is not.
+pub fn connect(socket: &Path, cols: u16, rows: u16, interactive: bool) -> Result<Connection> {
     let stream = UnixStream::connect(socket)
         .with_context(|| format!("connect to the daemon on {}", socket.display()))?;
     let reader = BufReader::new(stream.try_clone().context("clone the socket")?);
@@ -41,7 +43,6 @@ pub fn connect(socket: &Path, cols: u16, rows: u16) -> Result<Connection> {
             pid: 0,
             client: 0,
             panes: Vec::new(),
-            lease: None,
         },
     };
     connection.send(&ToDaemon::Hello(ClientHello {
@@ -50,6 +51,7 @@ pub fn connect(socket: &Path, cols: u16, rows: u16) -> Result<Connection> {
         build: env!("CARGO_PKG_VERSION").to_owned(),
         cols,
         rows,
+        interactive,
     }))?;
     match connection.receive()? {
         FromDaemon::Welcome(hello) => {

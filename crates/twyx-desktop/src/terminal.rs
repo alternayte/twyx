@@ -1,4 +1,4 @@
-//! The window: one pane, drawn with GPUI, talking to the daemon.
+//! The window: the focused pane, drawn with GPUI, talking to the daemon.
 
 use std::sync::mpsc::{Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -10,8 +10,9 @@ use gpui::{
     ScrollWheelEvent, Window, canvas, div, px,
 };
 
+use twyx_core::layout::LeafId;
 use twyx_core::paths::Paths;
-use twyx_protocol::client::{FromDaemon, PaneState, ToDaemon};
+use twyx_protocol::client::{FromDaemon, Launch, Place, ToDaemon, WorkspaceInfo};
 use twyx_protocol::connection;
 use twyx_protocol::grid::{Frame, Snapshot};
 use twyx_protocol::input::{InputEvent, KeyCode, Modifiers, MouseAction, MouseEvent};
@@ -27,7 +28,14 @@ const PREFIX: char = 'g';
 /// State the daemon task and the window both touch.
 struct Shared {
     view: View,
+    /// The pane drawn now: the focused leaf's.
     pane: Option<u64>,
+    workspace: Option<WorkspaceInfo>,
+    tab: Option<u64>,
+    leaf: Option<LeafId>,
+    /// Whether the workspace held a pane since the window opened.
+    had_panes: bool,
+    asked: bool,
     clipboard: Option<String>,
 }
 
@@ -64,6 +72,11 @@ impl Terminal {
         let shared = Arc::new(Mutex::new(Shared {
             view: View::new(80, 24),
             pane: None,
+            workspace: None,
+            tab: None,
+            leaf: None,
+            had_panes: false,
+            asked: false,
             clipboard: None,
         }));
 
@@ -100,7 +113,8 @@ impl Terminal {
             self.retry_connect(cx);
             return;
         }
-        let connection = match connection::connect(&paths.socket(), self.grid.0, self.grid.1) {
+        let connection = match connection::connect(&paths.socket(), self.grid.0, self.grid.1, true)
+        {
             Ok(connection) => connection,
             Err(error) => {
                 eprintln!("twyx-desktop: {error:#}");
@@ -113,46 +127,12 @@ impl Terminal {
         let outgoing = parts.outgoing.clone();
         self.outgoing = Some(outgoing.clone());
 
-        // A pane keeps its id across daemons, so a reconnect stays on it. A
-        // client with no live pane looks dead, so ask for one.
-        let running = |pane: u64| {
-            parts
-                .hello
-                .panes
-                .iter()
-                .any(|info| info.pane == pane && info.state == PaneState::Running)
-        };
-        let live = self
-            .shared()
-            .pane
-            .filter(|pane| running(*pane))
-            .or_else(|| {
-                parts
-                    .hello
-                    .panes
-                    .iter()
-                    .find(|info| info.state == PaneState::Running)
-                    .map(|info| info.pane)
-            });
+        // The daemon says what to show; a reconnect asks again.
         {
             let mut shared = self.shared();
-            shared.pane = live;
-            if let Some(info) = parts
-                .hello
-                .panes
-                .iter()
-                .find(|info| Some(info.pane) == live)
-            {
-                shared.view.resize_grid(info.cols, info.rows);
-            }
-        }
-        if live.is_none() {
-            let _ = outgoing.send(ToDaemon::NewPane {
-                argv: vec![shell()],
-                cwd: working_directory(),
-                cols: self.grid.0,
-                rows: self.grid.1,
-            });
+            shared.workspace = None;
+            shared.tab = None;
+            shared.leaf = None;
         }
 
         let shared = Arc::clone(&self.shared);
@@ -183,21 +163,12 @@ impl Terminal {
                     };
                     let mut state = shared.lock().unwrap_or_else(|poison| poison.into_inner());
                     match message {
-                        FromDaemon::Welcome(hello) => {
-                            if state.pane.is_none() {
-                                state.pane = hello
-                                    .panes
-                                    .iter()
-                                    .find(|info| info.state == PaneState::Running)
-                                    .map(|info| info.pane);
-                            }
+                        FromDaemon::Workspace(workspace) => state.workspace = Some(workspace),
+                        FromDaemon::Focus { tab, leaf } => {
+                            state.tab = tab;
+                            state.leaf = leaf;
                         }
-                        // The daemon sends a snapshot before the pane message
-                        // that names it, so a client with no pane adopts both.
-                        FromDaemon::Snapshot { pane, body, .. }
-                            if state.pane.is_none() || Some(pane) == state.pane =>
-                        {
-                            state.pane.get_or_insert(pane);
+                        FromDaemon::Snapshot { pane, body, .. } if Some(pane) == state.pane => {
                             if let Ok(snapshot) = wire::decode_body::<Snapshot>(&body) {
                                 if debug {
                                     eprintln!(
@@ -215,10 +186,7 @@ impl Terminal {
                                 dirty = true;
                             }
                         }
-                        FromDaemon::Frame { pane, body, .. }
-                            if state.pane.is_none() || Some(pane) == state.pane =>
-                        {
-                            state.pane.get_or_insert(pane);
+                        FromDaemon::Frame { pane, body, .. } if Some(pane) == state.pane => {
                             if let Ok(frame) = wire::decode_body::<Frame>(&body) {
                                 if debug {
                                     let text: String = frame
@@ -241,21 +209,48 @@ impl Terminal {
                                 dirty = true;
                             }
                         }
-                        FromDaemon::Pane(info) => {
-                            if state.pane.is_none() && info.state == PaneState::Running {
-                                state.pane = Some(info.pane);
-                            }
-                        }
                         FromDaemon::Clipboard { text, .. } => {
                             state.clipboard = Some(text);
                             dirty = true;
                         }
-                        FromDaemon::Lease { .. }
+                        FromDaemon::Refused { reason } => eprintln!("twyx-desktop: {reason}"),
+                        FromDaemon::Welcome(_)
+                        | FromDaemon::Pane(_)
+                        | FromDaemon::PaneClosed { .. }
                         | FromDaemon::Unsupported { .. }
                         | FromDaemon::Snapshot { .. }
                         | FromDaemon::Frame { .. } => {}
                     }
                 }
+                let mut state = shared.lock().unwrap_or_else(|poison| poison.into_inner());
+                let empty = state
+                    .workspace
+                    .as_ref()
+                    .is_some_and(|workspace| workspace.tabs.is_empty());
+                if empty && state.had_panes {
+                    // The last pane closed: the window has nothing to show.
+                    drop(state);
+                    let _ = this.update(cx, |_, cx| cx.quit());
+                    return;
+                }
+                if empty && !state.asked {
+                    state.asked = true;
+                    let _ = outgoing.send(ToDaemon::NewPane {
+                        launch: Launch::Shell,
+                        cwd: working_directory(),
+                        place: Place::NewTab,
+                    });
+                } else if state.workspace.is_some() && !empty {
+                    state.had_panes = true;
+                }
+                let focused = focused_pane(&state);
+                if focused != state.pane {
+                    state.pane = focused;
+                    if let Some(pane) = focused {
+                        let _ = outgoing.send(ToDaemon::Snapshot { pane });
+                    }
+                }
+                drop(state);
                 if dirty && this.update(cx, |_, cx| cx.notify()).is_err() {
                     break;
                 }
@@ -397,8 +392,14 @@ impl Terminal {
     }
 }
 
-fn shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
+fn focused_pane(state: &Shared) -> Option<u64> {
+    let tab = state
+        .workspace
+        .as_ref()?
+        .tabs
+        .iter()
+        .find(|tab| Some(tab.tab) == state.tab)?;
+    Some(tab.layout.leaf(state.leaf?)?.pane.raw())
 }
 
 fn working_directory() -> String {

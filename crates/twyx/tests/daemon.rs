@@ -11,8 +11,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use twyx_core::layout::Axis;
 use twyx_protocol::client::{
-    ClientHello, FromDaemon, MAJOR, MINOR, PaneInfo, PaneState, ServerHello, ToDaemon,
+    ClientHello, FromDaemon, Launch, MAJOR, MINOR, PaneInfo, PaneState, Place, ServerHello,
+    ToDaemon, WorkspaceInfo,
 };
 use twyx_protocol::grid::{Frame, Snapshot};
 use twyx_protocol::input::{InputEvent, KeyCode, KeyEvent, Modifiers};
@@ -91,6 +93,11 @@ impl Sandbox {
 impl Drop for Sandbox {
     fn drop(&mut self) {
         self.kill();
+        // Holders outlive the daemon by design; the sandbox's own end here.
+        let _ = Command::new("pkill")
+            .arg("-f")
+            .arg(self.root.join("run/twyx/panes"))
+            .status();
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
@@ -101,7 +108,8 @@ struct Client {
     pub hello: ServerHello,
     screens: HashMap<u64, Vec<Vec<String>>>,
     panes: HashMap<u64, PaneInfo>,
-    lease: Option<u64>,
+    workspace: Option<WorkspaceInfo>,
+    tab: Option<u64>,
 }
 
 impl Client {
@@ -129,11 +137,11 @@ impl Client {
                 pid: 0,
                 client: 0,
                 panes: Vec::new(),
-                lease: None,
             },
             screens: HashMap::new(),
             panes: HashMap::new(),
-            lease: None,
+            workspace: None,
+            tab: None,
         };
         client
             .send(&ToDaemon::Hello(ClientHello {
@@ -142,6 +150,7 @@ impl Client {
                 build: "test".to_owned(),
                 cols,
                 rows,
+                interactive: true,
             }))
             .expect("send the hello");
         match client.receive() {
@@ -194,10 +203,15 @@ impl Client {
                     }
                 }
             }
-            FromDaemon::Lease { holder } => self.lease = *holder,
+            FromDaemon::Workspace(workspace) => self.workspace = Some(workspace.clone()),
+            FromDaemon::Focus { tab, .. } => self.tab = *tab,
             FromDaemon::Pane(info) => {
                 self.panes.insert(info.pane, info.clone());
             }
+            FromDaemon::PaneClosed { pane } => {
+                self.panes.remove(pane);
+            }
+            FromDaemon::Refused { reason } => panic!("the daemon refused: {reason}"),
             FromDaemon::Clipboard { .. }
             | FromDaemon::Unsupported { .. }
             | FromDaemon::Welcome(_) => {}
@@ -251,9 +265,19 @@ impl Client {
         }
     }
 
+    /// The lease of the tab this client shows.
+    fn lease(&self) -> Option<u64> {
+        self.workspace
+            .as_ref()?
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.tab) == self.tab)?
+            .lease
+    }
+
     fn wait_for_lease(&mut self, holder: Option<u64>) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        while self.lease != holder {
+        while self.lease() != holder {
             assert!(Instant::now() < deadline, "the lease never moved");
             self.pump();
         }
@@ -271,13 +295,16 @@ impl Client {
     }
 }
 
-fn new_pane(client: &mut Client, cwd: &str, script: &str, cols: u16, rows: u16) {
+fn new_pane(client: &mut Client, cwd: &str, script: &str) {
     client
         .send(&ToDaemon::NewPane {
-            argv: vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()],
+            launch: Launch::Command(vec![
+                "/bin/sh".to_owned(),
+                "-c".to_owned(),
+                script.to_owned(),
+            ]),
             cwd: cwd.to_owned(),
-            cols,
-            rows,
+            place: Place::Split(Axis::Row),
         })
         .expect("ask for a pane");
 }
@@ -289,13 +316,7 @@ fn a_pane_outlives_the_daemon_and_a_new_daemon_adopts_it() {
 
     let mut client = sandbox.connect(40, 6);
     assert!(client.hello.panes.is_empty());
-    new_pane(
-        &mut client,
-        &sandbox.cwd(),
-        "printf 'hello'; exec sleep 8",
-        40,
-        6,
-    );
+    new_pane(&mut client, &sandbox.cwd(), "printf 'hello'; exec sleep 8");
 
     let pane = client.wait_for_pane();
     client.wait_for_text(pane.pane, "hello");
@@ -336,7 +357,7 @@ fn input_reaches_an_adopted_pane() {
     let mut sandbox = Sandbox::new("input");
     sandbox.start();
     let mut client = sandbox.connect(40, 6);
-    new_pane(&mut client, &sandbox.cwd(), "exec cat", 40, 6);
+    new_pane(&mut client, &sandbox.cwd(), "exec cat");
     client.wait_for_pane();
 
     sandbox.kill();
@@ -362,13 +383,13 @@ fn invariant_3_only_the_leaseholder_sets_the_pane_size() {
     sandbox.start();
 
     let mut first = sandbox.connect(40, 6);
-    new_pane(&mut first, &sandbox.cwd(), "exec sleep 8", 40, 6);
+    new_pane(&mut first, &sandbox.cwd(), "exec sleep 8");
     let pane = first.wait_for_pane().pane;
     let first_id = first.hello.client;
 
     let mut second = sandbox.connect(60, 10);
     let second_id = second.hello.client;
-    assert_eq!(second.hello.lease, Some(first_id));
+    second.wait_for_lease(Some(first_id));
 
     // Input from another client takes the lease before the input reaches the
     // pane, and with it the size.
@@ -379,7 +400,8 @@ fn invariant_3_only_the_leaseholder_sets_the_pane_size() {
         ))))
         .expect("send input");
     first.wait_for_lease(Some(second_id));
-    second.wait_for_cols(pane, 60);
+    // One pane fills the tab inside its one-cell frame.
+    second.wait_for_cols(pane, 58);
 
     // A resize from the client without the lease changes nothing.
     first
@@ -391,16 +413,216 @@ fn invariant_3_only_the_leaseholder_sets_the_pane_size() {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         second.pump();
-        if second.screen_size(pane).0 == 60 {
+        if second.screen_size(pane).0 == 58 {
             break;
         }
         assert!(Instant::now() < deadline, "the pane never arrived");
     }
-    assert_eq!(second.screen_size(pane), (60, 10));
+    assert_eq!(second.screen_size(pane), (58, 8));
 
     // A disconnect releases the lease to the remaining client, whose size now
     // applies.
     drop(second);
     first.wait_for_lease(Some(first_id));
-    first.wait_for_cols(pane, 70);
+    first.wait_for_cols(pane, 68);
+}
+
+impl Client {
+    fn wait_until(&mut self, what: &str, mut done: impl FnMut(&Client) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done(self) {
+            assert!(Instant::now() < deadline, "timed out waiting: {what}");
+            self.pump();
+        }
+    }
+
+    fn type_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            let code = if ch == '\r' {
+                KeyCode::Enter
+            } else {
+                KeyCode::Char(ch)
+            };
+            self.send(&ToDaemon::Input(InputEvent::Key(KeyEvent::press(
+                code,
+                Modifiers::empty(),
+            ))))
+            .expect("send input");
+        }
+    }
+
+    fn tab_count(&self) -> usize {
+        self.workspace
+            .as_ref()
+            .map_or(0, |workspace| workspace.tabs.len())
+    }
+
+    fn size(&self, pane: u64) -> Option<(u16, u16)> {
+        self.panes.get(&pane).map(|info| (info.cols, info.rows))
+    }
+}
+
+fn new_pane_at(client: &mut Client, cwd: &str, launch: Launch, place: Place) -> u64 {
+    let known: Vec<u64> = client.panes.keys().copied().collect();
+    client
+        .send(&ToDaemon::NewPane {
+            launch,
+            cwd: cwd.to_owned(),
+            place,
+        })
+        .expect("ask for a pane");
+    let mut created = None;
+    client.wait_until("a new pane", |client| {
+        created = client
+            .panes
+            .keys()
+            .copied()
+            .find(|pane| !known.contains(pane));
+        created.is_some()
+    });
+    created.expect("a pane")
+}
+
+fn sh(script: &str) -> Launch {
+    Launch::Command(vec![
+        "/bin/sh".to_owned(),
+        "-c".to_owned(),
+        script.to_owned(),
+    ])
+}
+
+#[test]
+fn a_split_sizes_every_pane_to_its_place_in_the_leaseholders_area() {
+    let mut sandbox = Sandbox::new("split");
+    sandbox.start();
+    let mut client = sandbox.connect(81, 10);
+    let cwd = sandbox.cwd();
+    let left = new_pane_at(&mut client, &cwd, sh("exec cat"), Place::Split(Axis::Row));
+    client.wait_until("one pane in its frame", |c| c.size(left) == Some((79, 8)));
+    let right = new_pane_at(&mut client, &cwd, sh("exec cat"), Place::Split(Axis::Row));
+    // 81 columns hold three rules and 78 inner columns, half each.
+    client.wait_until("two panes side by side", |c| {
+        c.size(left) == Some((39, 8)) && c.size(right) == Some((39, 8))
+    });
+    let below = new_pane_at(
+        &mut client,
+        &cwd,
+        sh("exec cat"),
+        Place::Split(Axis::Column),
+    );
+    // The right pane splits in two: 10 rows hold three rules and 7 inner rows.
+    client.wait_until("the right pane split", |c| {
+        c.size(right) == Some((39, 4)) && c.size(below) == Some((39, 3))
+    });
+}
+
+#[test]
+fn each_client_has_its_own_focus_and_input_follows_it() {
+    let mut sandbox = Sandbox::new("focus");
+    sandbox.start();
+    let mut first = sandbox.connect(80, 10);
+    let cwd = sandbox.cwd();
+    let left = new_pane_at(&mut first, &cwd, sh("exec cat"), Place::Split(Axis::Row));
+    let right = new_pane_at(&mut first, &cwd, sh("exec cat"), Place::Split(Axis::Row));
+    // The first client focused the pane it made last.
+    let mut second = sandbox.connect(80, 10);
+    second
+        .send(&ToDaemon::Focus {
+            side: twyx_core::layout::Side::Left,
+        })
+        .expect("focus left");
+    second.type_text("from-second");
+    first.type_text("from-first");
+    first.wait_for_text(left, "from-second");
+    first.wait_for_text(right, "from-first");
+    assert!(!first.text(left).contains("from-first"));
+}
+
+#[test]
+fn a_shell_pane_closes_with_its_shell_and_a_command_pane_stays_to_run_again() {
+    let mut sandbox = Sandbox::new("exit");
+    sandbox.start();
+    let mut client = sandbox.connect(80, 10);
+    let cwd = sandbox.cwd();
+    let command = new_pane_at(
+        &mut client,
+        &cwd,
+        sh("echo ran; read line; exit 3"),
+        Place::Split(Axis::Row),
+    );
+    let shell = new_pane_at(&mut client, &cwd, Launch::Shell, Place::Split(Axis::Row));
+    client.wait_until("the shell prompt", |c| c.panes.contains_key(&shell));
+    client.type_text("exit\r");
+    client.wait_until("the shell pane closed", |c| !c.panes.contains_key(&shell));
+    assert_eq!(client.tab_count(), 1);
+
+    client
+        .send(&ToDaemon::FocusLeaf {
+            leaf: client
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.tabs[0].layout.leaves().first().copied())
+                .expect("a leaf")
+                .id,
+        })
+        .expect("focus the command pane");
+    client.wait_for_text(command, "ran");
+    client.type_text("\r");
+    client.wait_until("the command ended", |c| {
+        c.panes.get(&command).map(|info| info.state.clone()) == Some(PaneState::Exited { code: 3 })
+    });
+
+    client
+        .send(&ToDaemon::RunAgain { pane: command })
+        .expect("run again");
+    client.wait_until("the old pane replaced", |c| {
+        !c.panes.contains_key(&command) && !c.panes.is_empty()
+    });
+    let again = *client.panes.keys().next().expect("the new pane");
+    client.wait_for_text(again, "ran");
+    client.wait_until("the same leaf shows the new pane", |c| {
+        let leaves = c.workspace.as_ref().expect("a workspace").tabs[0]
+            .layout
+            .leaves();
+        leaves.len() == 1 && leaves[0].pane.raw() == again
+    });
+}
+
+#[test]
+fn tabs_open_rename_and_close_with_their_panes() {
+    let mut sandbox = Sandbox::new("tabs");
+    sandbox.start();
+    let mut client = sandbox.connect(80, 10);
+    let cwd = sandbox.cwd();
+    let first = new_pane_at(&mut client, &cwd, sh("exec cat"), Place::Split(Axis::Row));
+    let second = new_pane_at(&mut client, &cwd, sh("exec cat"), Place::NewTab);
+    client.wait_until("two tabs, the new one shown", |c| {
+        c.tab_count() == 2 && c.tab == Some(c.workspace.as_ref().unwrap().tabs[1].tab)
+    });
+    let tabs: Vec<u64> = client
+        .workspace
+        .as_ref()
+        .unwrap()
+        .tabs
+        .iter()
+        .map(|t| t.tab)
+        .collect();
+
+    client
+        .send(&ToDaemon::RenameTab {
+            tab: tabs[1],
+            name: "logs".to_owned(),
+        })
+        .expect("rename");
+    client.wait_until("the name", |c| {
+        c.workspace.as_ref().unwrap().tabs[1].name == "logs"
+    });
+
+    client
+        .send(&ToDaemon::CloseTab { tab: tabs[1] })
+        .expect("close the tab");
+    client.wait_until("one tab and its pane gone", |c| {
+        c.tab_count() == 1 && !c.panes.contains_key(&second) && c.tab == Some(tabs[0])
+    });
+    assert!(client.panes.contains_key(&first));
 }
