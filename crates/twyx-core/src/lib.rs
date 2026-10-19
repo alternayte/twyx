@@ -5,4 +5,5 @@
 
 pub mod pane;
 pub mod paths;
+pub mod theme;
 pub mod tuning;

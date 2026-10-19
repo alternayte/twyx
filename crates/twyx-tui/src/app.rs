@@ -15,6 +15,7 @@ use crossterm::event::{
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, terminal};
 
+use twyx_core::theme::Rgb;
 use twyx_protocol::client::{FromDaemon, PaneState, ToDaemon};
 use twyx_protocol::grid::{Frame, Snapshot};
 use twyx_protocol::wire;
@@ -41,11 +42,7 @@ pub fn attach(paths: &twyx_core::paths::Paths) -> Result<()> {
 
 /// Prints what the outer terminal says it can do.
 pub fn doctor() -> Result<()> {
-    terminal::enable_raw_mode().context("enter raw mode")?;
-    let answers = probe::interrogate(&mut tty()?);
-    terminal::disable_raw_mode().context("leave raw mode")?;
-
-    let answers = answers?;
+    let answers = probe()?;
     println!(
         "terminal:  {}",
         answers.name.as_deref().unwrap_or("unknown")
@@ -66,6 +63,12 @@ pub fn doctor() -> Result<()> {
         yes_no(answers.synchronized_output)
     );
     println!("truecolor: {}", yes_no(answers.truecolor));
+    let colour = |rgb: Option<Rgb>| match rgb {
+        Some(Rgb { r, g, b }) => format!("#{r:02x}{g:02x}{b:02x}"),
+        None => "unknown".to_owned(),
+    };
+    println!("paper: {}", colour(answers.paper));
+    println!("ink: {}", colour(answers.ink));
     Ok(())
 }
 
@@ -84,6 +87,15 @@ fn reconnect(paths: &twyx_core::paths::Paths, size: (u16, u16)) -> Result<client
             Err(_) => std::thread::sleep(Duration::from_millis(100)),
         }
     }
+}
+
+/// Asks the outer terminal what it can do, in raw mode for the moment of the
+/// question.
+pub fn probe() -> Result<probe::Answers> {
+    terminal::enable_raw_mode().context("enter raw mode")?;
+    let answers = probe::interrogate(&mut tty()?);
+    terminal::disable_raw_mode().context("leave raw mode")?;
+    answers
 }
 
 fn yes_no(value: bool) -> &'static str {

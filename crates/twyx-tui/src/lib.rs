@@ -4,6 +4,8 @@
 //! directly, through the twyx emitter.
 
 pub mod app;
+pub mod chrome;
 pub mod emitter;
 pub mod input;
 pub mod probe;
+pub mod specimen;

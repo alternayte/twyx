@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use twyx_core::theme::Rgb;
+
 use crate::emitter::Capabilities;
 
 /// What the terminal answered.
@@ -20,6 +22,10 @@ pub struct Answers {
     pub kitty_keyboard: Option<u8>,
     pub synchronized_output: bool,
     pub truecolor: bool,
+    /// The default background, from OSC 11.
+    pub paper: Option<Rgb>,
+    /// The default foreground, from OSC 10.
+    pub ink: Option<Rgb>,
 }
 
 impl Answers {
@@ -32,8 +38,9 @@ impl Answers {
     }
 }
 
-/// The queries, in one write.
-pub const QUERIES: &[u8] = b"\x1b[c\x1b[>0q\x1b[?u\x1b[?2026$p";
+/// The queries, in one write. Terminals answer in order, so the colour
+/// answers arrive before the last two answers that end the read.
+pub const QUERIES: &[u8] = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c\x1b[>0q\x1b[?u\x1b[?2026$p";
 
 /// How long to wait for the answers.
 const WINDOW: Duration = Duration::from_millis(200);
@@ -65,7 +72,30 @@ pub fn parse(bytes: &[u8]) -> Answers {
     answers.kitty_keyboard = kitty_flags(&text);
     answers.synchronized_output = synchronized_output(&text);
     answers.truecolor = truecolor_from_env();
+    answers.ink = colour_answer(&text, "\x1b]10;");
+    answers.paper = colour_answer(&text, "\x1b]11;");
     answers
+}
+
+/// `OSC 10 ; rgb:RRRR/GGGG/BBBB ST` answers a colour query, with one to four
+/// hex digits per channel.
+fn colour_answer(text: &str, prefix: &str) -> Option<Rgb> {
+    let start = text.find(prefix)? + prefix.len();
+    let spec = text[start..].strip_prefix("rgb:")?;
+    let end = spec.find(['\x07', '\x1b'])?;
+    let mut channels = spec[..end].split('/').map(|digits| {
+        let value = u32::from_str_radix(digits, 16).ok()?;
+        let max = 16_u32.checked_pow(u32::try_from(digits.len()).ok()?)? - 1;
+        (1..=4)
+            .contains(&digits.len())
+            .then(|| u8::try_from(value * 255 / max).ok())?
+    });
+    let rgb = Rgb {
+        r: channels.next()??,
+        g: channels.next()??,
+        b: channels.next()??,
+    };
+    channels.next().is_none().then_some(rgb)
 }
 
 /// `CSI ? flags u` reports the kitty keyboard flags.
@@ -141,6 +171,28 @@ fn collect(tty: &mut (impl Read + Write)) -> Result<Answers> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colour_answers_give_the_paper_and_ink_at_any_digit_count() {
+        let answers = parse(b"\x1b]10;rgb:d9d9/d6d6/cfcf\x1b\\\x1b]11;rgb:1a/1b/1e\x07\x1b[?62;c");
+        assert_eq!(
+            answers.ink,
+            Some(Rgb {
+                r: 0xd9,
+                g: 0xd6,
+                b: 0xcf
+            })
+        );
+        assert_eq!(
+            answers.paper,
+            Some(Rgb {
+                r: 0x1a,
+                g: 0x1b,
+                b: 0x1e
+            })
+        );
+        assert_eq!(parse(b"\x1b]11;rgb:zz/00/00\x07").paper, None);
+    }
 
     #[test]
     fn a_ghostty_like_answer_names_the_terminal_and_its_protocols() {

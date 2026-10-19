@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 
 use twyx_core::pane::PaneId;
 use twyx_core::paths::Paths;
+use twyx_core::theme::Variant;
 use twyx_holder::engine::Geometry;
 use twyx_holder::pty::Spawn;
 use twyx_protocol::client::{PaneState, ToDaemon};
@@ -33,6 +34,13 @@ enum Command {
     },
     /// Print what the outer terminal supports.
     Doctor,
+    /// Show the theme specimen: the chrome over sample panes.
+    Specimen {
+        /// Paint a reference sheet instead of drawing on the terminal's own
+        /// paper.
+        #[arg(long, value_enum)]
+        paper: Option<Paper>,
+    },
     /// Run one pane holder. The daemon starts these; running one by hand has
     /// no daemon to adopt it.
     #[command(hide = true)]
@@ -59,6 +67,12 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         argv: Vec<String>,
     },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum Paper {
+    Light,
+    Dark,
 }
 
 #[derive(Debug, Subcommand)]
@@ -108,6 +122,10 @@ pub fn run() -> Result<()> {
         Command::Daemon { command } => daemon(command),
         Command::Pane { command } => pane(command),
         Command::Doctor => twyx_tui::app::doctor(),
+        Command::Specimen { paper } => twyx_tui::specimen::run(paper.map(|paper| match paper {
+            Paper::Light => Variant::Light,
+            Paper::Dark => Variant::Dark,
+        })),
         Command::Holder {
             pane,
             socket,
