@@ -968,7 +968,8 @@ fn invariant_21_a_pane_whose_holder_died_shows_its_last_screen_from_history() {
     sandbox.kill_holder(pane);
     sandbox.start();
     let mut client = sandbox.connect(60, 10);
-    client.wait_until("the restored screen", |c| c.text(pane) == before);
+    client.wait_until("the restored screen", |c| !c.text(pane).is_empty());
+    assert_eq!(client.text(pane), before);
     assert_eq!(client.panes[&pane].state, PaneState::Lost);
 }
 
