@@ -27,6 +27,10 @@ jobs:
         with:
           tool: just,cargo-deny
       - uses: Swatinem/rust-cache@v2
+      # The terminal engine, libghostty-vt, builds with Zig 0.16.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
       # The Neovim conformance cases need Neovim 0.11 or later on PATH.
       - uses: rhysd/action-setup-vim@v1
         with:
@@ -49,6 +53,10 @@ jobs:
         with:
           tool: just
       - uses: Swatinem/rust-cache@v2
+      # The terminal engine, libghostty-vt, builds with Zig 0.16.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
       # The Neovim conformance cases need Neovim 0.11 or later on PATH.
       - uses: rhysd/action-setup-vim@v1
         with:
@@ -56,33 +64,3 @@ jobs:
           version: stable
       - run: just test
 
-  ghostty:
-    name: ghostty (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: just
-      - uses: Swatinem/rust-cache@v2
-      - uses: rhysd/action-setup-vim@v1
-        with:
-          neovim: true
-          version: stable
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-      # The Ghostty commit the libghostty-rs revision in Cargo.lock pins.
-      - name: Fetch Ghostty
-        run: |
-          git init -q "$RUNNER_TEMP/ghostty"
-          cd "$RUNNER_TEMP/ghostty"
-          git fetch -q --depth 1 https://github.com/ghostty-org/ghostty.git 3425025e585a3403340d4dc6d65132f42e05e605
-          git checkout -q FETCH_HEAD
-      - run: just test-ghostty
-        env:
-          GHOSTTY_SOURCE_DIR: ${{ runner.temp }}/ghostty

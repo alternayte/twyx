@@ -1,8 +1,7 @@
 //! Conformance: escape sequences against expected screens.
 //!
 //! The categories follow esctest's, but each case is written here from the
-//! xterm control sequence documentation. Every case runs against whichever
-//! engine this build was compiled with, on a 20x5 screen.
+//! xterm control sequence documentation, on a 20x5 screen.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -53,13 +52,7 @@ fn cursor(input: &[u8]) -> (u16, u16) {
     run(input).cursor
 }
 
-// wezterm-term keeps the cursor off the screen after an out-of-range CUP, so
-// the next character is never drawn. Recorded for GATE 1.
 #[test]
-#[cfg_attr(
-    feature = "engine-wezterm",
-    ignore = "wezterm-term does not clamp CUP; see the gate notes"
-)]
 fn cup_clamps_to_the_screen() {
     let screen = run(b"\x1b[99;99HX");
     assert_eq!(screen.rows[4], format!("{}X", " ".repeat(19)));
@@ -87,14 +80,7 @@ fn ed_0_erases_from_the_cursor_down() {
     );
 }
 
-// alacritty_terminal 0.26.0 clears the lines above the cursor only when the
-// cursor is below line 1, so from line 1 the top line survives. Recorded in
-// the upstream table as a draft.
 #[test]
-#[cfg_attr(
-    not(any(feature = "engine-ghostty", feature = "engine-wezterm")),
-    ignore = "alacritty_terminal keeps line 0 when the cursor is on line 1; see the gate notes"
-)]
 fn ed_1_erases_from_the_top_to_the_cursor() {
     assert_eq!(
         rows(b"aaa\r\nbbb\r\nccc\x1b[2;2H\x1b[1J"),

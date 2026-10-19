@@ -46,7 +46,7 @@ enum Event {
 
 pub fn run(
     config: Config,
-    make_engine: impl FnOnce(Box<dyn std::io::Write + Send>) -> Result<Box<dyn Engine>>,
+    make_engine: impl FnOnce(Box<dyn std::io::Write + Send>) -> Result<Engine>,
 ) -> Result<()> {
     let listener = listen(&config.socket)?;
     let (events, inbound) = mpsc::channel::<Event>();
@@ -76,7 +76,7 @@ pub fn run(
 
 struct Core<'a> {
     config: &'a Config,
-    engine: Box<dyn Engine>,
+    engine: Engine,
     master: &'a Master,
     input: &'a InputQueue,
     killer: Box<dyn ChildKiller + Send + Sync>,
@@ -191,7 +191,6 @@ impl Core<'_> {
 
         for signal in self.engine.advance(bytes) {
             match signal {
-                EngineSignal::WriteToPane(bytes) => self.input.send(bytes),
                 EngineSignal::Title(title) => {
                     send(out, FromHolder::Signal(Signal::Title(trim(&title))));
                 }

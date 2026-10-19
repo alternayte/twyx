@@ -11,8 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use twyx_core::pane::PaneId;
-use twyx_holder::engine::Geometry;
-use twyx_holder::engine::alacritty::Alacritty;
+use twyx_holder::engine::{self, Geometry};
 use twyx_holder::pty::Spawn;
 use twyx_holder::runtime::{self, Config};
 use twyx_protocol::grid::{Row, Snapshot};
@@ -54,10 +53,10 @@ impl Fixture {
             scrollback_lines: 100,
         };
         let handle = thread::spawn(move || {
-            // The engine is built inside the holder's thread: the boundary is
-            // not `Send`, because one candidate's handles are single-threaded.
-            runtime::run(config, move |_answerback| {
-                Ok(Box::new(Alacritty::new(geometry)))
+            // The engine is built inside the holder's thread, because
+            // libghostty-vt handles are single-threaded.
+            runtime::run(config, move |answerback| {
+                engine::create(geometry, answerback)
             })
             .expect("the holder runs");
         });

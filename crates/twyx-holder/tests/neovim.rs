@@ -1,9 +1,8 @@
 //! Conformance: the Neovim items, through a real holder on a real PTY.
 //!
-//! Each case starts Neovim in a holder built with this build's engine, sends
-//! input events as a client would, and checks two oracles: Neovim's own state
-//! through its RPC socket, and the engine's screen model in the holder's
-//! frames. Neovim must be on PATH.
+//! Each case starts Neovim in a holder, sends input events as a client would,
+//! and checks two oracles: Neovim's own state through its RPC socket, and the
+//! engine's screen model in the holder's frames. Neovim must be on PATH.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -172,15 +171,7 @@ fn truecolor_reaches_the_screen_model() {
     });
 }
 
-// A known gap on two engines: with TERM=xterm-256color, which has no Smulx,
-// Neovim draws undercurl only when the terminal itself reports support.
-// libghostty-vt does; alacritty_terminal and wezterm-term get a plain
-// underline with no colour. Recorded for GATE 1.
 #[test]
-#[cfg_attr(
-    not(feature = "engine-ghostty"),
-    ignore = "the engine does not report undercurl support; see the gate notes"
-)]
 fn undercurl_and_underline_colour_reach_the_screen_model() {
     let nvim = Nvim::start(
         "vim.o.termguicolors = true\n\
@@ -198,10 +189,6 @@ fn undercurl_and_underline_colour_reach_the_screen_model() {
 }
 
 #[test]
-#[cfg_attr(
-    feature = "engine-wezterm",
-    ignore = "wezterm-term does not report the kitty keyboard flags; see the gate notes"
-)]
 fn ctrl_i_tab_shift_enter_and_ctrl_shift_x_arrive_as_different_keys() {
     let mut nvim = Nvim::start(
         "vim.g.keys = {}\n\
@@ -264,10 +251,6 @@ fn focus_gained_and_lost_fire() {
 }
 
 #[test]
-#[cfg_attr(
-    feature = "engine-wezterm",
-    ignore = "wezterm-term does not report OSC 52 writes without a clipboard handler; see the gate notes"
-)]
 fn an_osc_52_yank_reaches_the_holder_as_a_clipboard_write() {
     let mut nvim = Nvim::start(
         "vim.g.clipboard = 'osc52'\n\
@@ -288,10 +271,6 @@ fn an_osc_52_yank_reaches_the_holder_as_a_clipboard_write() {
 }
 
 #[test]
-#[cfg_attr(
-    feature = "engine-wezterm",
-    ignore = "wezterm-term does not report the mouse mode Neovim sets; see the gate notes"
-)]
 fn a_mouse_drag_on_a_split_border_resizes_the_split() {
     let mut nvim = Nvim::start("vim.o.mouse = 'a'\nvim.cmd('vsplit')\n");
     nvim.wait_for("Neovim turns on mouse tracking", || {
@@ -300,14 +279,16 @@ fn a_mouse_drag_on_a_split_border_resizes_the_split() {
     });
     let border = nvim.eval("winwidth(1)").parse::<u16>().expect("a width");
 
-    // Paced like a hand: with no gap after the press, Neovim does not start
-    // the separator drag.
+    // Paced like a hand: Neovim missed the separator drag when the drags came
+    // right behind the press, so each event waits until Neovim has taken the
+    // one before it.
+    let at = |col: u16| (u32::from(col) + 1).to_string();
     nvim.mouse(MouseAction::Press, border, 5);
+    nvim.wait_for_eval("getmousepos().screencol", &at(border));
     for col in (border - 10..border).rev() {
-        thread::sleep(Duration::from_millis(20));
         nvim.mouse(MouseAction::Motion, col, 5);
+        nvim.wait_for_eval("getmousepos().screencol", &at(col));
     }
-    thread::sleep(Duration::from_millis(20));
     nvim.mouse(MouseAction::Release, border - 10, 5);
 
     nvim.wait_for_eval("winwidth(1)", &(border - 10).to_string());

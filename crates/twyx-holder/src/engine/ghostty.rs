@@ -1,4 +1,4 @@
-//! `libghostty-vt` behind the engine boundary.
+//! The pane's terminal, on `libghostty-vt`.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -14,7 +14,7 @@ use twyx_protocol::grid::{
     Attrs, Cell, Colour, Cursor, CursorShape, Modes, MouseEncoding, MouseMode, Row, Underline,
 };
 
-use super::{Engine, EngineSignal, Geometry, Links, View};
+use super::{EngineSignal, Geometry, Links, View};
 
 pub struct Ghostty {
     term: Terminal<'static, 'static>,
@@ -99,18 +99,19 @@ impl Ghostty {
     }
 }
 
-impl Engine for Ghostty {
-    fn advance(&mut self, bytes: &[u8]) -> Vec<EngineSignal> {
+impl Ghostty {
+    /// Parses output bytes and returns the signals they carried.
+    pub fn advance(&mut self, bytes: &[u8]) -> Vec<EngineSignal> {
         self.term.vt_write(bytes);
         std::mem::take(&mut *self.signals.borrow_mut())
     }
 
-    fn resize(&mut self, cols: u16, rows: u16) {
+    pub fn resize(&mut self, cols: u16, rows: u16) {
         self.size = (cols.max(2), rows.max(1));
         let _ = self.term.resize(self.size.0, self.size.1, 0, 0);
     }
 
-    fn view(&mut self) -> View {
+    pub fn view(&mut self) -> View {
         let Ok(snapshot) = self.render.update(&self.term) else {
             return self.blank_view();
         };
@@ -201,7 +202,7 @@ impl Engine for Ghostty {
         }
     }
 
-    fn modes(&self) -> Modes {
+    pub fn modes(&self) -> Modes {
         let on = |mode| self.term.mode(mode).unwrap_or(false);
         let mouse = if on(Mode::ANY_MOUSE) {
             MouseMode::Motion
@@ -243,7 +244,8 @@ impl Engine for Ghostty {
         }
     }
 
-    fn line(&mut self, line: i32) -> Row {
+    /// One row of the grid, by display line, for copy mode.
+    pub fn line(&mut self, line: i32) -> Row {
         // Only the visible screen; scrollback read-out is not wired yet.
         let cols = usize::from(self.size.0);
         let view = self.view();

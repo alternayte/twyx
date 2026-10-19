@@ -11,17 +11,15 @@ check:
     cargo test --workspace
     cargo deny check licenses
 
-# Full suite: every crate, every invariant test, the automated conformance items,
-# and the wezterm engine on top of the default one.
+# Full suite: every crate, every invariant test and the automated conformance
+# items.
 test:
     cargo test --workspace
-    cargo test --package twyx-holder --features engine-wezterm
 
-# The automated conformance cases: bytes in, screen out, against the default
-# engine and then wezterm. Ghostty runs under `test-ghostty`.
+# The automated conformance cases: bytes in and expected screens, escape
+# sequences, and the Neovim items through a real holder.
 conformance:
     cargo test --package twyx-holder --test conformance --test escapes --test neovim
-    cargo test --package twyx-holder --features engine-wezterm --test conformance --test escapes --test neovim
 
 # The agent CLI items, with the Claude Code, Pi and OpenCode installed and signed
 # in on this machine. Each case runs a real agent against a real model, so this
@@ -36,9 +34,3 @@ bench:
     cargo build --release --package twyx
     ./target/release/twyx-bench --samples 20 --twyx ./target/release/twyx \
         $(command -v zellij >/dev/null && echo zellij) $(command -v herdr >/dev/null && echo herdr)
-
-# The ghostty engine needs Zig 0.16.0 on PATH and GHOSTTY_SOURCE_DIR pointing at
-# a Ghostty checkout of the commit libghostty-rs pins (3425025e), so it runs here
-# rather than in `test`.
-test-ghostty:
-    cargo test --package twyx-holder --features engine-ghostty

@@ -9,18 +9,11 @@ repository.workspace = true
 [lints]
 workspace = true
 
-[features]
-default = ["engine-alacritty"]
-engine-alacritty = ["dep:alacritty_terminal"]
-engine-ghostty = ["dep:libghostty-vt"]
-engine-wezterm = ["dep:wezterm-term"]
-
 [dependencies]
-alacritty_terminal = { version = "0.26", optional = true }
 anyhow = "1"
-libghostty-vt = { git = "https://github.com/uzaaft/libghostty-rs.git", rev = "d2036baeb6", optional = true }
+# Its build script clones the Ghostty commit it pins and builds it with Zig 0.16.
+libghostty-vt = { git = "https://github.com/uzaaft/libghostty-rs.git", rev = "d2036baeb6" }
 portable-pty = "0.9"
 rustix = { version = "1", features = ["process"] }
-wezterm-term = { git = "https://github.com/wezterm/wezterm.git", rev = "e2a98e1b8af156988ad0ac778658ac27b60a55fb", optional = true }
 twyx-core = { workspace = true }
 twyx-protocol = { workspace = true }

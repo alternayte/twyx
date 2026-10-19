@@ -1,9 +1,7 @@
 //! Conformance: bytes in, screen out.
 //!
-//! Every case runs against whichever engine this build was compiled with, so
-//! `cargo test -p twyx-holder` checks the default engine and
-//! `--features engine-wezterm` checks that one. The expectations are the
-//! engine's screen model, which is the oracle twyx relies on.
+//! The expectations are the engine's screen model, which is the oracle twyx
+//! relies on.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -65,14 +63,7 @@ fn erase_in_display_clears_everything() {
     assert_eq!(rows[0], "");
 }
 
-// A known gap, not a passing case: with wezterm-term the spacer after a wide
-// cell is not distinguishable from a space, so the view shows "ab字 cd" where
-// the screen holds "ab字cd". Recorded for GATE 1.
 #[test]
-#[cfg_attr(
-    feature = "engine-wezterm",
-    ignore = "wezterm spacer cell reads as a space; see the gate notes"
-)]
 fn a_wide_character_takes_two_cells() {
     let rows = screen("ab字cd".as_bytes());
     assert_eq!(rows[0], "ab字cd");
