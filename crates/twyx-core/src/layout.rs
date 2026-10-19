@@ -316,18 +316,49 @@ impl Layout {
     /// size. The nearest split on that axis with a sibling on that side
     /// takes the change.
     pub fn resize(&mut self, id: LeafId, side: Side, step: f32) {
+        if let Some((path, index, other)) = self.rule_owner(id, side)
+            && let Some(root) = &mut self.root
+        {
+            shift(root, &path, index, other, step);
+        }
+    }
+
+    /// Moves the rule on `side` of a tiled leaf by whole cells, as a drag
+    /// with the mouse does.
+    pub fn drag_rule(&mut self, id: LeafId, side: Side, cells: i32, area: Cells) {
+        let Some((path, index, other)) = self.rule_owner(id, side) else {
+            return;
+        };
         let Some(root) = &mut self.root else {
             return;
         };
-        let Some(mut path) = path_to(root, id) else {
+        let Some((split, Node::Split { children, .. })) =
+            node_area(root, &path, area).zip(node_at(root, &path))
+        else {
             return;
         };
+        let length = match side.axis() {
+            Axis::Row => split.width,
+            Axis::Column => split.height,
+        };
+        let inner = length.saturating_sub(children.len() as u16 + 1).max(1);
+        let sign = if side.forward() { 1.0 } else { -1.0 };
+        shift(
+            root,
+            &path,
+            index,
+            other,
+            sign * cells as f32 / f32::from(inner),
+        );
+    }
+
+    /// The split that owns the rule on `side` of a leaf: its path, the
+    /// leaf's child index in it, and the neighbour's.
+    fn rule_owner(&self, id: LeafId, side: Side) -> Option<(Vec<usize>, usize, usize)> {
+        let root = self.root.as_ref()?;
+        let mut path = path_to(root, id)?;
         while let Some(index) = path.pop() {
-            if let Some(Node::Split {
-                axis,
-                children,
-                ratios,
-            }) = node_at_mut(root, &path)
+            if let Some(Node::Split { axis, children, .. }) = node_at(root, &path)
                 && *axis == side.axis()
             {
                 let other = if side.forward() {
@@ -336,16 +367,11 @@ impl Layout {
                     index.checked_sub(1)
                 };
                 if let Some(other) = other {
-                    let floor = tuning::MIN_RATIO;
-                    let moved = step
-                        .min(ratios[other] - floor)
-                        .max(-(ratios[index] - floor));
-                    ratios[index] += moved;
-                    ratios[other] -= moved;
-                    return;
+                    return Some((path, index, other));
                 }
             }
         }
+        None
     }
 
     /// Swaps a tiled leaf with its neighbour on `side`.
@@ -447,6 +473,56 @@ impl Layout {
             }
         }
     }
+}
+
+/// Moves `step` of a split's share from one child to its neighbour, keeping
+/// both above the floor.
+fn shift(root: &mut Node, path: &[usize], index: usize, other: usize, step: f32) {
+    if let Some(Node::Split { ratios, .. }) = node_at_mut(root, path) {
+        let floor = tuning::MIN_RATIO;
+        let moved = step
+            .min(ratios[other] - floor)
+            .max(-(ratios[index] - floor));
+        ratios[index] += moved;
+        ratios[other] -= moved;
+    }
+}
+
+/// The cells the node at `path` gets when the root is placed in `area`.
+fn node_area(node: &Node, path: &[usize], area: Cells) -> Option<Cells> {
+    let Some((&index, rest)) = path.split_first() else {
+        return Some(area);
+    };
+    let Node::Split {
+        axis,
+        children,
+        ratios,
+    } = node
+    else {
+        return None;
+    };
+    let length = match axis {
+        Axis::Row => area.width,
+        Axis::Column => area.height,
+    };
+    let sizes = share(length, ratios);
+    let start: u16 = sizes[..index]
+        .iter()
+        .map(|size| size.saturating_sub(1))
+        .sum();
+    let child = match axis {
+        Axis::Row => Cells {
+            x: area.x + start,
+            width: sizes[index],
+            ..area
+        },
+        Axis::Column => Cells {
+            y: area.y + start,
+            height: sizes[index],
+            ..area
+        },
+    };
+    node_area(children.get(index)?, rest, child)
 }
 
 fn collect(node: &Node, leaves: &mut Vec<Leaf>) {
@@ -920,6 +996,22 @@ mod tests {
         };
         assert!((ratios[1] - tuning::MIN_RATIO).abs() < 1e-6, "{ratios:?}");
         assert!((ratios[0] + ratios[1] - 1.0).abs() < 1e-6, "{ratios:?}");
+    }
+
+    #[test]
+    fn dragging_a_rule_moves_it_by_whole_cells() {
+        let mut layout = three();
+        let tab = area(42, 20);
+        // 42 columns: three rules and 39 inner, 20 and 19.
+        assert_eq!(outer(&layout, tab, 2).0, 21);
+        layout.drag_rule(LeafId(1), Side::Right, 5, tab);
+        assert_eq!(outer(&layout, tab, 2).0, 26);
+        // The rule below leaf 2 lives in the right column's split; it starts
+        // at row 10 and goes up three.
+        assert_eq!(outer(&layout, tab, 3).1, 10);
+        layout.drag_rule(LeafId(2), Side::Down, -3, tab);
+        let (_, y, _, height) = outer(&layout, tab, 3);
+        assert_eq!((y, height), (7, 13));
     }
 
     #[test]

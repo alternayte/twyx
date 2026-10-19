@@ -521,8 +521,13 @@ impl Daemon {
             ToDaemon::ToggleFloating => {
                 self.edit_focused(id, |layout, leaf| layout.toggle_floating(leaf));
             }
-            ToDaemon::MoveFloating { geometry } => {
-                self.edit_focused(id, |layout, leaf| layout.move_floating(leaf, geometry));
+            ToDaemon::MoveFloating { leaf, geometry } => {
+                self.edit_leaf(leaf, |layout, _| layout.move_floating(leaf, geometry));
+            }
+            ToDaemon::DragRule { leaf, side, cells } => {
+                self.edit_leaf(leaf, |layout, area| {
+                    layout.drag_rule(leaf, side, cells, area)
+                });
             }
             ToDaemon::SelectTab { tab } => self.select_tab(id, tab),
             ToDaemon::RenameTab { tab, name } => {

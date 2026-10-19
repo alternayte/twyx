@@ -11,7 +11,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use ratatui::widgets::Widget;
 use twyx_core::keys::{Command, Keymap, Mode};
-use twyx_core::layout::{Cells, LeafId, Placed};
+use twyx_core::layout::{Cells, Fractions, LeafId, Placed};
 use twyx_protocol::client::{Launch, PaneInfo, PaneState, TabInfo, WorkspaceInfo};
 use twyx_protocol::grid::{Attrs, Cell, Colour, Cursor};
 use twyx_protocol::view::View;
@@ -20,6 +20,7 @@ use crate::chrome::Pen;
 use crate::chrome::bars::{HintBar, StatusBar, Tab, TabBar};
 use crate::chrome::frames::{Frame, Frames};
 use crate::emitter::Grid;
+use crate::mouse::Selection;
 
 /// A buffer cell no widget wrote: the cell below shows through.
 const UNTOUCHED: &str = "\u{0}";
@@ -40,6 +41,8 @@ pub struct Scene<'a> {
     pub panes: &'a HashMap<u64, PaneInfo>,
     pub views: &'a HashMap<u64, View>,
     pub keymap: &'a Keymap,
+    /// Text the mouse is selecting, shown in reverse.
+    pub selection: Option<Selection>,
 }
 
 /// The tab area: the screen between the tab bar and the status bar.
@@ -53,6 +56,49 @@ impl Scene<'_> {
             .tabs
             .iter()
             .find(|tab| Some(tab.tab) == self.tab)
+    }
+
+    /// The leaseholder's tab area, which the layout is placed in.
+    pub fn tab_size(&self) -> Option<(u16, u16)> {
+        self.tab_info().map(|tab| (tab.cols, tab.rows))
+    }
+
+    pub fn floating_geometry(&self, leaf: LeafId) -> Option<Fractions> {
+        self.tab_info()?
+            .layout
+            .floating
+            .iter()
+            .find(|floating| floating.leaf.id == leaf)
+            .map(|floating| floating.geometry)
+    }
+
+    /// The text a selection covers: rows joined by newlines, each without
+    /// its trailing blanks.
+    pub fn selected_text(&self, selection: &Selection) -> String {
+        let Some(view) = self.views.get(&selection.pane) else {
+            return String::new();
+        };
+        let ((start_col, start_row), (end_col, end_row)) = selection.span();
+        let mut lines = Vec::new();
+        for row in start_row..=end_row {
+            let Some(cells) = view.cells.get(usize::from(row)) else {
+                break;
+            };
+            let from = if row == start_row { start_col } else { 0 };
+            let to = if row == end_row {
+                end_col
+            } else {
+                view.cols.saturating_sub(1)
+            };
+            let line: String = cells
+                .iter()
+                .skip(usize::from(from))
+                .take(usize::from(to.saturating_sub(from)) + 1)
+                .map(|cell| cell.text.as_str())
+                .collect();
+            lines.push(line.trim_end().to_owned());
+        }
+        lines.join("\n")
     }
 
     /// Where each leaf of the client's tab lands on this screen.
@@ -279,6 +325,12 @@ impl Scene<'_> {
                         cell = Cell::blank();
                     }
                     cell.link = cell.link.and_then(|id| links.intern(pane, id, view));
+                    let local = (skip as u16 + col, inner.y - placed.inner.y + row);
+                    if self.selection.is_some_and(|selection| {
+                        selection.pane == pane && selection.contains(local.0, local.1)
+                    }) {
+                        cell.attrs ^= Attrs::REVERSE;
+                    }
                     grid.cells[y][x] = cell;
                 }
             }
@@ -523,6 +575,7 @@ mod tests {
             panes: &panes,
             views: &views,
             keymap: &keymap,
+            selection: None,
         }
         .compose();
         grid.cells

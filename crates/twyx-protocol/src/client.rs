@@ -144,7 +144,14 @@ pub enum ToDaemon {
     ToggleZoom,
     ToggleFloating,
     MoveFloating {
+        leaf: LeafId,
         geometry: Fractions,
+    },
+    /// Moves the rule on `side` of a tiled leaf by whole cells.
+    DragRule {
+        leaf: LeafId,
+        side: Side,
+        cells: i32,
     },
     SelectTab {
         tab: u64,

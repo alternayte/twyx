@@ -30,7 +30,7 @@ use crate::chrome::{Depth, Pen};
 use crate::compositor::{CHROME_ROWS, Scene, tab_area};
 use crate::emitter::{Capabilities, Emitter};
 use crate::input;
-use crate::mouse;
+use crate::mouse::{Action, Mouse};
 use crate::probe;
 use twyx_protocol::connection as client;
 use twyx_protocol::view::View;
@@ -170,6 +170,7 @@ fn run(
     };
     known(&mut panes, &daemon.hello.panes);
     let mut dirty = true;
+    let mut mouse = Mouse::default();
 
     loop {
         let mut lost = false;
@@ -273,6 +274,7 @@ fn run(
                 panes: &panes,
                 views: &views,
                 keymap: &keymap,
+                selection: mouse.selection(),
             };
             screen.emitter.draw(&scene.compose())?;
             let focused_title = follow
@@ -328,7 +330,7 @@ fn run(
                     }
                 }
             }
-            Event::Mouse(mouse) => {
+            Event::Mouse(event) => {
                 let scene = Scene {
                     pen: &screen.pen,
                     cols: size.0,
@@ -340,9 +342,19 @@ fn run(
                     panes: &panes,
                     views: &views,
                     keymap: &keymap,
+                    selection: mouse.selection(),
                 };
-                if let Some(request) = mouse::route(&scene, mouse) {
-                    let _ = daemon.outgoing.send(request);
+                for action in mouse.handle(&scene, event) {
+                    match action {
+                        Action::Send(request) => {
+                            let _ = daemon.outgoing.send(request);
+                        }
+                        Action::Copy(text) => {
+                            let encoded =
+                                base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+                            screen.write(&format!("\x1b]52;c;{encoded}\x1b\\"))?;
+                        }
+                    }
                 }
             }
             other => {

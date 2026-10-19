@@ -1,7 +1,7 @@
 //! Tab and layout commands: new, close and run-again panes, focus, resize,
 //! swap, zoom, float, and the tabs themselves.
 
-use twyx_core::layout::{Axis, Layout, LeafId, Side};
+use twyx_core::layout::{Axis, Cells, Layout, LeafId, Side};
 use twyx_core::pane::PaneId;
 use twyx_core::tuning;
 use twyx_protocol::client::{FromDaemon, Launch, PaneState, Place};
@@ -360,6 +360,23 @@ impl Daemon {
         self.apply_size(tab);
         self.broadcast_workspace();
         self.send_focus(id);
+    }
+
+    /// Changes the layout of the tab that holds a leaf, then resizes its
+    /// panes and tells every client.
+    pub(crate) fn edit_leaf(&mut self, leaf: LeafId, edit: impl FnOnce(&mut Layout, Cells)) {
+        let Some((tab, entry)) = self
+            .tabs
+            .iter_mut()
+            .find(|(_, entry)| entry.layout.contains(leaf))
+        else {
+            return;
+        };
+        let tab = *tab;
+        let area = area_cells(entry.area);
+        edit(&mut entry.layout, area);
+        self.apply_size(tab);
+        self.broadcast_workspace();
     }
 
     pub(crate) fn select_tab(&mut self, id: u64, tab: u64) {
