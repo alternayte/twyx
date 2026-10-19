@@ -152,17 +152,21 @@ pub enum Mode {
     Resize,
     Move,
     Floating,
+    /// Moves a cursor over the pane's screen and scrollback, selects and
+    /// copies.
+    Copy,
 }
 
 impl Mode {
     /// The modes a user can bind keys in, with their config names.
-    pub const BOUND: [(Mode, &'static str); 6] = [
+    pub const BOUND: [(Mode, &'static str); 7] = [
         (Mode::Command, "command"),
         (Mode::Pane, "pane"),
         (Mode::Tab, "tab"),
         (Mode::Resize, "resize"),
         (Mode::Move, "move"),
         (Mode::Floating, "floating"),
+        (Mode::Copy, "copy"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -174,9 +178,46 @@ impl Mode {
             Mode::Resize => "resize",
             Mode::Move => "move",
             Mode::Floating => "floating",
+            Mode::Copy => "copy",
         }
     }
 }
+
+/// Where a copy mode key moves the copy cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CopyMotion {
+    Left,
+    Right,
+    Up,
+    Down,
+    WordForward,
+    WordBack,
+    LineStart,
+    LineEnd,
+    Top,
+    Bottom,
+    PageUp,
+    PageDown,
+    HalfPageUp,
+    HalfPageDown,
+}
+
+const MOTIONS: [(CopyMotion, &str); 14] = [
+    (CopyMotion::Left, "left"),
+    (CopyMotion::Right, "right"),
+    (CopyMotion::Up, "up"),
+    (CopyMotion::Down, "down"),
+    (CopyMotion::WordForward, "word-forward"),
+    (CopyMotion::WordBack, "word-back"),
+    (CopyMotion::LineStart, "line-start"),
+    (CopyMotion::LineEnd, "line-end"),
+    (CopyMotion::Top, "top"),
+    (CopyMotion::Bottom, "bottom"),
+    (CopyMotion::PageUp, "page-up"),
+    (CopyMotion::PageDown, "page-down"),
+    (CopyMotion::HalfPageUp, "half-page-up"),
+    (CopyMotion::HalfPageDown, "half-page-down"),
+];
 
 /// What a key can do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +243,13 @@ pub enum Command {
     Palette,
     Detach,
     Enter(Mode),
+    CopyMove(CopyMotion),
+    CopySelect,
+    CopySelectLine,
+    CopyYank,
+    CopySearch,
+    CopyNext,
+    CopyPrevious,
 }
 
 const SIDES: [(Side, &str); 4] = [
@@ -242,6 +290,19 @@ impl Command {
             Command::Palette => "palette".to_owned(),
             Command::Detach => "detach".to_owned(),
             Command::Enter(mode) => format!("mode-{}", mode.name()),
+            Command::CopyMove(motion) => format!(
+                "copy-{}",
+                MOTIONS
+                    .iter()
+                    .find(|(named, _)| *named == motion)
+                    .map_or("", |(_, name)| name)
+            ),
+            Command::CopySelect => "copy-select".to_owned(),
+            Command::CopySelectLine => "copy-select-line".to_owned(),
+            Command::CopyYank => "copy-yank".to_owned(),
+            Command::CopySearch => "copy-search".to_owned(),
+            Command::CopyNext => "copy-next".to_owned(),
+            Command::CopyPrevious => "copy-previous".to_owned(),
         }
     }
 
@@ -268,6 +329,16 @@ impl Command {
             Command::Palette => "palette".to_owned(),
             Command::Detach => "detach".to_owned(),
             Command::Enter(mode) => mode.name().to_owned(),
+            Command::CopyMove(CopyMotion::WordForward | CopyMotion::WordBack) => "word".to_owned(),
+            Command::CopyMove(CopyMotion::LineStart | CopyMotion::LineEnd) => "line".to_owned(),
+            Command::CopyMove(CopyMotion::Top | CopyMotion::Bottom) => "top/end".to_owned(),
+            Command::CopyMove(_) => "move".to_owned(),
+            Command::CopySelect => "select".to_owned(),
+            Command::CopySelectLine => "line".to_owned(),
+            Command::CopyYank => "copy".to_owned(),
+            Command::CopySearch => "search".to_owned(),
+            Command::CopyNext => "next".to_owned(),
+            Command::CopyPrevious => "previous".to_owned(),
         }
     }
 
@@ -299,6 +370,15 @@ impl Command {
             ]);
         }
         all.extend((1..=9).map(Command::GoToTab));
+        all.extend(MOTIONS.iter().map(|(motion, _)| Command::CopyMove(*motion)));
+        all.extend([
+            Command::CopySelect,
+            Command::CopySelectLine,
+            Command::CopyYank,
+            Command::CopySearch,
+            Command::CopyNext,
+            Command::CopyPrevious,
+        ]);
         all.extend(
             Mode::BOUND
                 .iter()
@@ -362,6 +442,7 @@ impl Default for Keymap {
             key('r', C::Enter(Mode::Resize)),
             key('m', C::Enter(Mode::Move)),
             key('f', C::Enter(Mode::Floating)),
+            key('c', C::Enter(Mode::Copy)),
             key('n', C::SplitRight),
             key('x', C::ClosePane),
             key('z', C::ToggleZoom),
@@ -396,6 +477,43 @@ impl Default for Keymap {
         let mut floating = vec![key('n', C::NewFloating), key('f', C::ToggleFloating)];
         floating.extend(arrows(C::MoveFloating));
 
+        // The actions come first, so a narrow hint bar keeps them.
+        let mut copy = vec![
+            key('v', C::CopySelect),
+            key('V', C::CopySelectLine),
+            key('y', C::CopyYank),
+            (Chord::plain(Key::Enter), C::CopyYank),
+            key('/', C::CopySearch),
+            key('n', C::CopyNext),
+            key('N', C::CopyPrevious),
+        ];
+        copy.extend(arrows(|side| {
+            C::CopyMove(match side {
+                Side::Left => CopyMotion::Left,
+                Side::Right => CopyMotion::Right,
+                Side::Up => CopyMotion::Up,
+                Side::Down => CopyMotion::Down,
+            })
+        }));
+        copy.extend([
+            key('w', C::CopyMove(CopyMotion::WordForward)),
+            key('b', C::CopyMove(CopyMotion::WordBack)),
+            key('0', C::CopyMove(CopyMotion::LineStart)),
+            key('$', C::CopyMove(CopyMotion::LineEnd)),
+            key('g', C::CopyMove(CopyMotion::Top)),
+            key('G', C::CopyMove(CopyMotion::Bottom)),
+            (Chord::ctrl(Char('u')), C::CopyMove(CopyMotion::HalfPageUp)),
+            (
+                Chord::ctrl(Char('d')),
+                C::CopyMove(CopyMotion::HalfPageDown),
+            ),
+            (Chord::plain(Key::PageUp), C::CopyMove(CopyMotion::PageUp)),
+            (
+                Chord::plain(Key::PageDown),
+                C::CopyMove(CopyMotion::PageDown),
+            ),
+        ]);
+
         Self {
             prefix: Chord::ctrl(Char('g')),
             bindings: vec![
@@ -405,6 +523,7 @@ impl Default for Keymap {
                 (Mode::Resize, arrows(C::Resize)),
                 (Mode::Move, arrows(C::Swap)),
                 (Mode::Floating, floating),
+                (Mode::Copy, copy),
             ],
             mode: Mode::Normal,
         }
@@ -419,6 +538,11 @@ impl Keymap {
     /// Leaves any mode, for a client that lost its daemon or its focus.
     pub fn reset(&mut self) {
         self.mode = Mode::Normal;
+    }
+
+    /// Opens a mode without its keys, as the mouse wheel opens copy mode.
+    pub fn open(&mut self, mode: Mode) {
+        self.mode = mode;
     }
 
     pub fn bindings(&self, mode: Mode) -> &[(Chord, Command)] {
@@ -455,7 +579,10 @@ impl Keymap {
                 Command::Focus(_)
                 | Command::Resize(_)
                 | Command::Swap(_)
-                | Command::MoveFloating(_) => {
+                | Command::MoveFloating(_)
+                | Command::CopyMove(
+                    CopyMotion::Left | CopyMotion::Right | CopyMotion::Up | CopyMotion::Down,
+                ) => {
                     let word = command.hint();
                     if seen.contains(&word) {
                         continue;
@@ -474,6 +601,11 @@ impl Keymap {
                 }
                 command => command.hint(),
             };
+            // A second key for a command already shown adds nothing.
+            if hints.iter().any(|(_, shown)| *shown == word) && matches!(command, Command::CopyYank)
+            {
+                continue;
+            }
             hints.push((chord.to_string(), word));
         }
         if self.mode != Mode::Normal {

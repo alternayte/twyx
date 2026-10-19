@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use twyx_core::keys::Command;
 use twyx_core::layout::{Axis, Fractions, Layout, LeafId, Side};
 
+use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 2;
@@ -178,6 +179,8 @@ pub enum ToDaemon {
     },
     /// Closes the tab this client shows.
     CloseFocusedTab,
+    /// A copy mode action for the focused pane.
+    Copy(CopyAction),
     /// Ask the daemon to exit. Panes keep running.
     Shutdown,
 }
@@ -256,7 +259,17 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
             index: usize::from(number.saturating_sub(1)),
         },
         Command::CloseTab => ToDaemon::CloseFocusedTab,
-        Command::Detach | Command::Enter(_) | Command::Palette | Command::RenameTab => {
+        Command::CopyMove(motion) => ToDaemon::Copy(CopyAction::Move(motion)),
+        Command::CopySelect => ToDaemon::Copy(CopyAction::Select),
+        Command::CopySelectLine => ToDaemon::Copy(CopyAction::SelectLine),
+        Command::CopyYank => ToDaemon::Copy(CopyAction::Yank),
+        Command::CopyNext => ToDaemon::Copy(CopyAction::Next),
+        Command::CopyPrevious => ToDaemon::Copy(CopyAction::Previous),
+        Command::Detach
+        | Command::Enter(_)
+        | Command::Palette
+        | Command::RenameTab
+        | Command::CopySearch => {
             return None;
         }
     })

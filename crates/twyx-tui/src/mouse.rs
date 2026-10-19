@@ -10,6 +10,7 @@ use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventK
 use twyx_core::layout::{Fractions, LeafId, Placed, Side};
 use twyx_protocol::client::ToDaemon;
 use twyx_protocol::grid::MouseMode;
+use twyx_protocol::holder::CopyAction;
 use twyx_protocol::input::{InputEvent, KeyCode, KeyEvent, Modifiers};
 
 use crate::compositor::Scene;
@@ -62,6 +63,8 @@ enum Drag {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Send(ToDaemon),
+    /// The wheel scrolled a pane back: the client is in copy mode now.
+    OpenCopy,
     /// Put this text on the outer terminal's clipboard.
     Copy(String),
 }
@@ -254,7 +257,16 @@ fn wheel(scene: &Scene<'_>, mouse: MouseEvent) -> Vec<Action> {
         .get(&pane)
         .is_some_and(|view| view.modes.alt_screen)
     {
-        return Vec::new();
+        // A shell's history scrolls in copy mode, as in tmux.
+        let lines = if mouse.kind == MouseEventKind::ScrollUp {
+            -3
+        } else {
+            3
+        };
+        return vec![
+            Action::OpenCopy,
+            Action::Send(ToDaemon::Copy(CopyAction::Scroll(lines))),
+        ];
     }
     let code = if mouse.kind == MouseEventKind::ScrollUp {
         KeyCode::Up

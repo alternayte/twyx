@@ -23,6 +23,7 @@ use twyx_protocol::client::{
     FromDaemon, Launch, PaneInfo, Place, ToDaemon, WorkspaceInfo, request,
 };
 use twyx_protocol::grid::{Frame, Snapshot};
+use twyx_protocol::holder::CopyAction;
 use twyx_protocol::input::InputEvent;
 use twyx_protocol::wire;
 
@@ -332,6 +333,13 @@ fn run(
                             overlay = None;
                             None
                         }
+                        OverlayOutcome::Search(needle) => {
+                            overlay = None;
+                            let _ = daemon
+                                .outgoing
+                                .send(ToDaemon::Copy(CopyAction::Search(needle)));
+                            None
+                        }
                         OverlayOutcome::Rename { tab, name } => {
                             overlay = None;
                             let _ = daemon.outgoing.send(ToDaemon::RenameTab { tab, name });
@@ -353,12 +361,24 @@ fn run(
                         }
                     }
                 } else {
+                    let before = keymap.mode();
                     let outcome = match chord {
                         Some(chord) => keymap.press(chord),
                         // A release goes to the pane only outside the modes.
                         None if keymap.mode() == Mode::Normal => Outcome::ToPane,
                         None => Outcome::Consumed,
                     };
+                    // Copy mode lives in the pane's holder; it opens and closes
+                    // with the keymap's copy mode.
+                    let after = keymap.mode();
+                    if before != after && (before == Mode::Copy || after == Mode::Copy) {
+                        let action = if after == Mode::Copy {
+                            CopyAction::Enter
+                        } else {
+                            CopyAction::Exit
+                        };
+                        let _ = daemon.outgoing.send(ToDaemon::Copy(action));
+                    }
                     match outcome {
                         Outcome::ToPane => {
                             let _ = daemon.outgoing.send(ToDaemon::Input(event));
@@ -374,6 +394,14 @@ fn run(
                     Some(Command::Palette) => {
                         keymap.reset();
                         overlay = Some(Overlay::palette());
+                    }
+                    Some(Command::CopySearch) => {
+                        overlay = Some(Overlay::Search(String::new()));
+                    }
+                    Some(Command::CopyYank) => {
+                        // The holder leaves copy mode once it has copied.
+                        let _ = daemon.outgoing.send(ToDaemon::Copy(CopyAction::Yank));
+                        keymap.reset();
                     }
                     Some(Command::RenameTab) => {
                         keymap.reset();
@@ -401,7 +429,15 @@ fn run(
                 }
                 let actions = mouse.handle(&scene!(), event);
                 for action in actions {
+                    // Focus leaving a pane in copy mode closes copy mode there.
+                    if keymap.mode() == Mode::Copy
+                        && matches!(action, Action::Send(ToDaemon::FocusLeaf { .. }))
+                    {
+                        let _ = daemon.outgoing.send(ToDaemon::Copy(CopyAction::Exit));
+                        keymap.reset();
+                    }
                     match action {
+                        Action::OpenCopy => keymap.open(Mode::Copy),
                         Action::Send(request) => {
                             let _ = daemon.outgoing.send(request);
                         }

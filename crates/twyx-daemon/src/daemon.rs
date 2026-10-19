@@ -542,6 +542,14 @@ impl Daemon {
                     self.close_tab(tab);
                 }
             }
+            ToDaemon::Copy(action) => {
+                if let Some(pane) = self.focused_pane(id)
+                    && let Some(entry) = self.panes.get(&pane)
+                    && let Some(link) = &entry.link
+                {
+                    link.send(ToHolder::Copy(action));
+                }
+            }
             ToDaemon::CycleTab { forward } => self.cycle_tab(id, forward),
             ToDaemon::SelectTabAt { index } => {
                 if let Some((tab, _)) = self.tabs.get(index) {
@@ -692,6 +700,12 @@ impl Daemon {
             }
             FromHolder::Signal(signal) => self.signal(pane, signal),
             FromHolder::Exited(state) => self.exited(pane, state),
+            FromHolder::Copied(text) => {
+                self.broadcast_frames(FromDaemon::Clipboard {
+                    pane: pane.raw(),
+                    text,
+                });
+            }
             FromHolder::Unsupported { .. } | FromHolder::Pong => {}
         }
     }

@@ -9,6 +9,8 @@ Every key goes to the focused pane, except the prefix. The prefix is `ctrl-g`.
 - A key with no binding in a mode does nothing.
 - The TUI and the desktop client use the same keymap.
 
+Copy mode (`ctrl-g c`) moves a cursor over the pane and its scrollback. `v` starts a selection, and `y` or `enter` copies it to the clipboard and leaves copy mode. `/` searches from the newest output toward the oldest, and `n` and `N` move between the matches. Every client of the pane sees the same copy cursor. The mouse wheel over a shell opens copy mode too.
+
 These are all the keys twyx can take from a pane: the prefix, and the keys below once the prefix has opened a mode.
 
 ## Change a key
@@ -39,6 +41,7 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 | `r` | `mode-resize` |
 | `m` | `mode-move` |
 | `f` | `mode-floating` |
+| `c` | `mode-copy` |
 | `n` | `split-right` |
 | `x` | `close-pane` |
 | `z` | `toggle-zoom` |
@@ -143,4 +146,34 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 | `up` | `move-floating-up` |
 | `l` | `move-floating-right` |
 | `right` | `move-floating-right` |
+
+### copy
+
+| Key | Command |
+|---|---|
+| `v` | `copy-select` |
+| `V` | `copy-select-line` |
+| `y` | `copy-yank` |
+| `enter` | `copy-yank` |
+| `/` | `copy-search` |
+| `n` | `copy-next` |
+| `N` | `copy-previous` |
+| `h` | `copy-left` |
+| `left` | `copy-left` |
+| `j` | `copy-down` |
+| `down` | `copy-down` |
+| `k` | `copy-up` |
+| `up` | `copy-up` |
+| `l` | `copy-right` |
+| `right` | `copy-right` |
+| `w` | `copy-word-forward` |
+| `b` | `copy-word-back` |
+| `0` | `copy-line-start` |
+| `$` | `copy-line-end` |
+| `g` | `copy-top` |
+| `G` | `copy-bottom` |
+| `ctrl-u` | `copy-half-page-up` |
+| `ctrl-d` | `copy-half-page-down` |
+| `pageup` | `copy-page-up` |
+| `pagedown` | `copy-page-down` |
 

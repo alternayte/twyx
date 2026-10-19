@@ -26,12 +26,21 @@ pub enum Outcome {
     Close,
     Choose(Choice),
     Rename { tab: u64, name: String },
+    Search(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Overlay {
-    Palette { query: String, selected: usize },
-    Rename { tab: u64, name: String },
+    Palette {
+        query: String,
+        selected: usize,
+    },
+    Rename {
+        tab: u64,
+        name: String,
+    },
+    /// The needle for a copy mode search.
+    Search(String),
 }
 
 /// One line of the palette, before the query filters it.
@@ -87,6 +96,19 @@ impl Overlay {
                     _ => Outcome::Stay,
                 }
             }
+            Overlay::Search(needle) => match (chord.key, typed) {
+                (Key::Escape, _) => Outcome::Close,
+                (Key::Enter, _) => Outcome::Search(needle.clone()),
+                (Key::Backspace, _) => {
+                    needle.pop();
+                    Outcome::Stay
+                }
+                (_, Some(ch)) => {
+                    needle.push(ch);
+                    Outcome::Stay
+                }
+                _ => Outcome::Stay,
+            },
             Overlay::Rename { tab, name } => match (chord.key, typed) {
                 (Key::Escape, _) => Outcome::Close,
                 (Key::Enter, _) => Outcome::Rename {
@@ -115,6 +137,7 @@ impl Overlay {
                 *selected = 0;
             }
             Overlay::Rename { name, .. } => name.push_str(&text),
+            Overlay::Search(needle) => needle.push_str(&text),
         }
     }
 
@@ -150,6 +173,14 @@ impl Overlay {
                 pen: scene.pen,
                 title: "rename tab",
                 query: name,
+                entries: &[],
+                selected: 0,
+            }
+            .render(area, buf),
+            Overlay::Search(needle) => Palette {
+                pen: scene.pen,
+                title: "search",
+                query: needle,
                 entries: &[],
                 selected: 0,
             }

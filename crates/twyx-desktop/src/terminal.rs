@@ -19,6 +19,7 @@ use twyx_protocol::client::{
 };
 use twyx_protocol::connection;
 use twyx_protocol::grid::{Frame, Snapshot};
+use twyx_protocol::holder::CopyAction;
 use twyx_protocol::input::{InputEvent, Modifiers, MouseAction, MouseEvent};
 use twyx_protocol::view::View;
 use twyx_protocol::wire;
@@ -307,11 +308,30 @@ impl Terminal {
             return;
         };
 
+        let before = self.keymap.mode();
         let outcome = match key.chord() {
             Some(chord) => self.keymap.press(chord),
             None if self.keymap.mode() == Mode::Normal => Outcome::ToPane,
             None => Outcome::Consumed,
         };
+        // Copy mode lives in the pane's holder; it opens and closes with the
+        // keymap's copy mode.
+        let after = self.keymap.mode();
+        if before != after
+            && (before == Mode::Copy || after == Mode::Copy)
+            && let Some(outgoing) = &self.outgoing
+        {
+            let action = if after == Mode::Copy {
+                CopyAction::Enter
+            } else {
+                CopyAction::Exit
+            };
+            let _ = outgoing.send(ToDaemon::Copy(action));
+        }
+        if outcome == Outcome::Run(Command::CopyYank) {
+            // The holder leaves copy mode once it has copied.
+            self.keymap.reset();
+        }
         match outcome {
             Outcome::ToPane => self.send(InputEvent::Key(key)),
             Outcome::Consumed => {}

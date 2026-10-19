@@ -259,6 +259,12 @@ impl Core<'_> {
                 let _ = self.killer.kill();
             }
             ToHolder::Ping => send(out, FromHolder::Pong),
+            ToHolder::Copy(action) => {
+                if let Some(text) = self.engine.copy(action) {
+                    send(out, FromHolder::Copied(text));
+                }
+                *dirty = true;
+            }
         }
         None
     }

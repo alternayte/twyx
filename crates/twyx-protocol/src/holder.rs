@@ -4,10 +4,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use twyx_core::keys::CopyMotion;
+
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 1;
-pub const MINOR: u16 = 0;
+pub const MINOR: u16 = 1;
 
 /// Sent by the daemon when it connects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +58,27 @@ pub enum Signal {
     Foreground { pid: u32 },
 }
 
+/// What copy mode does. The holder keeps one copy cursor, selection and
+/// search per pane, so every client of the pane sees the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CopyAction {
+    Enter,
+    Exit,
+    Move(CopyMotion),
+    /// Starts a selection at the copy cursor, or drops the one there is.
+    Select,
+    /// Selects the cursor's whole line.
+    SelectLine,
+    /// Copies the selection and leaves copy mode.
+    Yank,
+    /// Finds the needle, from the newest output toward the oldest.
+    Search(String),
+    Next,
+    Previous,
+    /// Scrolls by lines, up when negative; opens copy mode if it is closed.
+    Scroll(i32),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToHolder {
     Hello(Hello),
@@ -70,6 +93,8 @@ pub enum ToHolder {
     AckExit,
     Kill,
     Ping,
+    /// Since minor 1.
+    Copy(CopyAction),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,4 +118,6 @@ pub enum FromHolder {
     Signal(Signal),
     Exited(ExitState),
     Pong,
+    /// The text copy mode copied. Since minor 1.
+    Copied(String),
 }

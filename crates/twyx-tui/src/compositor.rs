@@ -387,8 +387,9 @@ impl Scene<'_> {
             .find(|p| Some(p.leaf.id) == self.focus && p.content)?;
         let view = self.views.get(&focused.leaf.pane.raw())?;
         let state = self.panes.get(&focused.leaf.pane.raw())?.state.clone();
-        if state != PaneState::Running || !view.cursor.visible || self.keymap.mode() != Mode::Normal
-        {
+        // The copy cursor shows in copy mode; any other mode hides the cursor.
+        let shown = matches!(self.keymap.mode(), Mode::Normal | Mode::Copy);
+        if state != PaneState::Running || !view.cursor.visible || !shown || self.overlay.is_some() {
             return None;
         }
         let col = focused.inner.x.checked_add(view.cursor.col)?;
