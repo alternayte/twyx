@@ -6,6 +6,7 @@
 pub mod encode;
 pub mod engine;
 pub mod frame;
+pub mod history;
 pub mod pty;
 pub mod queue;
 pub mod runtime;

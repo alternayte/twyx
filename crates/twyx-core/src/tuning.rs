@@ -51,3 +51,16 @@ pub const FLOATING_STEP: f32 = 0.05;
 
 /// How often a client looks for a changed config file.
 pub const CONFIG_POLL: Duration = Duration::from_secs(1);
+
+/// How often a holder writes a checkpoint of a pane whose output changed.
+pub const HISTORY_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The most a pane's history may take on disk.
+pub const HISTORY_DISK_BYTES: usize = 32 << 20;
+
+/// The log a pane writes between checkpoints before it checkpoints early.
+pub const HISTORY_LOG_BYTES: usize = 4 << 20;
+
+/// The records the history writer may have queued before output is dropped
+/// as a gap.
+pub const HISTORY_QUEUE: usize = 1024;

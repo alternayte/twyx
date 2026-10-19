@@ -10,6 +10,7 @@ use libghostty_vt::screen::CellWide;
 use libghostty_vt::screen::TrackedGridRef;
 use libghostty_vt::search::Search;
 use libghostty_vt::selection::{FormatOptions, Selection};
+use libghostty_vt::snapshot::Decoder;
 use libghostty_vt::style::{Style, StyleColor, Underline as GhosttyUnderline};
 use libghostty_vt::terminal::{Mode, Point, PointCoordinate, PointSpace, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal};
@@ -20,7 +21,13 @@ use twyx_protocol::grid::{
 };
 use twyx_protocol::holder::CopyAction;
 
+use twyx_core::tuning;
+
 use super::{EngineSignal, Geometry, Links, View};
+use crate::history::Entry;
+
+/// What a restored pane shows where its history writer fell behind.
+const GAP_MARK: &[u8] = b"\r\n\x1b[2m-- output missing here --\x1b[0m\r\n";
 
 pub struct Ghostty {
     term: Terminal<'static, 'static>,
@@ -50,14 +57,45 @@ impl std::fmt::Debug for Ghostty {
 }
 
 impl Ghostty {
-    pub fn new(geometry: Geometry, mut answerback: Box<dyn Write + Send>) -> Option<Self> {
-        let mut term = Terminal::new(geometry.cols.max(2), geometry.rows.max(1)).ok()?;
+    pub fn new(geometry: Geometry, answerback: Box<dyn Write + Send>) -> Option<Self> {
+        let term = Terminal::new(geometry.cols.max(2), geometry.rows.max(1)).ok()?;
+        Self::wrap(term, geometry, answerback)
+    }
+
+    /// An engine with the state of a history checkpoint and the output
+    /// logged after it. Replies the replay provokes go nowhere; only output
+    /// after the restore answers into the new PTY.
+    pub fn restore(
+        geometry: Geometry,
+        answerback: Box<dyn Write + Send>,
+        checkpoint: &[u8],
+        log: &[Entry],
+    ) -> Option<Self> {
+        let term = Decoder::new_buf(checkpoint).ok()?.decode().ok()?;
+        let mut engine = Self::wrap(term, geometry, Box::new(std::io::sink()))?;
+        for entry in log {
+            match entry {
+                Entry::Output(bytes) => engine.term.vt_write(bytes),
+                Entry::Gap => engine.term.vt_write(GAP_MARK),
+            }
+        }
+        engine.signals.borrow_mut().clear();
+        engine.resize(geometry.cols, geometry.rows);
+        engine.answer_to(answerback).ok()?;
+        Some(engine)
+    }
+
+    fn wrap(
+        mut term: Terminal<'static, 'static>,
+        geometry: Geometry,
+        answerback: Box<dyn Write + Send>,
+    ) -> Option<Self> {
         term.set_scrollback_max_lines(Some(geometry.scrollback_lines as usize))
             .ok()?;
-        term.on_pty_write(move |_, reply: &[u8]| {
-            let _ = answerback.write_all(reply);
-        })
-        .ok()?;
+        // A checkpoint can fall in the middle of an escape sequence; the
+        // engine keeps the unfinished input so the snapshot can carry it.
+        term.set_continuation_max_bytes(tuning::MAX_OSC_BYTES)
+            .ok()?;
         let signals: Rc<RefCell<Vec<EngineSignal>>> = Rc::default();
         let sink = Rc::clone(&signals);
         term.on_bell(move |_| sink.borrow_mut().push(EngineSignal::Bell))
@@ -82,14 +120,36 @@ impl Ghostty {
         })
         .ok()?;
         let render = RenderState::new().ok()?;
-        Some(Self {
+        let mut engine = Self {
             term,
             render,
             size: (geometry.cols.max(2), geometry.rows.max(1)),
             links: Links::default(),
             signals,
             copy: None,
-        })
+        };
+        engine.answer_to(answerback).ok()?;
+        Some(engine)
+    }
+
+    /// Where the terminal's replies to the pane go.
+    fn answer_to(
+        &mut self,
+        mut answerback: Box<dyn Write + Send>,
+    ) -> Result<(), libghostty_vt::Error> {
+        self.term
+            .on_pty_write(move |_, reply: &[u8]| {
+                let _ = answerback.write_all(reply);
+            })
+            .map(|_| ())
+    }
+
+    /// The engine's own snapshot of screen and scrollback, for a history
+    /// checkpoint.
+    pub fn encode_snapshot(&mut self) -> Option<Vec<u8>> {
+        let mut snapshot = Vec::new();
+        self.term.encode_snapshot(&mut snapshot).ok()?;
+        Some(snapshot)
     }
 
     fn blank_view(&self) -> View {
@@ -709,6 +769,52 @@ mod tests {
         // "line 20 word": two words on is the "w" of "word", one right is the
         // "o", and the selection holds the cell under the cursor.
         assert_eq!(engine.copy(CopyAction::Yank).as_deref(), Some("line 20 wo"));
+    }
+
+    #[test]
+    fn a_checkpoint_and_its_log_restore_screen_and_scrollback() {
+        let mut engine = scrolled();
+        let checkpoint = engine.encode_snapshot().expect("a snapshot");
+        let later = b"\x1b[1mafter the checkpoint\x1b[0m\r\n";
+        engine.advance(later);
+        let mut restored = Ghostty::restore(
+            Geometry {
+                cols: 20,
+                rows: 5,
+                scrollback_lines: 100,
+            },
+            Box::new(std::io::sink()),
+            &checkpoint,
+            &[Entry::Output(later.to_vec())],
+        )
+        .expect("a restore");
+        assert_eq!(restored.view().rows, engine.view().rows);
+        // The scrollback came back too: line 01 is still there to copy.
+        restored.copy(CopyAction::Search("line 01".to_owned()));
+        assert_eq!(restored.copy(CopyAction::Yank).as_deref(), Some("line 01"));
+    }
+
+    #[test]
+    fn a_gap_in_the_log_shows_where_output_went_missing() {
+        let mut engine = engine();
+        let checkpoint = engine.encode_snapshot().expect("a snapshot");
+        let mut restored = Ghostty::restore(
+            Geometry {
+                cols: 30,
+                rows: 5,
+                scrollback_lines: 100,
+            },
+            Box::new(std::io::sink()),
+            &checkpoint,
+            &[Entry::Output(b"before".to_vec()), Entry::Gap],
+        )
+        .expect("a restore");
+        let view = restored.view();
+        assert!(
+            view.rows
+                .iter()
+                .any(|row| text_of(row).contains("output missing"))
+        );
     }
 
     fn text_of(row: &Row) -> String {
