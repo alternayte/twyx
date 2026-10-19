@@ -16,9 +16,10 @@ use crossterm::event::{
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, terminal};
 
-use twyx_core::keys::{Command, Keymap, Mode, Outcome};
+use twyx_core::config::{Config, ConfigError, ThemeConfig};
+use twyx_core::keys::{Command, Mode, Outcome};
 use twyx_core::layout::LeafId;
-use twyx_core::theme::{Rgb, Theme, Variant};
+use twyx_core::theme::Rgb;
 use twyx_protocol::client::{
     FromDaemon, Launch, PaneInfo, Place, ToDaemon, WorkspaceInfo, request,
 };
@@ -39,12 +40,13 @@ use twyx_protocol::view::View;
 
 /// Attaches the terminal client to the daemon.
 pub fn attach(paths: &twyx_core::paths::Paths) -> Result<()> {
-    let config = twyx_core::config::load(&paths.config.join("config.toml"))?;
+    let config_file = paths.config.join("config.toml");
+    let config = twyx_core::config::load(&config_file)?;
     client::ensure_daemon(paths)?;
     let (cols, rows) = clamp_size(terminal::size().context("read the terminal size")?);
 
-    let mut screen = Screen::start()?;
-    let result = run(paths, cols, rows, &mut screen, config.keymap);
+    let mut screen = Screen::start(config.theme)?;
+    let result = run(paths, cols, rows, &mut screen, config, &config_file);
     screen.stop();
     result
 }
@@ -157,8 +159,13 @@ fn run(
     cols: u16,
     rows: u16,
     screen: &mut Screen,
-    mut keymap: Keymap,
+    config: Config,
+    config_file: &std::path::Path,
 ) -> Result<()> {
+    let mut keymap = config.keymap;
+    let mut watch = Watch::new(config_file);
+    // The last reload's error, until a good one replaces it.
+    let mut notice: Option<String> = None;
     let mut size = (cols.max(2), rows.max(1 + CHROME_ROWS));
     let area = tab_area(size.0, size.1);
     let mut daemon = client::connect(&paths.socket(), area.0, area.1, true)?.split();
@@ -190,6 +197,7 @@ fn run(
                 keymap: &keymap,
                 selection: mouse.selection(),
                 overlay: overlay.as_ref(),
+                notice: notice.as_deref(),
             }
         };
     }
@@ -282,6 +290,20 @@ fn run(
             follow.had_panes = true;
         }
         follow.shown = follow.focused_pane();
+
+        if let Some(reloaded) = watch.poll() {
+            match reloaded {
+                Ok(config) => {
+                    keymap = config.keymap;
+                    screen.retheme(config.theme);
+                    screen.emitter.invalidate();
+                    notice = None;
+                }
+                // A bad file keeps the last good config.
+                Err(error) => notice = Some(error.to_string()),
+            }
+            dirty = true;
+        }
 
         if dirty {
             dirty = false;
@@ -463,6 +485,45 @@ fn run(
     }
 }
 
+/// Notices when `config.toml` changes, by its modification time, at most
+/// once per reload interval.
+#[derive(Debug)]
+struct Watch {
+    file: std::path::PathBuf,
+    modified: Option<std::time::SystemTime>,
+    checked: Instant,
+}
+
+impl Watch {
+    fn new(file: &std::path::Path) -> Self {
+        Self {
+            file: file.to_path_buf(),
+            modified: modified(file),
+            checked: Instant::now(),
+        }
+    }
+
+    /// The config again, if the file changed since the last look.
+    fn poll(&mut self) -> Option<Result<Config, ConfigError>> {
+        if self.checked.elapsed() < twyx_core::tuning::CONFIG_POLL {
+            return None;
+        }
+        self.checked = Instant::now();
+        let now = modified(&self.file);
+        if now == self.modified {
+            return None;
+        }
+        self.modified = now;
+        Some(twyx_core::config::load(&self.file))
+    }
+}
+
+fn modified(file: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(file)
+        .and_then(|meta| meta.modified())
+        .ok()
+}
+
 /// A terminal that reports no size is not one twyx can lay out; fall back to
 /// the usual 80 by 24 rather than creating a one cell pane.
 fn clamp_size((cols, rows): (u16, u16)) -> (u16, u16) {
@@ -485,6 +546,8 @@ pub struct Screen {
     capabilities: Capabilities,
     /// The theme on this terminal's paper.
     pen: Pen,
+    /// What the terminal said its paper and ink are, for a theme reload.
+    paper: (Option<Rgb>, Option<Rgb>, Depth),
     active: bool,
 }
 
@@ -498,7 +561,7 @@ impl std::fmt::Debug for Screen {
 }
 
 impl Screen {
-    fn start() -> Result<Self> {
+    fn start(theme: ThemeConfig) -> Result<Self> {
         terminal::enable_raw_mode().context("enter raw mode")?;
         let answers = probe::interrogate(&mut tty()?).unwrap_or_default();
         let capabilities = answers.capabilities();
@@ -507,7 +570,7 @@ impl Screen {
         } else {
             Depth::Palette256
         };
-        let pen = Pen::on_paper(Theme::on(answers.paper, answers.ink, Variant::Dark), depth);
+        let pen = Pen::on_paper(theme.resolve(answers.paper, answers.ink), depth);
 
         let mut stdout = std::io::stdout();
         execute!(
@@ -534,8 +597,14 @@ impl Screen {
             emitter: Emitter::new(std::io::stdout(), capabilities),
             capabilities,
             pen,
+            paper: (answers.paper, answers.ink, depth),
             active: true,
         })
+    }
+
+    fn retheme(&mut self, theme: ThemeConfig) {
+        let (paper, ink, depth) = self.paper;
+        self.pen = Pen::on_paper(theme.resolve(paper, ink), depth);
     }
 
     fn write(&mut self, bytes: &str) -> Result<()> {

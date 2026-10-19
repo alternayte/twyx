@@ -10,10 +10,35 @@ use serde::Deserialize;
 use toml::Spanned;
 
 use crate::keys::{Chord, Command, Keymap, Mode};
+use crate::theme::{Rgb, Theme, Variant};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
     pub keymap: Keymap,
+    pub theme: ThemeConfig,
+}
+
+/// `[theme]`: the reference sheet's colours apply on any paper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ThemeConfig {
+    /// Light or dark; `None` reads it from the terminal's paper.
+    pub variant: Option<Variant>,
+    /// Replaces the accent.
+    pub accent: Option<Rgb>,
+}
+
+impl ThemeConfig {
+    /// The tokens for a terminal's paper and ink.
+    pub fn resolve(&self, paper: Option<Rgb>, ink: Option<Rgb>) -> Theme {
+        let theme = match self.variant {
+            Some(variant) => Theme::forced(variant, paper, ink),
+            None => Theme::on(paper, ink, Variant::Dark),
+        };
+        match self.accent {
+            Some(accent) => theme.with_accent(accent),
+            None => theme,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +63,14 @@ type Bindings = BTreeMap<Spanned<String>, Spanned<String>>;
 #[serde(deny_unknown_fields)]
 struct Raw {
     keys: Option<RawKeys>,
+    theme: Option<RawTheme>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTheme {
+    variant: Option<Spanned<String>>,
+    accent: Option<Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,9 +113,33 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
             error.message().trim_end_matches('\n').to_owned(),
         )
     })?;
+    let mut theme = ThemeConfig::default();
+    if let Some(raw_theme) = raw.theme {
+        if let Some(variant) = raw_theme.variant {
+            theme.variant = match variant.get_ref().as_str() {
+                "auto" => None,
+                "light" => Some(Variant::Light),
+                "dark" => Some(Variant::Dark),
+                other => {
+                    return Err(fail(
+                        Some(variant.span()),
+                        format!("variant {other:?} is not auto, light or dark"),
+                    ));
+                }
+            };
+        }
+        if let Some(accent) = raw_theme.accent {
+            theme.accent = Some(
+                accent
+                    .get_ref()
+                    .parse()
+                    .map_err(|reason| fail(Some(accent.span()), reason))?,
+            );
+        }
+    }
     let mut keymap = Keymap::default();
     let Some(keys) = raw.keys else {
-        return Ok(Config { keymap });
+        return Ok(Config { keymap, theme });
     };
     if let Some(prefix) = keys.prefix {
         keymap.prefix = prefix
@@ -122,7 +179,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
             keymap.bind(mode, chord, command);
         }
     }
-    Ok(Config { keymap })
+    Ok(Config { keymap, theme })
 }
 
 #[cfg(test)]
@@ -165,9 +222,23 @@ mod tests {
         assert_eq!(error.line, 2);
         let error = read("[keys.pane]\nesc = \"close-pane\"\n").expect_err("esc is taken");
         assert_eq!(error.line, 2);
-        let error = read("[theme]\nname = \"x\"\n").expect_err("an unknown section");
+        let error = read("[themes]\nname = \"x\"\n").expect_err("an unknown section");
         assert_eq!(error.line, 1);
-        assert!(error.reason.contains("theme"), "{}", error.reason);
+        assert!(error.reason.contains("themes"), "{}", error.reason);
+        let error = read("[theme]\n\naccent = \"blue\"\n").expect_err("a named colour");
+        assert_eq!(error.line, 3);
+        let error = read("[theme]\nvariant = \"sepia\"\n").expect_err("an unknown variant");
+        assert_eq!(error.line, 2);
+    }
+
+    #[test]
+    fn the_theme_forces_a_variant_and_replaces_the_accent() {
+        let theme = read("[theme]\nvariant = \"light\"\naccent = \"#cc3311\"\n")
+            .expect("a config")
+            .theme
+            .resolve(Some(Rgb::hex(0x000000)), None);
+        assert_eq!(theme.variant, Variant::Light);
+        assert_eq!(theme.accent, Rgb::hex(0xCC3311));
     }
 
     #[test]

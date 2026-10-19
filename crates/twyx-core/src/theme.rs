@@ -86,6 +86,21 @@ impl Rgb {
     }
 }
 
+impl std::str::FromStr for Rgb {
+    type Err = String;
+
+    /// `#rrggbb`.
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let digits = text
+            .strip_prefix('#')
+            .filter(|digits| digits.len() == 6)
+            .ok_or_else(|| format!("{text:?} is not a colour; write it as #rrggbb"))?;
+        u32::from_str_radix(digits, 16)
+            .map(Rgb::hex)
+            .map_err(|_| format!("{text:?} is not a colour; write it as #rrggbb"))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variant {
     Light,
@@ -324,6 +339,25 @@ impl Theme {
             paper.unwrap_or(sheet.paper),
             ink.unwrap_or(sheet.ink),
         )
+    }
+
+    /// The tokens for the user's paper and ink, with the variant chosen in
+    /// config rather than read from the paper.
+    pub fn forced(variant: Variant, paper: Option<Rgb>, ink: Option<Rgb>) -> Self {
+        let sheet = Sheet::of(variant);
+        Self::build(
+            variant,
+            paper.unwrap_or(sheet.paper),
+            ink.unwrap_or(sheet.ink),
+        )
+    }
+
+    /// The same tokens with another accent.
+    pub fn with_accent(mut self, accent: Rgb) -> Self {
+        self.accent = accent;
+        self.type_.mode.tone = Tone::Rgb(accent);
+        self.type_.matched.tone = Tone::Rgb(accent);
+        self
     }
 
     /// The tokens for a sheet twyx paints itself.

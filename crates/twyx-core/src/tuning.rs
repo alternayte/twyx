@@ -48,3 +48,6 @@ pub const RESIZE_STEP: f32 = 0.05;
 
 /// How far one move step takes a floating pane, as a share of the tab area.
 pub const FLOATING_STEP: f32 = 0.05;
+
+/// How often a client looks for a changed config file.
+pub const CONFIG_POLL: Duration = Duration::from_secs(1);

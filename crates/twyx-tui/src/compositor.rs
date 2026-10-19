@@ -46,6 +46,8 @@ pub struct Scene<'a> {
     pub selection: Option<Selection>,
     /// The palette or a prompt, over everything else.
     pub overlay: Option<&'a Overlay>,
+    /// A message for the status bar, such as a config error.
+    pub notice: Option<&'a str>,
 }
 
 /// The tab area: the screen between the tab bar and the status bar.
@@ -282,10 +284,10 @@ impl Scene<'_> {
             .map(|info| info.cwd.rsplit('/').next().unwrap_or_default().to_owned())
             .unwrap_or_default();
         let lease = self.tab_info().and_then(|tab| tab.lease);
-        let note = if lease.is_some() && lease != Some(self.client) {
-            "sized by another client"
-        } else {
-            ""
+        let note = match self.notice {
+            Some(notice) => notice,
+            None if lease.is_some() && lease != Some(self.client) => "sized by another client",
+            None => "",
         };
         StatusBar {
             pen: self.pen,
@@ -589,6 +591,7 @@ mod tests {
             keymap: &keymap,
             selection: None,
             overlay: None,
+            notice: None,
         }
         .compose();
         grid.cells
