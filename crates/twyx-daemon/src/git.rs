@@ -362,9 +362,9 @@ pub(crate) fn unpushed(worktree: &Path, limit: usize) -> Result<(Vec<Commit>, u3
     ))
 }
 
-/// The commits of a worktree's HEAD that the base does not have.
-pub(crate) fn unmerged(worktree: &Path, base: &str) -> Result<Vec<Commit>> {
-    log(worktree, &[&format!("{base}..HEAD")])
+/// The commits of `head` that the base does not have.
+pub(crate) fn unmerged(dir: &Path, base: &str, head: &str) -> Result<Vec<Commit>> {
+    log(dir, &[&format!("{base}..{head}")])
 }
 
 fn log(dir: &Path, revisions: &[&str]) -> Result<Vec<Commit>> {
@@ -447,6 +447,69 @@ pub(crate) fn add_worktree(dir: &Path, path: &Path, branch: &str, start: &str) -
         run(git(dir, &["worktree", "add", "-b", branch, &path, start]))?;
     }
     Ok(())
+}
+
+/// The paths in a worktree that match the gitignore-style patterns of
+/// `patterns` and that Git ignores, whole directories as one entry.
+pub(crate) fn ignored_matching(worktree: &Path, patterns: &Path) -> Result<Vec<String>> {
+    let exclude = format!("--exclude-from={}", patterns.display());
+    let candidates = run(background(
+        worktree,
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--directory",
+            &exclude,
+        ],
+    ))?;
+    let candidates: Vec<&str> = candidates
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .collect();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut command = background(worktree, &["check-ignore", "-z", "--stdin"]);
+    command.stdin(Stdio::piped());
+    let line = command_line(&command);
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("run {line}; is Git installed?"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        for path in &candidates {
+            // A collapsed directory ends in a slash, which check-ignore reads
+            // as the directory itself.
+            stdin
+                .write_all(path.trim_end_matches('/').as_bytes())
+                .and_then(|()| stdin.write_all(b"\0"))
+                .with_context(|| format!("write to {line}"))?;
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .with_context(|| format!("run {line}"))?;
+    // Exit 1 means none of them is ignored.
+    if !output.status.success() && output.status.code() != Some(1) {
+        return Err(GitError {
+            command: line,
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+        .into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Deletes a local branch: `-d`, or `-D` when `force`.
+pub(crate) fn delete_branch(dir: &Path, branch: &str, force: bool) -> Result<()> {
+    let flag = if force { "-D" } else { "-d" };
+    run(git(dir, &["branch", flag, "--", branch])).map(|_| ())
 }
 
 /// Removes a worktree. `force` discards its changes and untracked files.
@@ -663,7 +726,7 @@ mod tests {
         std::fs::write(path.join("fix.txt"), "fix\n").unwrap();
         repo.git(&["add", "fix.txt"], &path);
         repo.git(&["commit", "--quiet", "-m", "fix it"], &path);
-        let unmerged = unmerged(&path, &base).unwrap();
+        let unmerged = unmerged(&path, &base, "HEAD").unwrap();
         assert_eq!(unmerged.len(), 1);
         assert_eq!(unmerged[0].subject, "fix it");
         let (shown, total) = unpushed(&path, 1).unwrap();
@@ -679,6 +742,30 @@ mod tests {
         remove_worktree(&repo.path(), &path, true).unwrap();
         assert!(!path.exists());
         assert!(check_branch_name(&repo.path(), "-x").is_err());
+    }
+
+    #[test]
+    fn include_patterns_pick_only_ignored_paths() {
+        let repo = Repo::new("include");
+        std::fs::write(
+            repo.path().join(".gitignore"),
+            "node_modules/\n.env\nbuild/\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(repo.path().join("node_modules/a")).unwrap();
+        std::fs::write(repo.path().join("node_modules/a/i.js"), "x").unwrap();
+        std::fs::write(repo.path().join(".env"), "K=V").unwrap();
+        std::fs::create_dir_all(repo.path().join("build")).unwrap();
+        std::fs::write(repo.path().join("build/out"), "x").unwrap();
+        std::fs::write(repo.path().join("notes.txt"), "untracked, not ignored").unwrap();
+        let patterns = repo.root.join("include");
+        std::fs::write(&patterns, "# deps\nnode_modules/\n.env\nnotes.txt\n").unwrap();
+        let mut found = ignored_matching(&repo.path(), &patterns).unwrap();
+        found.sort();
+        assert_eq!(found, vec![".env", "node_modules"]);
+        let none = repo.root.join("none");
+        std::fs::write(&none, "missing\n").unwrap();
+        assert!(ignored_matching(&repo.path(), &none).unwrap().is_empty());
     }
 
     #[test]

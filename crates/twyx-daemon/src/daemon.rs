@@ -742,7 +742,19 @@ impl Daemon {
                 start,
             } => self.new_worktree(id, project, branch, start, None),
             ToDaemon::PlanRemoval { worktree } => self.plan_removal(id, worktree),
-            ToDaemon::RemoveWorktree { plan } => self.remove_worktree(id, plan),
+            ToDaemon::RemoveWorktree {
+                plan,
+                delete_branch,
+            } => self.remove_worktree(id, plan, delete_branch),
+            ToDaemon::Setup { worktree } => self.setup_file(id, worktree),
+            ToDaemon::TrustSetup { worktree, hash } => self.trust_setup(id, worktree, hash),
+            ToDaemon::RunSetup { worktree } => {
+                if self.worktrees.contains_key(&worktree) {
+                    self.prepare(worktree, crate::setup::After::Again { client: id });
+                } else {
+                    self.refuse(id, format!("no worktree {worktree}"));
+                }
+            }
             ToDaemon::Recipes { workspace } => self.list_recipes(id, workspace),
             ToDaemon::RunRecipe {
                 workspace,

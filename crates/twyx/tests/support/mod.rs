@@ -264,7 +264,10 @@ impl Client {
             | FromDaemon::WorktreeRemoved { .. }
             | FromDaemon::Recipes(_)
             | FromDaemon::RecipeOpened { .. }
-            | FromDaemon::RecipeTrusted { .. } => {}
+            | FromDaemon::RecipeTrusted { .. }
+            | FromDaemon::SetupFile(_)
+            | FromDaemon::SetupTrusted { .. }
+            | FromDaemon::SetupDone { .. } => {}
         }
     }
 

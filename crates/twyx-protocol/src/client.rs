@@ -159,9 +159,41 @@ pub struct RemovalPlan {
     /// Commits the base branch does not have, and the base.
     pub unmerged: Vec<CommitInfo>,
     pub base: Option<String>,
+    /// The branch a confirmation may delete; `None` when HEAD is detached.
+    pub branch: Option<String>,
     /// Live panes that the removal kills: those spawned in the worktree and
     /// those in its workspace.
     pub panes: Vec<PaneInfo>,
+}
+
+/// A worktree's `.twyx/worktree.toml`, as the trust prompt shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupInfo {
+    pub worktree: u64,
+    /// Relative to the worktree.
+    pub path: String,
+    /// The SHA-256 of the content shown here.
+    pub hash: String,
+    pub trusted: bool,
+    /// Paths linked from the main worktree.
+    pub shared: Vec<String>,
+    pub commands: Vec<String>,
+    /// Why the file could not be read; it does not run.
+    pub error: Option<String>,
+}
+
+/// What setting up a worktree did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupReport {
+    /// Gitignored paths copied from the main worktree.
+    pub copied: Vec<String>,
+    /// Shared paths linked from the main worktree.
+    pub linked: Vec<String>,
+    /// The pane that runs the setup commands.
+    pub pane: Option<u64>,
+    /// The setup file is not trusted in its content, so nothing of it ran.
+    pub untrusted: bool,
+    pub errors: Vec<String>,
 }
 
 /// Where a recipe comes from.
@@ -365,8 +397,25 @@ pub enum ToDaemon {
     },
     /// Removes a worktree as the plan listed it: its panes are killed
     /// first, and its changes are discarded only when the plan listed them.
+    /// With `delete_branch`, the branch goes too: with `git branch -d`, or
+    /// `-D` when the plan listed its unmerged commits.
     RemoveWorktree {
         plan: u64,
+        delete_branch: bool,
+    },
+    /// A worktree's setup file, for the trust prompt.
+    Setup {
+        worktree: u64,
+    },
+    /// Trusts a worktree's setup file whose content has this hash.
+    TrustSetup {
+        worktree: u64,
+        hash: String,
+    },
+    /// Sets a worktree up again: copies, links and, when trusted, the
+    /// setup commands in a pane.
+    RunSetup {
+        worktree: u64,
     },
     /// The recipes a workspace can run: built in, the user's, and its
     /// repository's.
@@ -449,10 +498,23 @@ pub enum FromDaemon {
     WorktreeAdded {
         worktree: WorktreeInfo,
         workspace: u64,
+        setup: SetupReport,
     },
     RemovalPlan(RemovalPlan),
+    /// A worktree is gone. `branch` says what became of its branch when
+    /// the confirmation asked to delete it.
     WorktreeRemoved {
         worktree: u64,
+        branch: Option<Result<String, String>>,
+    },
+    /// `None` when the worktree has no setup file.
+    SetupFile(Option<SetupInfo>),
+    SetupTrusted {
+        worktree: u64,
+    },
+    SetupDone {
+        worktree: u64,
+        report: SetupReport,
     },
     Recipes(Vec<RecipeInfo>),
     /// A recipe opened its tabs in a workspace, shown in `client`.

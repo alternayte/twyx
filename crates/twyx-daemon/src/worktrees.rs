@@ -58,6 +58,7 @@ pub(crate) struct Removal {
     panes: Vec<PaneId>,
     since: Instant,
     started: bool,
+    delete: Option<Deletion>,
 }
 
 /// A plan the daemon offered, to be confirmed as it was.
@@ -66,6 +67,33 @@ pub(crate) struct Plan {
     worktree: u64,
     force: bool,
     panes: Vec<PaneId>,
+    deletion: Option<Deletion>,
+}
+
+/// The branch a confirmed removal may delete, and the unmerged commits the
+/// prompt listed for it (Invariant 24).
+#[derive(Debug, Clone)]
+pub(crate) struct Deletion {
+    branch: String,
+    base: Option<String>,
+    listed: Vec<String>,
+}
+
+/// Deletes a removed worktree's branch: `-D` only when every unmerged
+/// commit it has now was listed in the prompt, else `-d`.
+fn delete_branch(main: &Path, deletion: &Deletion) -> Result<String, String> {
+    let head = format!("refs/heads/{}", deletion.branch);
+    let unmerged = match &deletion.base {
+        Some(base) => git::unmerged(main, base, &head).map_err(|error| message(&error))?,
+        None => Vec::new(),
+    };
+    let force = !unmerged.is_empty()
+        && unmerged
+            .iter()
+            .all(|commit| deletion.listed.contains(&commit.oid));
+    git::delete_branch(main, &deletion.branch, force)
+        .map(|()| deletion.branch.clone())
+        .map_err(|error| format!("the branch {} stays: {error:#}", deletion.branch))
 }
 
 /// An overview a command waits for: the projects to list and the
@@ -109,6 +137,13 @@ pub(crate) enum Done {
         client: u64,
         worktree: u64,
         result: Result<(), String>,
+        branch: Option<Result<String, String>>,
+    },
+    Prepared {
+        worktree: u64,
+        report: twyx_protocol::client::SetupReport,
+        script: Option<String>,
+        after: crate::setup::After,
     },
 }
 
@@ -130,7 +165,7 @@ fn message(error: &anyhow::Error) -> String {
 }
 
 impl Daemon {
-    fn job(&self, work: impl FnOnce() -> Done + Send + 'static) {
+    pub(crate) fn job(&self, work: impl FnOnce() -> Done + Send + 'static) {
         let events = self.events.clone();
         std::thread::spawn(move || {
             let _ = events.send(Event::Git(work()));
@@ -156,7 +191,7 @@ impl Daemon {
     }
 
     /// The main worktree's directory of a Git project.
-    fn main_path(&self, project: u64) -> Option<PathBuf> {
+    pub(crate) fn main_path(&self, project: u64) -> Option<PathBuf> {
         let project = self.projects.get(&project)?;
         let common = Path::new(&project.path);
         self.worktrees
@@ -281,19 +316,9 @@ impl Daemon {
                         Ok((id, workspace))
                     });
                 match added {
-                    Ok((id, workspace)) => {
+                    Ok((id, _)) => {
                         self.request_status(id);
-                        if let Some((recipe, switch)) = then {
-                            self.open_recipe(client, workspace, &recipe, switch);
-                        } else if let Some(worktree) = self.worktree_info(id) {
-                            self.reply(
-                                client,
-                                FromDaemon::WorktreeAdded {
-                                    worktree,
-                                    workspace,
-                                },
-                            );
-                        }
+                        self.prepare(id, crate::setup::After::Added { client, then });
                     }
                     Err(reason) => self.refuse(client, reason),
                 }
@@ -307,16 +332,23 @@ impl Daemon {
                 client,
                 worktree,
                 result,
+                branch,
             } => {
                 self.removals.retain(|removal| removal.worktree != worktree);
                 match result {
                     Ok(()) => {
                         self.forget_worktree(worktree);
-                        self.reply(client, FromDaemon::WorktreeRemoved { worktree });
+                        self.reply(client, FromDaemon::WorktreeRemoved { worktree, branch });
                     }
                     Err(reason) => self.refuse(client, reason),
                 }
             }
+            Done::Prepared {
+                worktree,
+                report,
+                script,
+                after,
+            } => self.prepared(worktree, report, script, after),
         }
     }
 
@@ -689,7 +721,7 @@ impl Daemon {
                 let (unpushed, unpushed_total) = git::unpushed(&path, tuning::PROMPT_COMMITS)?;
                 let base = git::base_branch(&path, base_branch.as_deref());
                 let unmerged = match &base {
-                    Some(base) => commits(git::unmerged(&path, base)?),
+                    Some(base) => commits(git::unmerged(&path, base, "HEAD")?),
                     None => Vec::new(),
                 };
                 anyhow::Ok(Findings {
@@ -743,6 +775,10 @@ impl Daemon {
             return;
         };
         let panes = self.removal_panes(worktree);
+        let branch = info
+            .git
+            .as_ref()
+            .map_or(info.branch.clone(), |git| git.branch.clone());
         self.plans.retain(|_, plan| plan.worktree != worktree);
         self.next_plan += 1;
         let id = self.next_plan;
@@ -752,6 +788,15 @@ impl Daemon {
                 worktree,
                 force: !findings.dirty.is_empty(),
                 panes: panes.clone(),
+                deletion: branch.clone().map(|branch| Deletion {
+                    branch,
+                    base: findings.base.clone(),
+                    listed: findings
+                        .unmerged
+                        .iter()
+                        .map(|commit| commit.oid.clone())
+                        .collect(),
+                }),
             },
         );
         let panes = panes
@@ -768,6 +813,7 @@ impl Daemon {
                 unpushed_total: findings.unpushed_total,
                 unmerged: findings.unmerged,
                 base: findings.base,
+                branch,
                 panes,
             }),
         );
@@ -776,7 +822,7 @@ impl Daemon {
     /// Removes a worktree as its plan listed it. A live pane the plan did
     /// not list stops the removal (Invariant 20); the listed ones are
     /// killed, and Git runs once they have ended.
-    pub(crate) fn remove_worktree(&mut self, client: u64, plan: u64) {
+    pub(crate) fn remove_worktree(&mut self, client: u64, plan: u64, delete_branch: bool) {
         let Some(plan) = self.plans.remove(&plan) else {
             self.refuse(
                 client,
@@ -786,6 +832,13 @@ impl Daemon {
         };
         if !self.worktrees.contains_key(&plan.worktree) {
             self.refuse(client, format!("no worktree {}", plan.worktree));
+            return;
+        }
+        if delete_branch && plan.deletion.is_none() {
+            self.refuse(
+                client,
+                "the worktree's HEAD is detached: no branch to delete".to_owned(),
+            );
             return;
         }
         let panes = self.removal_panes(plan.worktree);
@@ -820,6 +873,7 @@ impl Daemon {
             panes: plan.panes,
             since: Instant::now(),
             started: false,
+            delete: plan.deletion.filter(|_| delete_branch),
         });
         self.advance_removals();
     }
@@ -841,7 +895,12 @@ impl Daemon {
                 .collect();
             if alive.is_empty() {
                 removal.started = true;
-                start.push((removal.client, removal.worktree, removal.force));
+                start.push((
+                    removal.client,
+                    removal.worktree,
+                    removal.force,
+                    removal.delete.clone(),
+                ));
             } else if removal.since.elapsed() >= tuning::REMOVAL_KILL_WAIT {
                 stuck.push((removal.client, removal.worktree, alive));
             }
@@ -854,7 +913,7 @@ impl Daemon {
                 format!("panes {} did not end; the worktree stays", alive.join(", ")),
             );
         }
-        for (client, worktree, force) in start {
+        for (client, worktree, force, delete) in start {
             let Some(entry) = self.worktrees.get(&worktree) else {
                 continue;
             };
@@ -862,10 +921,19 @@ impl Daemon {
             let Some(main) = self.main_path(entry.project) else {
                 continue;
             };
-            self.job(move || Done::Removed {
-                client,
-                worktree,
-                result: git::remove_worktree(&main, &path, force).map_err(|e| message(&e)),
+            self.job(move || {
+                let result = git::remove_worktree(&main, &path, force).map_err(|e| message(&e));
+                // The branch goes only with the worktree.
+                let branch = match (&result, delete) {
+                    (Ok(()), Some(deletion)) => Some(delete_branch(&main, &deletion)),
+                    _ => None,
+                };
+                Done::Removed {
+                    client,
+                    worktree,
+                    result,
+                    branch,
+                }
             });
         }
     }

@@ -138,6 +138,48 @@ impl Daemon {
         self.send_focus_all();
     }
 
+    /// Opens a new tab in a workspace with one pane.
+    pub(crate) fn command_tab(
+        &mut self,
+        workspace: u64,
+        name: &str,
+        record: Pane,
+    ) -> Result<PaneId, String> {
+        let tab = self
+            .add_tab(workspace, name.to_owned())
+            .ok_or_else(|| "could not record a new tab".to_owned())?;
+        let pane = self
+            .reserve_pane(&record)
+            .map_err(|error| format!("{error:#}"))?;
+        let leaf = self.new_leaf(pane);
+        let Some(entry) = self.tab_mut(tab) else {
+            return Err("the new tab is gone".to_owned());
+        };
+        entry.layout.split(None, leaf, Axis::Row);
+        entry.focus = Some(leaf.id);
+        let inner = entry
+            .layout
+            .place(area_cells(entry.area))
+            .first()
+            .map(|placed| placed.inner)
+            .unwrap_or_default();
+        let record = Pane {
+            cols: inner.width.max(2),
+            rows: inner.height.max(1),
+            ..record
+        };
+        if let Err(error) = self.start_pane(pane, record, None) {
+            if let Some(entry) = self.tab_mut(tab) {
+                entry.layout.remove(leaf.id);
+            }
+            self.drop_empty_tab(tab);
+            return Err(format!("{error:#}"));
+        }
+        self.apply_size(tab);
+        self.broadcast_workspace();
+        Ok(pane)
+    }
+
     /// Starts a reserved pane's holder at the record's size, and shows the
     /// pane to every client.
     pub(crate) fn start_pane(

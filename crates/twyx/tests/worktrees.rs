@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use twyx_protocol::client::{FromDaemon, Overview, Place, RemovalPlan, ToDaemon};
+use twyx_protocol::client::{FromDaemon, Overview, Place, RemovalPlan, SetupReport, ToDaemon};
 
 use support::{Client, Sandbox, new_pane_at, sh};
 
@@ -219,6 +219,7 @@ fn invariant_20_removal_kills_the_listed_panes_before_git_runs_and_refuses_a_new
         FromDaemon::WorktreeAdded {
             worktree,
             workspace,
+            ..
         } => Some((worktree.clone(), *workspace)),
         _ => None,
     });
@@ -260,7 +261,10 @@ fn invariant_20_removal_kills_the_listed_panes_before_git_runs_and_refuses_a_new
     // A pane that starts after the prompt was not confirmed.
     let late = new_pane_at(&mut client, "", watch, Place::NewTab);
     command
-        .send(&ToDaemon::RemoveWorktree { plan: first.plan })
+        .send(&ToDaemon::RemoveWorktree {
+            plan: first.plan,
+            delete_branch: false,
+        })
         .unwrap();
     let refused = command.expect("a refusal", |message| match message {
         FromDaemon::Refused { reason } => Some(reason.clone()),
@@ -273,10 +277,13 @@ fn invariant_20_removal_kills_the_listed_panes_before_git_runs_and_refuses_a_new
     let second = plan(&mut command, worktree.worktree);
     assert_eq!(second.panes.len(), 3);
     command
-        .send(&ToDaemon::RemoveWorktree { plan: second.plan })
+        .send(&ToDaemon::RemoveWorktree {
+            plan: second.plan,
+            delete_branch: false,
+        })
         .unwrap();
     command.expect("the removal", |message| match message {
-        FromDaemon::WorktreeRemoved { worktree: gone } => {
+        FromDaemon::WorktreeRemoved { worktree: gone, .. } => {
             (*gone == worktree.worktree).then_some(())
         }
         _ => None,
@@ -337,7 +344,10 @@ fn a_change_after_a_clean_prompt_is_never_discarded() {
     assert!(clean.dirty.is_empty());
     std::fs::write(linked.join("late.txt"), "late\n").unwrap();
     command
-        .send(&ToDaemon::RemoveWorktree { plan: clean.plan })
+        .send(&ToDaemon::RemoveWorktree {
+            plan: clean.plan,
+            delete_branch: false,
+        })
         .unwrap();
     let refused = command.expect("a refusal", |message| match message {
         FromDaemon::Refused { reason } => Some(reason.clone()),
@@ -403,4 +413,158 @@ fn the_cli_opens_lists_creates_and_removes_from_inside_a_repository() {
     let removed = run(&["worktree", "rm", "topic", "--yes"]);
     assert!(removed.contains("removed topic"), "{removed}");
     assert!(!main.parent().unwrap().join("app.worktrees/topic").exists());
+}
+
+fn new_worktree(client: &mut Client, project: u64, branch: &str) -> (u64, PathBuf, SetupReport) {
+    client
+        .send(&ToDaemon::NewWorktree {
+            project,
+            branch: branch.to_owned(),
+            start: None,
+        })
+        .unwrap();
+    client.expect("the new worktree", |message| match message {
+        FromDaemon::WorktreeAdded {
+            worktree, setup, ..
+        } => Some((
+            worktree.worktree,
+            PathBuf::from(&worktree.path),
+            setup.clone(),
+        )),
+        _ => None,
+    })
+}
+
+fn commit(dir: &Path, file: &str) {
+    std::fs::write(dir.join(file), file).unwrap();
+    git(dir, &["add", file]);
+    git(dir, &["commit", "--quiet", "-m", file]);
+}
+
+fn remove(client: &mut Client, plan: &RemovalPlan) -> Option<Result<String, String>> {
+    client
+        .send(&ToDaemon::RemoveWorktree {
+            plan: plan.plan,
+            delete_branch: true,
+        })
+        .unwrap();
+    client.expect("the removal", |message| match message {
+        FromDaemon::WorktreeRemoved { branch, .. } => Some(branch.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn invariant_24_a_branch_is_force_deleted_only_when_the_prompt_listed_its_unmerged_commits() {
+    let mut sandbox = Sandbox::new("branch");
+    sandbox.start();
+    let main = repo(&sandbox, "app");
+    let mut command = Client::command(&sandbox.socket());
+    open(&mut command, &main);
+    let project = overview(&mut command).projects[0].project;
+    let has_branch = |name: &str| !git(&main, &["branch", "--list", name]).trim().is_empty();
+
+    // Unmerged commits that the prompt listed: -D.
+    let (listed, path, _) = new_worktree(&mut command, project, "listed");
+    commit(&path, "work.txt");
+    let plan = plan(&mut command, listed);
+    assert_eq!(plan.branch.as_deref(), Some("listed"));
+    assert_eq!(plan.unmerged.len(), 1);
+    assert_eq!(remove(&mut command, &plan), Some(Ok("listed".to_owned())));
+    assert!(!has_branch("listed"));
+
+    // Merged: -d.
+    let (merged, _, _) = new_worktree(&mut command, project, "merged");
+    let plan_merged = self::plan(&mut command, merged);
+    assert!(plan_merged.unmerged.is_empty());
+    assert_eq!(
+        remove(&mut command, &plan_merged),
+        Some(Ok("merged".to_owned()))
+    );
+    assert!(!has_branch("merged"));
+
+    // A commit after a prompt that listed none: the worktree goes, the
+    // branch stays.
+    let (late, path, _) = new_worktree(&mut command, project, "late");
+    let plan_late = self::plan(&mut command, late);
+    assert!(plan_late.unmerged.is_empty());
+    commit(&path, "late.txt");
+    let Some(Err(error)) = remove(&mut command, &plan_late) else {
+        panic!("the branch was deleted");
+    };
+    assert!(error.contains("the branch late stays"), "{error}");
+    assert!(!path.exists());
+    assert!(has_branch("late"));
+}
+
+#[test]
+fn a_new_worktree_gets_its_ignored_files_and_runs_setup_only_once_trusted() {
+    let mut sandbox = Sandbox::new("setup");
+    sandbox.start();
+    let main = repo(&sandbox, "app");
+    std::fs::write(main.join(".gitignore"), "node_modules/\n.env\n").unwrap();
+    std::fs::write(main.join(".worktreeinclude"), "# secrets\n.env\n").unwrap();
+    std::fs::create_dir_all(main.join(".twyx")).unwrap();
+    std::fs::write(
+        main.join(".twyx/worktree.toml"),
+        "shared = [\"node_modules\"]\nsetup = [\"touch setup-ran\"]\n",
+    )
+    .unwrap();
+    git(&main, &["add", "."]);
+    git(&main, &["commit", "--quiet", "-m", "setup"]);
+    std::fs::write(main.join(".env"), "KEY=1\n").unwrap();
+    std::fs::create_dir_all(main.join("node_modules/dep")).unwrap();
+
+    let mut command = Client::command(&sandbox.socket());
+    open(&mut command, &main);
+    let project = overview(&mut command).projects[0].project;
+    let (worktree, path, report) = new_worktree(&mut command, project, "feature");
+    assert_eq!(report.copied, vec![".env"]);
+    assert!(report.untrusted);
+    assert!(
+        report.linked.is_empty() && report.pane.is_none(),
+        "{report:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join(".env")).unwrap(),
+        "KEY=1\n"
+    );
+    assert!(!path.join("node_modules").exists());
+
+    command.send(&ToDaemon::Setup { worktree }).unwrap();
+    let info = command
+        .expect("the setup file", |message| match message {
+            FromDaemon::SetupFile(info) => Some(info.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(info.commands, vec!["touch setup-ran"]);
+    command
+        .send(&ToDaemon::TrustSetup {
+            worktree,
+            hash: info.hash,
+        })
+        .unwrap();
+    command.expect("the trust", |message| match message {
+        FromDaemon::SetupTrusted { .. } => Some(()),
+        _ => None,
+    });
+    command.send(&ToDaemon::RunSetup { worktree }).unwrap();
+    let report = command.expect("the setup", |message| match message {
+        FromDaemon::SetupDone { report, .. } => Some(report.clone()),
+        _ => None,
+    });
+    assert_eq!(report.linked, vec!["node_modules"]);
+    assert!(report.pane.is_some(), "{report:?}");
+    assert!(
+        path.join("node_modules")
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink()
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.join("setup-ran").exists() {
+        assert!(Instant::now() < deadline, "the setup commands did not run");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

@@ -12,5 +12,6 @@ pub mod palette;
 pub mod pane;
 pub mod paths;
 pub mod recipe;
+pub mod setup;
 pub mod theme;
 pub mod tuning;

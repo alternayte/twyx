@@ -9,7 +9,8 @@ use serde::Serialize;
 
 use twyx_core::paths::Paths;
 use twyx_protocol::client::{
-    FromDaemon, Overview, ProjectInfo, RemovalPlan, ToDaemon, WorkspaceSummary, WorktreeInfo,
+    FromDaemon, Overview, ProjectInfo, RemovalPlan, SetupReport, ToDaemon, WorkspaceSummary,
+    WorktreeInfo,
 };
 use twyx_protocol::connection::{self as client, Connection};
 
@@ -64,8 +65,23 @@ pub enum WorktreeCommand {
         /// Remove without asking.
         #[arg(long)]
         yes: bool,
+        /// Delete the worktree's branch too: with git branch -d, or -D when
+        /// the prompt listed its unmerged commits.
+        #[arg(long)]
+        delete_branch: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// Show a worktree's .twyx/worktree.toml, trust it as it is now, and set
+    /// the worktree up: copies, links and the setup commands in a pane.
+    Setup {
+        /// A worktree name, branch, path or id.
+        worktree: String,
+        #[arg(long)]
+        project: Option<String>,
+        /// Trust without asking.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -451,29 +467,52 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
                 branch,
                 start: from,
             })?;
-            let (worktree, workspace) = wait(&mut connection, |message| match message {
+            let (worktree, workspace, setup) = wait(&mut connection, |message| match message {
                 FromDaemon::WorktreeAdded {
                     worktree,
                     workspace,
-                } => Some((worktree, workspace)),
+                    setup,
+                } => Some((worktree, workspace, setup)),
                 _ => None,
             })?;
             if json {
                 return print_json(&serde_json::json!({
                     "worktree": worktree,
                     "workspace": workspace,
+                    "setup": setup,
                 }));
             }
             println!(
                 "created {} at {}: workspace {workspace}",
                 worktree.name, worktree.path
             );
+            print_setup(&setup);
+            if setup.untrusted && std::io::stdin().is_terminal() {
+                set_up(&mut connection, worktree.worktree, false)?;
+            }
             Ok(())
+        }
+        WorktreeCommand::Setup {
+            worktree,
+            project,
+            yes,
+        } => {
+            let project = match project {
+                Some(project) => {
+                    Some(find_project(&mut connection, &mut overview, Some(&project))?.project)
+                }
+                None => None,
+            };
+            let target = find_worktree(&overview, project, &worktree)?
+                .with_context(|| format!("no worktree {worktree}; twyx ls lists them"))?
+                .worktree;
+            set_up(&mut connection, target, yes)
         }
         WorktreeCommand::Rm {
             worktree,
             project,
             yes,
+            delete_branch,
             json,
         } => {
             let project = match project {
@@ -490,8 +529,21 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
                 FromDaemon::RemovalPlan(plan) => Some(plan),
                 _ => None,
             })?;
+            if delete_branch && plan.branch.is_none() {
+                bail!("the worktree's HEAD is detached: no branch to delete");
+            }
             if !json {
                 print_plan(&plan);
+                if let (true, Some(branch)) = (delete_branch, &plan.branch) {
+                    if plan.unmerged.is_empty() {
+                        println!("  The branch {branch} is deleted with git branch -d.");
+                    } else {
+                        println!(
+                            "  The branch {branch} is deleted with git branch -D, losing the {} commits not in the base above.",
+                            plan.unmerged.len()
+                        );
+                    }
+                }
             }
             let confirmed = yes
                 || (!json
@@ -506,18 +558,104 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
                 println!("kept {}", plan.worktree.name);
                 return Ok(());
             }
-            connection.send(&ToDaemon::RemoveWorktree { plan: plan.plan })?;
-            wait(&mut connection, |message| match message {
-                FromDaemon::WorktreeRemoved { worktree } if worktree == target => Some(()),
+            connection.send(&ToDaemon::RemoveWorktree {
+                plan: plan.plan,
+                delete_branch,
+            })?;
+            let branch = wait(&mut connection, |message| match message {
+                FromDaemon::WorktreeRemoved { worktree, branch } if worktree == target => {
+                    Some(branch)
+                }
                 _ => None,
             })?;
             if json {
-                return print_json(&serde_json::json!({ "plan": plan, "removed": true }));
+                return print_json(&serde_json::json!({
+                    "plan": plan,
+                    "removed": true,
+                    "branch": branch,
+                }));
             }
             println!("removed {}", plan.worktree.name);
+            match branch {
+                Some(Ok(branch)) => println!("deleted the branch {branch}"),
+                Some(Err(error)) => println!("{error}"),
+                None => {}
+            }
             Ok(())
         }
     }
+}
+
+fn print_setup(report: &SetupReport) {
+    if !report.copied.is_empty() {
+        println!(
+            "copied from the main worktree: {}",
+            report.copied.join(", ")
+        );
+    }
+    if !report.linked.is_empty() {
+        println!(
+            "linked from the main worktree: {}",
+            report.linked.join(", ")
+        );
+    }
+    if let Some(pane) = report.pane {
+        println!("the setup commands run in pane {pane}");
+    }
+    if report.untrusted {
+        println!(".twyx/worktree.toml is not trusted, so its links and commands did not run");
+    }
+    for error in &report.errors {
+        println!("setup: {error}");
+    }
+}
+
+/// Shows a worktree's setup file, trusts it on a yes, and sets the
+/// worktree up.
+fn set_up(connection: &mut Connection, worktree: u64, yes: bool) -> Result<()> {
+    connection.send(&ToDaemon::Setup { worktree })?;
+    let info = wait(connection, |message| match message {
+        FromDaemon::SetupFile(info) => Some(info),
+        _ => None,
+    })?;
+    if let Some(info) = info.filter(|info| !info.trusted) {
+        if let Some(error) = &info.error {
+            bail!("{error}");
+        }
+        println!("{} in the worktree", info.path);
+        println!("  sha256 {}", info.hash);
+        for path in &info.shared {
+            println!("  links {path} from the main worktree");
+        }
+        for command in &info.commands {
+            println!("  runs {command}");
+        }
+        println!("Trust covers this file as it is now, not the scripts its commands run.");
+        if !yes
+            && !ask(
+                "Trust it?",
+                "not trusted: run twyx worktree setup on a terminal, or pass --yes",
+            )?
+        {
+            println!("not trusted; nothing of it ran");
+            return Ok(());
+        }
+        connection.send(&ToDaemon::TrustSetup {
+            worktree,
+            hash: info.hash.clone(),
+        })?;
+        wait(connection, |message| match message {
+            FromDaemon::SetupTrusted { .. } => Some(()),
+            _ => None,
+        })?;
+    }
+    connection.send(&ToDaemon::RunSetup { worktree })?;
+    let report = wait(connection, |message| match message {
+        FromDaemon::SetupDone { report, .. } => Some(report),
+        _ => None,
+    })?;
+    print_setup(&report);
+    Ok(())
 }
 
 fn print_plan(plan: &RemovalPlan) {

@@ -270,6 +270,9 @@ impl Terminal {
                         | FromDaemon::Recipes(_)
                         | FromDaemon::RecipeOpened { .. }
                         | FromDaemon::RecipeTrusted { .. }
+                        | FromDaemon::SetupFile(_)
+                        | FromDaemon::SetupTrusted { .. }
+                        | FromDaemon::SetupDone { .. }
                         | FromDaemon::Unsupported { .. }
                         | FromDaemon::Snapshot { .. }
                         | FromDaemon::Frame { .. } => {}
