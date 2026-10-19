@@ -43,12 +43,14 @@ pub fn connect(socket: &Path, cols: u16, rows: u16, interactive: bool) -> Result
             pid: 0,
             client: 0,
             panes: Vec::new(),
+            clients: 0,
+            legacy: Vec::new(),
         },
     };
     connection.send(&ToDaemon::Hello(ClientHello {
         major: MAJOR,
         minor: MINOR,
-        build: env!("CARGO_PKG_VERSION").to_owned(),
+        build: crate::BUILD_ID.to_owned(),
         cols,
         rows,
         interactive,
@@ -58,8 +60,8 @@ pub fn connect(socket: &Path, cols: u16, rows: u16, interactive: bool) -> Result
             connection.hello = hello;
             Ok(connection)
         }
-        FromDaemon::Unsupported { major, minor } => {
-            bail!("the daemon speaks client protocol {major}.{minor}")
+        FromDaemon::Unsupported { major, minor, pid } => {
+            Err(Unsupported { major, minor, pid }.into())
         }
         other => bail!("the daemon greeted with {other:?}"),
     }
@@ -82,6 +84,79 @@ fn daemon_binary() -> Result<std::path::PathBuf> {
 }
 
 /// Waits for a daemon to answer, starting one first when there is none.
+/// A daemon that speaks another major of the client protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unsupported {
+    pub major: u16,
+    pub minor: u16,
+    pub pid: u32,
+}
+
+impl std::fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the daemon (pid {}) speaks client protocol {}.{}",
+            self.pid, self.major, self.minor
+        )
+    }
+}
+
+impl std::error::Error for Unsupported {}
+
+/// Connects to this build's daemon. A daemon from another build is stopped
+/// and a new one started, so the panes it adopts keep running: at once when
+/// no other interactive client is attached, or when it cannot serve this
+/// client at all, and otherwise only after `ask` agrees. `ask` gets the
+/// number of other clients; when it declines, the client keeps the daemon
+/// it found.
+pub fn attach(
+    paths: &twyx_core::paths::Paths,
+    cols: u16,
+    rows: u16,
+    interactive: bool,
+    ask: impl FnOnce(u32) -> bool,
+) -> Result<Connection> {
+    ensure_daemon(paths)?;
+    let pid = match connect(&paths.socket(), cols, rows, interactive) {
+        Ok(connection) if connection.hello.build == crate::BUILD_ID => return Ok(connection),
+        Ok(connection) => {
+            let others = connection.hello.clients;
+            if others > 0 && !ask(others) {
+                return Ok(connection);
+            }
+            let pid = connection.hello.pid;
+            let mut connection = connection;
+            let _ = connection.send(&ToDaemon::Shutdown);
+            pid
+        }
+        Err(error) => match error.downcast_ref::<Unsupported>() {
+            Some(unsupported) => unsupported.pid,
+            None => return Err(error),
+        },
+    };
+    stop(paths, pid)?;
+    ensure_daemon(paths)?;
+    connect(&paths.socket(), cols, rows, interactive)
+}
+
+/// Waits for a daemon to go, and ends it if it does not go by itself.
+fn stop(paths: &twyx_core::paths::Paths, pid: u32) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while UnixStream::connect(paths.socket()).is_ok() {
+        if Instant::now() >= deadline {
+            if let Some(pid) = rustix::process::Pid::from_raw(pid as i32) {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // A daemon that was killed leaves its socket; the next one replaces it.
+    Ok(())
+}
+
 pub fn ensure_daemon(paths: &twyx_core::paths::Paths) -> Result<()> {
     if UnixStream::connect(paths.socket()).is_ok() {
         return Ok(());

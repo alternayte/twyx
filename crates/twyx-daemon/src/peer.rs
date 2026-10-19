@@ -29,3 +29,19 @@ fn peer_uid(stream: &UnixStream) -> Result<u32> {
     let (uid, _) = nix::unistd::getpeereid(stream).with_context(|| "read the peer credentials")?;
     Ok(uid.as_raw())
 }
+
+/// The process at the other end of a socket, if the OS says.
+#[cfg(target_os = "linux")]
+pub fn pid(stream: &UnixStream) -> Option<u32> {
+    rustix::net::sockopt::socket_peercred(stream)
+        .ok()
+        .map(|credentials| credentials.pid.as_raw_nonzero().get() as u32)
+}
+
+/// The process at the other end of a socket, if the OS says.
+#[cfg(not(target_os = "linux"))]
+pub fn pid(stream: &UnixStream) -> Option<u32> {
+    nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::LocalPeerPid)
+        .ok()
+        .and_then(|pid| u32::try_from(pid).ok())
+}

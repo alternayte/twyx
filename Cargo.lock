@@ -5612,6 +5612,7 @@ dependencies = [
  "anyhow",
  "bitflags 2.13.2",
  "postcard",
+ "rustix",
  "serde",
  "twyx-core",
 ]

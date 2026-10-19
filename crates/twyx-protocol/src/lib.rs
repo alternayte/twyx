@@ -10,3 +10,6 @@ pub mod holder;
 pub mod input;
 pub mod view;
 pub mod wire;
+
+/// This build's identity. A client and the daemon run the same build.
+pub const BUILD_ID: &str = env!("TWYX_BUILD_ID");

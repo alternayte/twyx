@@ -20,13 +20,13 @@ use twyx_core::layout::{Axis, Cells, Layout, Leaf, LeafId};
 use twyx_core::pane::PaneId;
 use twyx_core::paths::Paths;
 use twyx_protocol::client::{
-    ClientHello, FromDaemon, Launch, MAJOR, MINOR, PaneInfo, PaneState, ServerHello, TabInfo,
-    ToDaemon, WorkspaceInfo,
+    ClientHello, FromDaemon, Launch, LegacyHolder, MAJOR, MINOR, PaneInfo, PaneState, ServerHello,
+    TabInfo, ToDaemon, WorkspaceInfo,
 };
 use twyx_protocol::holder::{ExitState, FromHolder, ToHolder};
 use twyx_protocol::wire;
 
-use crate::holders::{self, HolderLink};
+use crate::holders::{self, HolderLink, Legacy};
 use crate::peer;
 use crate::store::{Saved, SavedPane, SavedTab, Store};
 
@@ -110,6 +110,8 @@ pub struct Daemon {
     pub(crate) store: Store,
     /// The default workspace's row.
     pub(crate) workspace: u64,
+    /// Holders of a protocol major this daemon cannot adopt.
+    pub(crate) legacy: Vec<LegacyHolder>,
     /// Messages for clients, sent once the event that made them is written,
     /// so no client sees a change a crash could still lose.
     pub(crate) outbox: RefCell<Vec<(Sender<FromDaemon>, FromDaemon)>>,
@@ -120,7 +122,7 @@ pub fn run(paths: Paths) -> Result<()> {
     paths.prepare_runtime()?;
     let listener = bind(&paths.socket())?;
     let holder_binary = std::env::current_exe().context("find the twyx binary")?;
-    let build = env!("CARGO_PKG_VERSION").to_owned();
+    let build = twyx_protocol::BUILD_ID.to_owned();
     let (events, inbound) = mpsc::channel();
     let store = Store::open(&paths.database())?;
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_owned());
@@ -140,6 +142,7 @@ pub fn run(paths: Paths) -> Result<()> {
         store,
         workspace: saved.workspace,
         outbox: RefCell::new(Vec::new()),
+        legacy: Vec::new(),
     };
     daemon.restore(saved);
     daemon.adopt();
@@ -215,12 +218,29 @@ impl Daemon {
             let Ok(pane) = stem.parse::<PaneId>() else {
                 continue;
             };
-            let Ok((link, welcome)) =
-                HolderLink::connect(path.clone(), pane, self.build.clone(), self.events.clone())
-            else {
-                // A holder that will not answer leaves a stale socket.
-                let _ = std::fs::remove_file(&path);
-                continue;
+            let (link, welcome) = match HolderLink::connect(
+                path.clone(),
+                pane,
+                self.build.clone(),
+                self.events.clone(),
+            ) {
+                Ok(connected) => connected,
+                Err(error) => {
+                    match error.downcast_ref::<Legacy>() {
+                        // A holder from a build too old to adopt keeps
+                        // running; the user decides when it goes.
+                        Some(legacy) => self.legacy.push(LegacyHolder {
+                            socket: path.to_string_lossy().into_owned(),
+                            major: legacy.major,
+                            pid: legacy.pid,
+                        }),
+                        // A holder that will not answer leaves a stale socket.
+                        None => {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                    continue;
+                }
             };
             let (cols, rows) = holders::screen_size(&welcome.snapshot);
             if let Some(entry) = self.panes.get_mut(&pane) {
@@ -412,6 +432,12 @@ impl Daemon {
                 pid: std::process::id(),
                 client: id,
                 panes: self.pane_infos(),
+                clients: self
+                    .clients
+                    .values()
+                    .filter(|client| client.interactive)
+                    .count() as u32,
+                legacy: self.legacy.clone(),
             }),
         );
         let tab = self
@@ -548,6 +574,17 @@ impl Daemon {
                     && let Some(link) = &entry.link
                 {
                     link.send(ToHolder::Copy(action));
+                }
+            }
+            ToDaemon::KillLegacy => {
+                for holder in std::mem::take(&mut self.legacy) {
+                    if let Some(pid) = holder
+                        .pid
+                        .and_then(|pid| rustix::process::Pid::from_raw(pid as i32))
+                    {
+                        let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+                    }
+                    let _ = std::fs::remove_file(&holder.socket);
                 }
             }
             ToDaemon::CycleTab { forward } => self.cycle_tab(id, forward),
@@ -967,6 +1004,7 @@ fn serve_client(stream: UnixStream, events: Sender<Event>) {
             &FromDaemon::Unsupported {
                 major: MAJOR,
                 minor: MINOR,
+                pid: std::process::id(),
             },
         );
         return;

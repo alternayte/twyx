@@ -141,6 +141,8 @@ impl Client {
                 pid: 0,
                 client: 0,
                 panes: Vec::new(),
+                clients: 0,
+                legacy: Vec::new(),
             },
             screens: HashMap::new(),
             panes: HashMap::new(),
@@ -824,4 +826,103 @@ fn invariant_9_only_the_daemon_opens_the_database() {
             "{name} and the SQLite dependency"
         );
     }
+}
+
+/// A daemon from another build: it greets every client, says how many other
+/// interactive clients it has, and reports whether a client asked it to stop.
+fn old_daemon(sandbox: &Sandbox, clients: u32) -> std::sync::mpsc::Receiver<bool> {
+    use std::os::unix::net::UnixListener;
+    let socket = sandbox.socket();
+    let listener = UnixListener::bind(&socket).expect("listen as the old daemon");
+    let (told, stopped) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut writer = stream;
+            if !matches!(
+                wire::read::<ToDaemon>(&mut reader),
+                Ok(Some(ToDaemon::Hello(_)))
+            ) {
+                continue;
+            }
+            let _ = wire::write(
+                &mut writer,
+                &FromDaemon::Welcome(ServerHello {
+                    major: MAJOR,
+                    minor: MINOR,
+                    build: "an-older-build".to_owned(),
+                    pid: std::process::id(),
+                    client: 1,
+                    panes: Vec::new(),
+                    clients,
+                    legacy: Vec::new(),
+                }),
+            );
+            if let Ok(Some(ToDaemon::Shutdown)) = wire::read::<ToDaemon>(&mut reader) {
+                let _ = told.send(true);
+                // An old daemon that stops takes its socket with it.
+                let _ = std::fs::remove_file(&socket);
+                return;
+            }
+            let _ = told.send(false);
+        }
+    });
+    stopped
+}
+
+#[test]
+fn a_client_alone_replaces_a_daemon_from_another_build() {
+    let sandbox = Sandbox::new("upgrade");
+    let stopped = old_daemon(&sandbox, 0);
+    let output = sandbox
+        .command(&["pane", "list"])
+        .stdout(Stdio::piped())
+        .output()
+        .expect("run twyx pane list");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(stopped.recv_timeout(Duration::from_secs(5)), Ok(true));
+    let mut client = sandbox.connect(80, 10);
+    assert_ne!(client.hello.build, "an-older-build");
+    client.wait_until("this build's daemon", |c| c.workspace.is_some());
+    let _ = client.send(&ToDaemon::Shutdown);
+}
+
+#[test]
+fn a_command_keeps_a_daemon_from_another_build_that_clients_use() {
+    let sandbox = Sandbox::new("keep");
+    let stopped = old_daemon(&sandbox, 1);
+    let output = sandbox
+        .command(&["pane", "list"])
+        .stdout(Stdio::piped())
+        .output()
+        .expect("run twyx pane list");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(stopped.recv_timeout(Duration::from_secs(5)), Ok(false));
+}
+
+#[test]
+fn a_holder_too_old_to_adopt_is_listed_with_its_pid() {
+    use std::os::unix::net::UnixListener;
+    use twyx_protocol::holder::{FromHolder, ToHolder};
+    let mut sandbox = Sandbox::new("legacy");
+    std::fs::create_dir_all(sandbox.panes_dir()).expect("create the panes directory");
+    let socket = sandbox.panes_dir().join(format!("{}.sock", stem(7)));
+    let listener = UnixListener::bind(&socket).expect("listen as an old holder");
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut writer = stream;
+            if let Ok(Some(ToHolder::Hello(_))) = wire::read::<ToHolder>(&mut reader) {
+                let _ = wire::write(&mut writer, &FromHolder::Unsupported { major: 0, minor: 9 });
+            }
+        }
+    });
+    sandbox.start();
+    let client = sandbox.connect(80, 10);
+    assert_eq!(client.hello.legacy.len(), 1);
+    let legacy = &client.hello.legacy[0];
+    assert_eq!((legacy.major, legacy.pid), (0, Some(std::process::id())));
+    assert!(socket.exists(), "a legacy holder keeps its socket");
 }

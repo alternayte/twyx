@@ -112,13 +112,13 @@ impl Terminal {
                 return;
             }
         };
-        if let Err(error) = connection::ensure_daemon(&paths) {
-            eprintln!("twyx-desktop: {error:#}");
-            self.retry_connect(cx);
-            return;
-        }
-        let connection = match connection::connect(&paths.socket(), self.grid.0, self.grid.1, true)
-        {
+        // The window has no prompt yet, so a daemon from another build that
+        // other clients use is kept rather than replaced.
+        let attached = connection::attach(&paths, self.grid.0, self.grid.1, true, |others| {
+            eprintln!("twyx-desktop: the daemon runs another build; {others} other clients use it");
+            false
+        });
+        let connection = match attached {
             Ok(connection) => connection,
             Err(error) => {
                 eprintln!("twyx-desktop: {error:#}");

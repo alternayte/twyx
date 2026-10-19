@@ -89,6 +89,18 @@ pub struct ServerHello {
     /// The identity of this client for the rest of the connection.
     pub client: u64,
     pub panes: Vec<PaneInfo>,
+    /// Interactive clients attached before this one.
+    pub clients: u32,
+    /// Holders this daemon found but cannot adopt.
+    pub legacy: Vec<LegacyHolder>,
+}
+
+/// A holder that speaks a protocol major this daemon cannot adopt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LegacyHolder {
+    pub socket: String,
+    pub major: u16,
+    pub pid: Option<u32>,
 }
 
 /// Where a new pane goes, relative to the client's focus.
@@ -181,16 +193,21 @@ pub enum ToDaemon {
     CloseFocusedTab,
     /// A copy mode action for the focused pane.
     Copy(CopyAction),
+    /// Ends every legacy holder and forgets its socket.
+    KillLegacy,
     /// Ask the daemon to exit. Panes keep running.
     Shutdown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FromDaemon {
-    /// Greets a client this build cannot serve.
+    /// Greets a client this build cannot serve. Every build keeps this
+    /// first variant and its fields as they are, so any client can read it
+    /// and stop the daemon.
     Unsupported {
         major: u16,
         minor: u16,
+        pid: u32,
     },
     Welcome(ServerHello),
     /// A frame body, as the holder published it.

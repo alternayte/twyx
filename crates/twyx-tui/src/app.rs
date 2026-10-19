@@ -42,11 +42,20 @@ use twyx_protocol::view::View;
 pub fn attach(paths: &twyx_core::paths::Paths) -> Result<()> {
     let config_file = paths.config.join("config.toml");
     let config = twyx_core::config::load(&config_file)?;
-    client::ensure_daemon(paths)?;
     let (cols, rows) = clamp_size(terminal::size().context("read the terminal size")?);
+    let (cols, rows) = (cols.max(2), rows.max(1 + CHROME_ROWS));
+    let area = tab_area(cols, rows);
+    let connection = client::attach(paths, area.0, area.1, true, ask_to_replace)?;
 
     let mut screen = Screen::start(config.theme)?;
-    let result = run(paths, cols, rows, &mut screen, config, &config_file);
+    let result = run(
+        paths,
+        connection,
+        (cols, rows),
+        &mut screen,
+        config,
+        &config_file,
+    );
     screen.stop();
     result
 }
@@ -88,8 +97,9 @@ pub fn doctor() -> Result<()> {
 fn reconnect(paths: &twyx_core::paths::Paths, size: (u16, u16)) -> Result<client::Parts> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let attempt = client::ensure_daemon(paths)
-            .and_then(|()| client::connect(&paths.socket(), size.0, size.1, true));
+        // A daemon from another build that others use is kept; this client
+        // cannot ask in the middle of a screen.
+        let attempt = client::attach(paths, size.0, size.1, true, |_| false);
         match attempt {
             Ok(connection) => return Ok(connection.split()),
             Err(error) if Instant::now() >= deadline => {
@@ -154,10 +164,25 @@ impl Follow {
     }
 }
 
+/// Asks on the terminal, before the screen is taken over, whether to replace
+/// a daemon from another build that other clients use.
+fn ask_to_replace(others: u32) -> bool {
+    use std::io::BufRead;
+    let clients = if others == 1 { "client" } else { "clients" };
+    print!(
+        "The daemon runs another build of twyx, and {others} other {clients} use it. \
+         Replace it? Panes keep running. [y/N] "
+    );
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut answer);
+    matches!(answer.trim(), "y" | "Y" | "yes")
+}
+
 fn run(
     paths: &twyx_core::paths::Paths,
-    cols: u16,
-    rows: u16,
+    connection: client::Connection,
+    size: (u16, u16),
     screen: &mut Screen,
     config: Config,
     config_file: &std::path::Path,
@@ -166,9 +191,8 @@ fn run(
     let mut watch = Watch::new(config_file);
     // The last reload's error, until a good one replaces it.
     let mut notice: Option<String> = None;
-    let mut size = (cols.max(2), rows.max(1 + CHROME_ROWS));
-    let area = tab_area(size.0, size.1);
-    let mut daemon = client::connect(&paths.socket(), area.0, area.1, true)?.split();
+    let mut size = size;
+    let mut daemon = connection.split();
     let mut follow = Follow::default();
     let mut panes: HashMap<u64, PaneInfo> = HashMap::new();
     let mut views: HashMap<u64, View> = HashMap::new();
@@ -237,7 +261,7 @@ fn run(
                     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
                     screen.write(&format!("\x1b]52;c;{encoded}\x1b\\"))?;
                 }
-                FromDaemon::Unsupported { major, minor } => {
+                FromDaemon::Unsupported { major, minor, .. } => {
                     anyhow::bail!("the daemon speaks client protocol {major}.{minor}");
                 }
                 // Only a first pane that could not start leaves nothing to show.

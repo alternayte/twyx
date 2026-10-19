@@ -13,5 +13,6 @@ workspace = true
 anyhow = "1"
 bitflags = { version = "2", features = ["serde"] }
 postcard = { version = "1", features = ["use-std"] }
+rustix = { version = "1", features = ["process"] }
 serde = { version = "1", features = ["derive"] }
 twyx-core = { workspace = true }

@@ -98,8 +98,10 @@ enum DaemonCommand {
     Start,
     /// Stop the daemon. Panes keep running.
     Stop,
-    /// Report whether the daemon runs.
+    /// Report whether the daemon runs, and any holders too old to adopt.
     Status,
+    /// End the holders too old for this daemon to adopt, with their panes.
+    KillLegacy,
 }
 
 #[derive(Debug, Subcommand)]
@@ -159,8 +161,7 @@ fn daemon(command: DaemonCommand) -> Result<()> {
             twyx_daemon::daemon::run(paths)
         }
         DaemonCommand::Start => {
-            client::ensure_daemon(&paths)?;
-            let connection = client::connect(&paths.socket(), 80, 24, false)?;
+            let connection = client::attach(&paths, 80, 24, false, |_| false)?;
             println!("daemon running, pid {}", connection.hello.pid);
             Ok(())
         }
@@ -169,23 +170,62 @@ fn daemon(command: DaemonCommand) -> Result<()> {
                 println!("daemon stopped");
                 return Ok(());
             }
-            let mut connection = client::connect(&paths.socket(), 80, 24, false)?;
-            connection.send(&ToDaemon::Shutdown)?;
+            match client::connect(&paths.socket(), 80, 24, false) {
+                Ok(mut connection) => connection.send(&ToDaemon::Shutdown)?,
+                // A daemon of another major still says who it is.
+                Err(error) => match error.downcast_ref::<client::Unsupported>() {
+                    Some(unsupported) => {
+                        if let Some(pid) = rustix::process::Pid::from_raw(unsupported.pid as i32) {
+                            rustix::process::kill_process(pid, rustix::process::Signal::TERM)
+                                .context("stop the daemon")?;
+                        }
+                    }
+                    None => return Err(error),
+                },
+            }
+            Ok(())
+        }
+        DaemonCommand::KillLegacy => {
+            let mut connection = command_client(&paths)?;
+            let count = connection.hello.legacy.len();
+            connection.send(&ToDaemon::KillLegacy)?;
+            println!(
+                "ended {count} legacy holder{}",
+                if count == 1 { "" } else { "s" }
+            );
             Ok(())
         }
         DaemonCommand::Status => {
             match client::connect(&paths.socket(), 80, 24, false) {
-                Ok(connection) => println!(
-                    "running pid {} with {} pane{}",
-                    connection.hello.pid,
-                    connection.hello.panes.len(),
-                    if connection.hello.panes.len() == 1 {
-                        ""
-                    } else {
-                        "s"
+                Ok(connection) => {
+                    let hello = &connection.hello;
+                    let plural = if hello.panes.len() == 1 { "" } else { "s" };
+                    println!(
+                        "running pid {} with {} pane{plural}",
+                        hello.pid,
+                        hello.panes.len()
+                    );
+                    for holder in &hello.legacy {
+                        let pid = holder
+                            .pid
+                            .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string());
+                        println!(
+                            "legacy holder {} speaks protocol {}, pid {pid}; twyx daemon kill-legacy ends it",
+                            holder.socket, holder.major
+                        );
                     }
-                ),
-                Err(_) => println!("stopped"),
+                    if hello.build != twyx_protocol::BUILD_ID {
+                        println!(
+                            "build {}, not this build {}",
+                            hello.build,
+                            twyx_protocol::BUILD_ID
+                        );
+                    }
+                }
+                Err(error) => match error.downcast_ref::<client::Unsupported>() {
+                    Some(unsupported) => println!("running, {unsupported}"),
+                    None => println!("stopped"),
+                },
             }
             Ok(())
         }
@@ -194,10 +234,9 @@ fn daemon(command: DaemonCommand) -> Result<()> {
 
 fn pane(command: PaneCommand) -> Result<()> {
     let paths = Paths::discover()?;
-    client::ensure_daemon(&paths)?;
     match command {
         PaneCommand::New { cwd, place, argv } => {
-            let mut connection = client::connect(&paths.socket(), 80, 24, false)?;
+            let mut connection = command_client(&paths)?;
             let known: Vec<u64> = connection
                 .hello
                 .panes
@@ -236,7 +275,7 @@ fn pane(command: PaneCommand) -> Result<()> {
             }
         }
         PaneCommand::List => {
-            let connection = client::connect(&paths.socket(), 80, 24, false)?;
+            let connection = command_client(&paths)?;
             if connection.hello.panes.is_empty() {
                 println!("no panes");
                 return Ok(());
@@ -253,11 +292,17 @@ fn pane(command: PaneCommand) -> Result<()> {
             Ok(())
         }
         PaneCommand::Kill { pane } => {
-            let mut connection = client::connect(&paths.socket(), 80, 24, false)?;
+            let mut connection = command_client(&paths)?;
             connection.send(&ToDaemon::KillPane { pane })?;
             Ok(())
         }
     }
+}
+
+/// A CLI command's connection: this build's daemon, replacing one from
+/// another build only when no interactive client uses it.
+fn command_client(paths: &Paths) -> Result<client::Connection> {
+    client::attach(paths, 80, 24, false, |_| false)
 }
 
 fn state(state: &PaneState) -> String {

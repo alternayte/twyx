@@ -36,6 +36,8 @@ impl HolderLink {
     ) -> Result<(Self, Welcome)> {
         let stream = UnixStream::connect(&socket)
             .with_context(|| format!("connect to {}", socket.display()))?;
+        // Read now: a holder that turns us away may close the socket.
+        let peer = crate::peer::pid(&stream);
         let mut reader = BufReader::new(stream.try_clone().context("clone the holder stream")?);
         let mut writer = BufWriter::new(stream);
 
@@ -53,7 +55,7 @@ impl HolderLink {
         let welcome = match wire::read::<FromHolder>(&mut reader).context("read the welcome")? {
             Some(FromHolder::Welcome(welcome)) => welcome,
             Some(FromHolder::Unsupported { major, .. }) => {
-                bail!("holder {} speaks protocol {major}", socket.display())
+                return Err(Legacy { major, pid: peer }.into());
             }
             _ => bail!("holder {} did not welcome us", socket.display()),
         };
@@ -89,6 +91,21 @@ impl HolderLink {
         let _ = self.out.send(message);
     }
 }
+
+/// A holder of a protocol major this daemon cannot adopt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Legacy {
+    pub major: u16,
+    pub pid: Option<u32>,
+}
+
+impl std::fmt::Display for Legacy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "a holder of protocol {}", self.major)
+    }
+}
+
+impl std::error::Error for Legacy {}
 
 /// What a new holder runs, and where.
 #[derive(Debug)]

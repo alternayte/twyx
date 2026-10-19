@@ -292,7 +292,7 @@ impl Core<'_> {
 
 /// A build stamp, so a client can tell a stale holder from a fresh one.
 pub fn build_id() -> String {
-    env!("CARGO_PKG_VERSION").to_owned()
+    twyx_protocol::BUILD_ID.to_owned()
 }
 
 fn send(out: &mut Option<Sender<FromHolder>>, message: FromHolder) {
