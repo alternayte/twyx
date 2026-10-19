@@ -32,3 +32,16 @@ pub const TITLE_CHARS: usize = 512;
 
 /// The longest a single notification field may be, in characters.
 pub const NOTIFICATION_CHARS: usize = 512;
+
+/// The share of the tab area a new floating pane takes, on each axis.
+pub const FLOATING_SIZE: f32 = 0.6;
+
+/// How far each new floating pane is offset from the last, as a share of the
+/// tab area.
+pub const FLOATING_CASCADE: f32 = 0.03;
+
+/// The smallest share a split gives one child.
+pub const MIN_RATIO: f32 = 0.05;
+
+/// How far one resize step moves a rule, as a share of the parent split.
+pub const RESIZE_STEP: f32 = 0.05;
