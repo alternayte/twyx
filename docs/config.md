@@ -34,3 +34,18 @@ Each pane keeps its screen and scrollback on disk, so they survive a crash, a po
 | `enabled` | `true`, `false` | `true` |
 
 `twyx pane new --no-history` turns history off for one pane.
+
+## `[worktrees]`
+
+`twyx worktree new <branch>` puts the new worktree next to the repository: `<repo parent>/<repo name>.worktrees/<branch>`.
+
+| Key | Values | Default |
+|---|---|---|
+| `location` | a path with `{parent}`, `{repo}` and `{branch}` | `{parent}/{repo}.worktrees/{branch}` |
+
+The path starts with `/`, `~/` or `{parent}`, and must contain `{branch}`. `{parent}` is the directory that holds the main worktree. `{repo}` is the main worktree's directory name.
+
+```toml
+[worktrees]
+location = "~/worktrees/{repo}/{branch}"
+```

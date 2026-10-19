@@ -165,6 +165,8 @@ pub struct StatusBar<'a> {
     pub worktree: &'a str,
     pub branch: &'a str,
     pub dirty: bool,
+    /// A notice for the user, after the branch.
+    pub note: &'a str,
     /// How many agent sessions are in each state.
     pub roll_up: &'a [(AgentState, usize)],
 }
@@ -184,6 +186,7 @@ impl Widget for StatusBar<'_> {
             vec![(self.mode.to_uppercase(), pen.face(kind.mode))],
             vec![(self.worktree.to_owned(), pen.face(kind.label))],
             branch,
+            vec![(self.note.to_owned(), pen.face(kind.caption))],
         ]
         .into_iter()
         .filter(|field| width(field) > 0)

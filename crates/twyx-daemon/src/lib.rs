@@ -4,7 +4,10 @@
 //! This crate is the only place that opens the database or runs Git.
 
 pub mod daemon;
+mod git;
 mod holders;
 pub mod peer;
 mod store;
 mod tabs;
+mod workspaces;
+mod worktrees;

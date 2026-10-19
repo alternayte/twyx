@@ -33,6 +33,32 @@ enum Command {
         #[command(subcommand)]
         command: PaneCommand,
     },
+    /// Open the project a path is in and show its workspace.
+    Open {
+        /// A path in a repository, or a plain directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Only record it; switch no client and attach nothing.
+        #[arg(long)]
+        no_switch: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List projects, worktrees and workspaces, with branch and dirty state.
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Work with workspaces.
+    Workspace {
+        #[command(subcommand)]
+        command: crate::projects::WorkspaceCommand,
+    },
+    /// Work with the worktrees of a project.
+    Worktree {
+        #[command(subcommand)]
+        command: crate::projects::WorktreeCommand,
+    },
     /// Work with pane history.
     History {
         #[command(subcommand)]
@@ -150,11 +176,19 @@ enum PaneCommand {
 pub fn run() -> Result<()> {
     let Some(command) = Cli::parse().command else {
         let paths = Paths::discover()?;
-        return twyx_tui::app::attach(&paths);
+        return twyx_tui::app::attach(&paths, None);
     };
     match command {
         Command::Daemon { command } => daemon(command),
         Command::Pane { command } => pane(command),
+        Command::Open {
+            path,
+            no_switch,
+            json,
+        } => crate::projects::open(&path, no_switch, json),
+        Command::Ls { json } => crate::projects::ls(json),
+        Command::Workspace { command } => crate::projects::workspace(command),
+        Command::Worktree { command } => crate::projects::worktree(command),
         Command::History {
             command: HistoryCommand::Purge,
         } => {
@@ -202,7 +236,7 @@ fn daemon(command: DaemonCommand) -> Result<()> {
             twyx_daemon::daemon::run(paths)
         }
         DaemonCommand::Start => {
-            let connection = client::attach(&paths, 80, 24, false, |_| false)?;
+            let connection = client::attach(&paths, 80, 24, false, None, |_| false)?;
             println!("daemon running, pid {}", connection.hello.pid);
             Ok(())
         }
@@ -211,7 +245,7 @@ fn daemon(command: DaemonCommand) -> Result<()> {
                 println!("daemon stopped");
                 return Ok(());
             }
-            match client::connect(&paths.socket(), 80, 24, false) {
+            match client::connect(&paths.socket(), 80, 24, false, None) {
                 Ok(mut connection) => connection.send(&ToDaemon::Shutdown)?,
                 // A daemon of another major still says who it is.
                 Err(error) => match error.downcast_ref::<client::Unsupported>() {
@@ -237,7 +271,7 @@ fn daemon(command: DaemonCommand) -> Result<()> {
             Ok(())
         }
         DaemonCommand::Status => {
-            match client::connect(&paths.socket(), 80, 24, false) {
+            match client::connect(&paths.socket(), 80, 24, false, None) {
                 Ok(connection) => {
                     let hello = &connection.hello;
                     let plural = if hello.panes.len() == 1 { "" } else { "s" };
@@ -349,7 +383,7 @@ fn pane(command: PaneCommand) -> Result<()> {
 /// A CLI command's connection: this build's daemon, replacing one from
 /// another build only when no interactive client uses it.
 fn command_client(paths: &Paths) -> Result<client::Connection> {
-    client::attach(paths, 80, 24, false, |_| false)
+    client::attach(paths, 80, 24, false, None, |_| false)
 }
 
 fn state(state: &PaneState) -> String {

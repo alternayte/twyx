@@ -64,3 +64,17 @@ pub const HISTORY_LOG_BYTES: usize = 4 << 20;
 /// The records the history writer may have queued before output is dropped
 /// as a gap.
 pub const HISTORY_QUEUE: usize = 1024;
+
+/// How often the daemon looks for a changed HEAD or index in the worktrees
+/// that clients show.
+pub const GIT_POLL: Duration = Duration::from_secs(1);
+
+/// How often the daemon reads the status of a worktree a client shows when
+/// nothing in its Git dir changed, to catch edits to the files.
+pub const GIT_STATUS_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The most unpushed commits a removal prompt lists; it counts the rest.
+pub const PROMPT_COMMITS: usize = 20;
+
+/// How long a confirmed worktree removal waits for the panes it kills.
+pub const REMOVAL_KILL_WAIT: Duration = Duration::from_secs(10);

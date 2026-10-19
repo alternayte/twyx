@@ -18,6 +18,9 @@ pub struct Config {
     pub theme: ThemeConfig,
     /// `[history] enabled`: whether panes keep a history on disk.
     pub history: bool,
+    /// `[worktrees] location`: where a new worktree goes, with `{parent}`,
+    /// `{repo}` and `{branch}`.
+    pub worktree_location: Option<String>,
 }
 
 impl Default for Config {
@@ -26,6 +29,7 @@ impl Default for Config {
             keymap: Keymap::default(),
             theme: ThemeConfig::default(),
             history: true,
+            worktree_location: None,
         }
     }
 }
@@ -77,6 +81,13 @@ struct Raw {
     keys: Option<RawKeys>,
     theme: Option<RawTheme>,
     history: Option<RawHistory>,
+    worktrees: Option<RawWorktrees>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawWorktrees {
+    location: Option<Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,12 +171,33 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         .history
         .and_then(|history| history.enabled)
         .unwrap_or(true);
+    let worktree_location = match raw.worktrees.and_then(|worktrees| worktrees.location) {
+        Some(location) => {
+            let text = location.get_ref();
+            if !text.contains("{branch}") {
+                return Err(fail(
+                    Some(location.span()),
+                    "the worktree location needs {branch}, or every worktree gets one directory"
+                        .to_owned(),
+                ));
+            }
+            if !text.starts_with('/') && !text.starts_with("~/") && !text.starts_with("{parent}") {
+                return Err(fail(
+                    Some(location.span()),
+                    "the worktree location must start with /, ~/ or {parent}".to_owned(),
+                ));
+            }
+            Some(text.clone())
+        }
+        None => None,
+    };
     let mut keymap = Keymap::default();
     let Some(keys) = raw.keys else {
         return Ok(Config {
             keymap,
             theme,
             history,
+            worktree_location,
         });
     };
     if let Some(prefix) = keys.prefix {
@@ -210,6 +242,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         keymap,
         theme,
         history,
+        worktree_location,
     })
 }
 
@@ -259,6 +292,11 @@ mod tests {
         let error = read("[theme]\n\naccent = \"blue\"\n").expect_err("a named colour");
         assert_eq!(error.line, 3);
         let error = read("[theme]\nvariant = \"sepia\"\n").expect_err("an unknown variant");
+        assert_eq!(error.line, 2);
+        let error = read("[worktrees]\nlocation = \"/wt/{repo}\"\n")
+            .expect_err("no branch in the location");
+        assert_eq!(error.line, 2);
+        let error = read("[worktrees]\nlocation = \"wt/{branch}\"\n").expect_err("a relative path");
         assert_eq!(error.line, 2);
     }
 

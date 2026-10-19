@@ -5551,6 +5551,8 @@ dependencies = [
  "clap",
  "portable-pty",
  "rustix",
+ "serde",
+ "serde_json",
  "twyx-core",
  "twyx-daemon",
  "twyx-holder",

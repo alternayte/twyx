@@ -1,9 +1,9 @@
-//! The daemon: the workspace's tabs and layouts, their panes, the clients
-//! attached to them, and one size lease per tab.
+//! The daemon: workspaces with their tabs and layouts, their panes, the
+//! clients attached to them, and one size lease per tab.
 //!
 //! Threads: each client and each holder gets a reader thread and a writer
-//! thread. This thread owns the state and forwards frames without reading
-//! them.
+//! thread, and each Git job its own thread. This thread owns the state and
+//! forwards frames without reading them.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -21,14 +21,16 @@ use twyx_core::pane::PaneId;
 use twyx_core::paths::Paths;
 use twyx_protocol::client::{
     ClientHello, FromDaemon, Launch, LegacyHolder, MAJOR, MINOR, PaneInfo, PaneState, ServerHello,
-    TabInfo, ToDaemon, WorkspaceInfo,
+    ToDaemon,
 };
 use twyx_protocol::holder::{ExitState, FromHolder, ToHolder};
 use twyx_protocol::wire;
 
 use crate::holders::{self, HolderLink, Legacy};
 use crate::peer;
-use crate::store::{Saved, SavedPane, SavedTab, Store};
+use crate::store::{Saved, SavedPane, SavedTab, SavedWorkspace, Store};
+use crate::workspaces::Workspace;
+use crate::worktrees::{self, Plans, Project, Removal, Waiting, Worktree};
 
 static CLIENTS: AtomicU64 = AtomicU64::new(1);
 
@@ -55,6 +57,8 @@ pub(crate) enum Event {
     HolderGone {
         pane: PaneId,
     },
+    Git(worktrees::Done),
+    Tick,
 }
 
 #[derive(Debug)]
@@ -70,10 +74,14 @@ pub(crate) struct Pane {
     pub title: String,
     /// Whether the pane keeps a history on disk.
     pub history: bool,
+    pub workspace: u64,
+    /// The worktree the pane started in; it never changes.
+    pub spawn_worktree: Option<u64>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Tab {
+    pub workspace: u64,
     pub name: String,
     pub layout: Layout,
     pub lease: Option<u64>,
@@ -89,9 +97,12 @@ pub(crate) struct Client {
     pub cols: u16,
     pub rows: u16,
     pub interactive: bool,
+    pub workspace: u64,
     pub tab: Option<u64>,
     /// This client's focus in each tab it has shown.
     pub focus: BTreeMap<u64, LeafId>,
+    /// When the client last sent input, on the daemon's use counter.
+    pub used: u64,
 }
 
 #[derive(Debug)]
@@ -104,14 +115,24 @@ pub struct Daemon {
     /// Panes whose leaf is closed, kept until their holder reports the exit.
     pub(crate) closing: BTreeMap<PaneId, HolderLink>,
     pub(crate) clients: BTreeMap<u64, Client>,
-    /// The tabs of the default workspace, in order.
+    /// Every workspace's tabs, each workspace's in order.
     pub(crate) tabs: Vec<(u64, Tab)>,
-    /// The tab a new client shows.
-    pub(crate) active_tab: Option<u64>,
+    pub(crate) workspaces: BTreeMap<u64, Workspace>,
+    /// The workspace at `$HOME`.
+    pub(crate) default_workspace: u64,
+    /// The workspace a new client shows: the last one a client switched to.
+    pub(crate) active_workspace: u64,
+    pub(crate) projects: BTreeMap<u64, Project>,
+    pub(crate) worktrees: BTreeMap<u64, Worktree>,
+    pub(crate) plans: Plans,
+    pub(crate) next_plan: u64,
+    pub(crate) removals: Vec<Removal>,
+    /// Overviews commands wait for.
+    pub(crate) waiting: Vec<Waiting>,
+    /// Counts input, to find the client that last sent some.
+    pub(crate) uses: u64,
     pub(crate) next_leaf: u64,
     pub(crate) store: Store,
-    /// The default workspace's row.
-    pub(crate) workspace: u64,
     /// Holders of a protocol major this daemon cannot adopt.
     pub(crate) legacy: Vec<LegacyHolder>,
     /// The last good config.
@@ -142,10 +163,18 @@ pub fn run(paths: Paths) -> Result<()> {
         closing: BTreeMap::new(),
         clients: BTreeMap::new(),
         tabs: Vec::new(),
-        active_tab: None,
+        workspaces: BTreeMap::new(),
+        default_workspace: saved.default_workspace,
+        active_workspace: saved.active_workspace,
+        projects: BTreeMap::new(),
+        worktrees: BTreeMap::new(),
+        plans: Plans::new(),
+        next_plan: 0,
+        removals: Vec::new(),
+        waiting: Vec::new(),
+        uses: 0,
         next_leaf: saved.next_leaf,
         store,
-        workspace: saved.workspace,
         outbox: RefCell::new(Vec::new()),
         legacy: Vec::new(),
         config: twyx_core::config::load(&config_file).unwrap_or_else(|error| {
@@ -157,8 +186,21 @@ pub fn run(paths: Paths) -> Result<()> {
     daemon.adopt();
     daemon.reconcile();
     daemon.save();
+    spawn_ticker(events.clone())?;
     spawn_acceptor(listener, events)?;
     daemon.serve(&inbound)
+}
+
+fn spawn_ticker(events: Sender<Event>) -> Result<()> {
+    thread::Builder::new()
+        .name("twyx-daemon-tick".to_owned())
+        .spawn(move || {
+            while events.send(Event::Tick).is_ok() {
+                thread::sleep(twyx_core::tuning::GIT_POLL);
+            }
+        })
+        .context("start the daemon ticker")?;
+    Ok(())
 }
 
 fn bind(path: &Path) -> Result<UnixListener> {
@@ -180,11 +222,26 @@ impl Daemon {
     /// Brings back the tabs, layouts and panes the last daemon wrote. A pane
     /// that was running shows as lost until its holder is adopted.
     fn restore(&mut self, saved: Saved) {
-        self.active_tab = saved.active_tab;
+        self.restore_projects(saved.projects, saved.worktrees);
+        for workspace in saved.workspaces {
+            self.workspaces.insert(
+                workspace.id,
+                Workspace {
+                    directory: workspace.directory,
+                    name: workspace.name,
+                    project: workspace.project,
+                    worktree: workspace
+                        .worktree
+                        .filter(|worktree| self.worktrees.contains_key(worktree)),
+                    active_tab: workspace.active_tab,
+                },
+            );
+        }
         for tab in saved.tabs {
             self.tabs.push((
                 tab.id,
                 Tab {
+                    workspace: tab.workspace,
                     name: tab.name,
                     layout: tab.layout,
                     lease: None,
@@ -211,6 +268,8 @@ impl Daemon {
                     cwd: pane.cwd,
                     title: pane.title,
                     history: pane.history,
+                    workspace: pane.workspace,
+                    spawn_worktree: pane.spawn_worktree,
                 },
             );
         }
@@ -265,7 +324,9 @@ impl Daemon {
             }
             let row = SavedPane {
                 id: pane,
+                workspace: self.default_workspace,
                 cwd: String::new(),
+                spawn_worktree: None,
                 launch: Launch::Unknown,
                 state: PaneState::Running,
                 title: String::new(),
@@ -273,7 +334,7 @@ impl Daemon {
                 rows,
                 history: false,
             };
-            if let Err(error) = self.store.new_pane(self.workspace, &row, Some(pane)) {
+            if let Err(error) = self.store.new_pane(&row, Some(pane)) {
                 eprintln!("twyx daemon: {error:#}");
             }
             self.panes.insert(
@@ -288,6 +349,8 @@ impl Daemon {
                     cwd: String::new(),
                     title: String::new(),
                     history: false,
+                    workspace: self.default_workspace,
+                    spawn_worktree: None,
                 },
             );
         }
@@ -329,7 +392,7 @@ impl Daemon {
             }
         }
         if !recovered.is_empty()
-            && let Some(tab) = self.add_tab("Recovered".to_owned())
+            && let Some(tab) = self.add_tab(self.default_workspace, "Recovered".to_owned())
         {
             for pane in recovered {
                 let leaf = self.new_leaf(pane);
@@ -343,8 +406,12 @@ impl Daemon {
             }
         }
         self.tabs.retain(|(_, tab)| !tab.layout.is_empty());
-        if !self.active_tab.is_some_and(|tab| self.tab(tab).is_some()) {
-            self.active_tab = self.tabs.first().map(|(id, _)| *id);
+        let workspaces: Vec<u64> = self.workspaces.keys().copied().collect();
+        for workspace in workspaces {
+            let tab = self.landing_tab(workspace);
+            if let Some(entry) = self.workspaces.get_mut(&workspace) {
+                entry.active_tab = tab;
+            }
         }
     }
 
@@ -352,13 +419,28 @@ impl Daemon {
     /// next change writes again.
     pub(crate) fn save(&mut self) {
         let saved = Saved {
-            workspace: self.workspace,
-            active_tab: self.active_tab,
+            default_workspace: self.default_workspace,
+            active_workspace: self.active_workspace,
+            projects: Vec::new(),
+            worktrees: Vec::new(),
+            workspaces: self
+                .workspaces
+                .iter()
+                .map(|(id, workspace)| SavedWorkspace {
+                    id: *id,
+                    directory: workspace.directory.clone(),
+                    name: workspace.name.clone(),
+                    project: workspace.project,
+                    worktree: workspace.worktree,
+                    active_tab: workspace.active_tab,
+                })
+                .collect(),
             tabs: self
                 .tabs
                 .iter()
                 .map(|(id, tab)| SavedTab {
                     id: *id,
+                    workspace: tab.workspace,
                     name: tab.name.clone(),
                     layout: tab.layout.clone(),
                     focus: tab.focus,
@@ -369,7 +451,9 @@ impl Daemon {
                 .iter()
                 .map(|(id, pane)| SavedPane {
                     id: *id,
+                    workspace: pane.workspace,
                     cwd: pane.cwd.clone(),
+                    spawn_worktree: pane.spawn_worktree,
                     launch: pane.launch.clone(),
                     state: pane.state.clone(),
                     title: pane.title.clone(),
@@ -386,25 +470,20 @@ impl Daemon {
     }
 
     /// Reserves the row, and so the id, of a new pane.
-    pub(crate) fn reserve_pane(
-        &self,
-        launch: &Launch,
-        cwd: &str,
-        cols: u16,
-        rows: u16,
-        history: bool,
-    ) -> Result<PaneId> {
+    pub(crate) fn reserve_pane(&self, pane: &Pane) -> Result<PaneId> {
         let row = SavedPane {
             id: PaneId::from_raw(0),
-            cwd: cwd.to_owned(),
-            launch: launch.clone(),
+            workspace: pane.workspace,
+            cwd: pane.cwd.clone(),
+            spawn_worktree: pane.spawn_worktree,
+            launch: pane.launch.clone(),
             state: PaneState::Running,
             title: String::new(),
-            cols,
-            rows,
-            history,
+            cols: pane.cols,
+            rows: pane.rows,
+            history: pane.history,
         };
-        self.store.new_pane(self.workspace, &row, None)
+        self.store.new_pane(&row, None)
     }
 
     fn serve(&mut self, inbound: &Receiver<Event>) -> Result<()> {
@@ -415,7 +494,7 @@ impl Daemon {
                 Event::Holder {
                     message: FromHolder::Frame { .. } | FromHolder::Snapshot { .. },
                     ..
-                }
+                } | Event::Tick
             );
             match event {
                 Event::ClientHello { client, hello, out } => self.client_hello(client, hello, out),
@@ -428,6 +507,8 @@ impl Daemon {
                 Event::ClientGone { client } => self.client_gone(client),
                 Event::Holder { pane, message } => self.holder_message(pane, message),
                 Event::HolderGone { pane } => self.holder_gone(pane),
+                Event::Git(done) => self.git_done(done),
+                Event::Tick => self.tick(),
             }
             if persist {
                 self.save();
@@ -457,9 +538,12 @@ impl Daemon {
                 legacy: self.legacy.clone(),
             }),
         );
-        let tab = self
-            .active_tab
-            .or_else(|| self.tabs.first().map(|(id, _)| *id));
+        let workspace = hello
+            .workspace
+            .filter(|workspace| hello.interactive && self.workspaces.contains_key(workspace))
+            .unwrap_or(self.active_workspace);
+        let tab = self.landing_tab(workspace);
+        self.uses += 1;
         self.clients.insert(
             id,
             Client {
@@ -467,12 +551,14 @@ impl Daemon {
                 cols: hello.cols,
                 rows: hello.rows,
                 interactive: hello.interactive,
+                workspace,
                 tab,
                 focus: BTreeMap::new(),
+                used: self.uses,
             },
         );
         if !hello.interactive {
-            self.post(&out, FromDaemon::Workspace(self.workspace_info()));
+            self.post(&out, FromDaemon::Workspace(self.workspace_info(workspace)));
             return;
         }
         if let Some(tab) = tab
@@ -480,7 +566,7 @@ impl Daemon {
         {
             self.take_lease(tab, id);
         }
-        self.post(&out, FromDaemon::Workspace(self.workspace_info()));
+        self.post(&out, FromDaemon::Workspace(self.workspace_info(workspace)));
         self.send_focus(id);
 
         for (pane, entry) in &self.panes {
@@ -520,6 +606,10 @@ impl Daemon {
                 self.broadcast_workspace();
             }
             ToDaemon::Input(event) => {
+                self.uses += 1;
+                if let Some(client) = self.clients.get_mut(&id) {
+                    client.used = self.uses;
+                }
                 let Some(tab) = self.client(id).and_then(|client| client.tab) else {
                     return;
                 };
@@ -616,14 +706,36 @@ impl Daemon {
             }
             ToDaemon::CycleTab { forward } => self.cycle_tab(id, forward),
             ToDaemon::SelectTabAt { index } => {
-                if let Some((tab, _)) = self.tabs.get(index) {
-                    let tab = *tab;
-                    self.select_tab(id, tab);
+                if let Some(tab) = self.workspace_tabs(self.client_workspace(id)).get(index) {
+                    self.select_tab(id, *tab);
                 }
             }
             ToDaemon::NudgeFloating { side } => {
                 self.edit_focused(id, |layout, leaf| layout.nudge_floating(leaf, side));
             }
+            ToDaemon::Open { path, switch } => self.open(id, path, switch),
+            ToDaemon::SwitchWorkspace { workspace } => {
+                if !self.workspaces.contains_key(&workspace) {
+                    self.refuse(id, format!("no workspace {workspace}"));
+                    return;
+                }
+                let shown = self.switch_for(id, workspace, true);
+                self.reply(
+                    id,
+                    FromDaemon::Switched {
+                        workspace,
+                        client: shown,
+                    },
+                );
+            }
+            ToDaemon::Overview { refresh } => self.overview(id, refresh),
+            ToDaemon::NewWorktree {
+                project,
+                branch,
+                start,
+            } => self.new_worktree(id, project, branch, start),
+            ToDaemon::PlanRemoval { worktree } => self.plan_removal(id, worktree),
+            ToDaemon::RemoveWorktree { plan } => self.remove_worktree(id, plan),
         }
     }
 
@@ -651,6 +763,7 @@ impl Daemon {
     }
 
     fn client_gone(&mut self, id: u64) {
+        self.waiting.retain(|waiting| waiting.client != id);
         let Some(gone) = self.clients.remove(&id) else {
             return;
         };
@@ -743,6 +856,7 @@ impl Daemon {
                 // A checkpoint between the close and the exit may have
                 // written the history again.
                 let _ = std::fs::remove_dir_all(self.paths.pane_history(pane));
+                self.advance_removals();
             }
             return;
         }
@@ -800,7 +914,9 @@ impl Daemon {
     }
 
     fn holder_gone(&mut self, pane: PaneId) {
-        self.closing.remove(&pane);
+        if self.closing.remove(&pane).is_some() {
+            self.advance_removals();
+        }
         let Some(entry) = self.panes.get_mut(&pane) else {
             return;
         };
@@ -853,8 +969,8 @@ impl Daemon {
             .map(|(_, tab)| tab)
     }
 
-    pub(crate) fn add_tab(&mut self, name: String) -> Option<u64> {
-        let id = match self.store.new_tab(self.workspace) {
+    pub(crate) fn add_tab(&mut self, workspace: u64, name: String) -> Option<u64> {
+        let id = match self.store.new_tab(workspace) {
             Ok(id) => id,
             Err(error) => {
                 eprintln!("twyx daemon: {error:#}");
@@ -864,6 +980,7 @@ impl Daemon {
         self.tabs.push((
             id,
             Tab {
+                workspace,
                 name,
                 layout: Layout::default(),
                 lease: None,
@@ -891,7 +1008,7 @@ impl Daemon {
     /// the first leaf.
     pub(crate) fn client_focus(&self, id: u64) -> Option<(u64, LeafId)> {
         let client = self.clients.get(&id)?;
-        let tab_id = client.tab.or(self.active_tab)?;
+        let tab_id = client.tab.or_else(|| self.landing_tab(client.workspace))?;
         let tab = self.tab(tab_id)?;
         let leaf = client
             .focus
@@ -922,7 +1039,7 @@ impl Daemon {
         );
     }
 
-    fn pane_info(&self, pane: PaneId, entry: &Pane) -> PaneInfo {
+    pub(crate) fn pane_info(&self, pane: PaneId, entry: &Pane) -> PaneInfo {
         PaneInfo {
             pane: pane.raw(),
             cols: entry.cols,
@@ -939,29 +1056,6 @@ impl Daemon {
             .iter()
             .map(|(pane, entry)| self.pane_info(*pane, entry))
             .collect()
-    }
-
-    pub(crate) fn workspace_info(&self) -> WorkspaceInfo {
-        WorkspaceInfo {
-            workspace: 1,
-            name: "default".to_owned(),
-            tabs: self
-                .tabs
-                .iter()
-                .map(|(id, tab)| TabInfo {
-                    tab: *id,
-                    name: tab.name.clone(),
-                    layout: tab.layout.clone(),
-                    lease: tab.lease,
-                    cols: tab.area.0,
-                    rows: tab.area.1,
-                })
-                .collect(),
-        }
-    }
-
-    pub(crate) fn broadcast_workspace(&self) {
-        self.broadcast(FromDaemon::Workspace(self.workspace_info()));
     }
 
     pub(crate) fn broadcast_pane(&self, pane: PaneId) {

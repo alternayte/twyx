@@ -2,6 +2,7 @@
 //! processes.
 
 mod cli;
+mod projects;
 
 fn main() {
     if let Err(error) = cli::run() {

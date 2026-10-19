@@ -7,7 +7,7 @@ use twyx_core::layout::{Axis, Fractions, Layout, LeafId, Side};
 use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
-pub const MAJOR: u16 = 2;
+pub const MAJOR: u16 = 3;
 pub const MINOR: u16 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +21,8 @@ pub struct ClientHello {
     /// A TUI or desktop client. A CLI command is not interactive: it never
     /// takes a size lease and gets no frames.
     pub interactive: bool,
+    /// The workspace to show, when it still exists.
+    pub workspace: Option<u64>,
 }
 
 /// What a pane's process is doing.
@@ -72,11 +74,100 @@ pub struct TabInfo {
     pub rows: u16,
 }
 
+/// A client's workspace: the tabs for one worktree or plain directory.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceInfo {
     pub workspace: u64,
     pub name: String,
+    pub directory: String,
+    /// `None` for a plain directory and for the default workspace.
+    pub worktree: Option<WorktreeInfo>,
     pub tabs: Vec<TabInfo>,
+}
+
+/// A worktree's branch and dirty state, as Git last reported them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitState {
+    /// `None` when HEAD is detached.
+    pub branch: Option<String>,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    /// Changed, staged and untracked paths that are not ignored.
+    pub changed: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeInfo {
+    pub worktree: u64,
+    pub project: u64,
+    /// The Git admin name, and `main` for the main worktree.
+    pub name: String,
+    pub path: String,
+    /// The branch from the last worktree listing; `None` when detached.
+    pub branch: Option<String>,
+    /// `None` until twyx has read it.
+    pub git: Option<GitState>,
+    /// The last Git error for this worktree, with its command.
+    pub error: Option<String>,
+    /// The worktree's workspace, once it has one.
+    pub workspace: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    pub project: u64,
+    pub name: String,
+    /// The common Git dir of a repository, or the directory.
+    pub path: String,
+    pub git: bool,
+    pub worktrees: Vec<WorktreeInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceSummary {
+    pub workspace: u64,
+    pub name: String,
+    pub directory: String,
+    pub project: Option<u64>,
+    pub worktree: Option<u64>,
+    pub tabs: u32,
+    pub panes: u32,
+    /// Interactive clients that show it.
+    pub clients: u32,
+}
+
+/// Every project, worktree and workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Overview {
+    pub projects: Vec<ProjectInfo>,
+    pub workspaces: Vec<WorkspaceSummary>,
+}
+
+/// What removing a worktree would lose, for the user to confirm.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemovalPlan {
+    /// Confirms this plan, and only this plan.
+    pub plan: u64,
+    pub worktree: WorktreeInfo,
+    /// Changed and untracked paths, with their two-letter status.
+    pub dirty: Vec<(String, String)>,
+    /// Commits no remote-tracking branch has.
+    pub unpushed: Vec<CommitInfo>,
+    /// All unpushed commits, of which `unpushed` lists the newest.
+    pub unpushed_total: u32,
+    /// Commits the base branch does not have, and the base.
+    pub unmerged: Vec<CommitInfo>,
+    pub base: Option<String>,
+    /// Live panes that the removal kills: those spawned in the worktree and
+    /// those in its workspace.
+    pub panes: Vec<PaneInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitInfo {
+    pub oid: String,
+    pub subject: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,6 +291,39 @@ pub enum ToDaemon {
     KillLegacy,
     /// Deletes every pane's history. Running panes start a new one.
     PurgeHistory,
+    /// Opens the project a path is in, and the workspace of its worktree or
+    /// directory. An interactive client switches to it; a command switches
+    /// the interactive client that last sent input when `switch` is set.
+    Open {
+        path: String,
+        switch: bool,
+    },
+    /// Shows a workspace: in this client, or for a command in the
+    /// interactive client that last sent input.
+    SwitchWorkspace {
+        workspace: u64,
+    },
+    /// Every project, worktree and workspace; with `refresh`, after Git
+    /// has been read again.
+    Overview {
+        refresh: bool,
+    },
+    /// Creates a worktree of a project on a branch, new from `start` (the
+    /// base branch when `None`) or existing, and its workspace.
+    NewWorktree {
+        project: u64,
+        branch: String,
+        start: Option<String>,
+    },
+    /// Asks what removing a worktree would lose.
+    PlanRemoval {
+        worktree: u64,
+    },
+    /// Removes a worktree as the plan listed it: its panes are killed
+    /// first, and its changes are discarded only when the plan listed them.
+    RemoveWorktree {
+        plan: u64,
+    },
     /// Ask the daemon to exit. Panes keep running.
     Shutdown,
 }
@@ -247,6 +371,25 @@ pub enum FromDaemon {
     Clipboard {
         pane: u64,
         text: String,
+    },
+    /// A path opened: its workspace, and the client that now shows it.
+    Opened {
+        workspace: u64,
+        client: Option<u64>,
+    },
+    /// A workspace switch: the client that now shows it, if any.
+    Switched {
+        workspace: u64,
+        client: Option<u64>,
+    },
+    Overview(Overview),
+    WorktreeAdded {
+        worktree: WorktreeInfo,
+        workspace: u64,
+    },
+    RemovalPlan(RemovalPlan),
+    WorktreeRemoved {
+        worktree: u64,
     },
 }
 

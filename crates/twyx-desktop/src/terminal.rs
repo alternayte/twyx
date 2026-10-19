@@ -39,6 +39,9 @@ struct Shared {
     /// Whether the workspace held a pane since the window opened.
     had_panes: bool,
     asked: bool,
+    /// The workspace the window first showed, whose first pane starts in
+    /// the app's own directory.
+    first: Option<u64>,
     clipboard: Option<String>,
 }
 
@@ -81,6 +84,7 @@ impl Terminal {
             leaf: None,
             had_panes: false,
             asked: false,
+            first: None,
             clipboard: None,
         }));
 
@@ -114,10 +118,18 @@ impl Terminal {
         };
         // The window has no prompt yet, so a daemon from another build that
         // other clients use is kept rather than replaced.
-        let attached = connection::attach(&paths, self.grid.0, self.grid.1, true, |others| {
-            eprintln!("twyx-desktop: the daemon runs another build; {others} other clients use it");
-            false
-        });
+        let shown = self
+            .shared()
+            .workspace
+            .as_ref()
+            .map(|shown| shown.workspace);
+        let attached =
+            connection::attach(&paths, self.grid.0, self.grid.1, true, shown, |others| {
+                eprintln!(
+                    "twyx-desktop: the daemon runs another build; {others} other clients use it"
+                );
+                false
+            });
         let connection = match attached {
             Ok(connection) => connection,
             Err(error) => {
@@ -177,7 +189,21 @@ impl Terminal {
                     };
                     let mut state = shared.lock().unwrap_or_else(|poison| poison.into_inner());
                     match message {
-                        FromDaemon::Workspace(workspace) => state.workspace = Some(workspace),
+                        FromDaemon::Workspace(workspace) => {
+                            let id = workspace.workspace;
+                            if state
+                                .workspace
+                                .as_ref()
+                                .is_some_and(|shown| shown.workspace != id)
+                            {
+                                // Another workspace: its emptiness is not the
+                                // end of the window.
+                                state.had_panes = false;
+                                state.asked = false;
+                            }
+                            state.first.get_or_insert(id);
+                            state.workspace = Some(workspace);
+                        }
                         FromDaemon::Focus { tab, leaf } => {
                             state.tab = tab;
                             state.leaf = leaf;
@@ -235,6 +261,12 @@ impl Terminal {
                             state.panes.remove(&pane);
                         }
                         FromDaemon::Welcome(_)
+                        | FromDaemon::Opened { .. }
+                        | FromDaemon::Switched { .. }
+                        | FromDaemon::Overview(_)
+                        | FromDaemon::WorktreeAdded { .. }
+                        | FromDaemon::RemovalPlan(_)
+                        | FromDaemon::WorktreeRemoved { .. }
                         | FromDaemon::Unsupported { .. }
                         | FromDaemon::Snapshot { .. }
                         | FromDaemon::Frame { .. } => {}
@@ -253,9 +285,17 @@ impl Terminal {
                 }
                 if empty && !state.asked {
                     state.asked = true;
+                    let first =
+                        state.workspace.as_ref().map(|shown| shown.workspace) == state.first;
                     let _ = outgoing.send(ToDaemon::NewPane {
                         launch: Launch::Shell,
-                        cwd: working_directory(),
+                        // Elsewhere the daemon starts it in the workspace's
+                        // directory.
+                        cwd: if first {
+                            working_directory()
+                        } else {
+                            String::new()
+                        },
                         place: Place::NewTab,
                         history: true,
                     });

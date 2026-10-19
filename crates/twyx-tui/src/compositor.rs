@@ -279,10 +279,27 @@ impl Scene<'_> {
     }
 
     fn status_bar(&self, buf: &mut Buffer) {
-        let directory = self
-            .focused_pane()
-            .map(|info| info.cwd.rsplit('/').next().unwrap_or_default().to_owned())
-            .unwrap_or_default();
+        let workspace = self.workspace;
+        let worktree = workspace.and_then(|workspace| workspace.worktree.as_ref());
+        // A plain directory shows its own name and no branch.
+        let place = match (worktree, workspace) {
+            (Some(worktree), _) => worktree.name.clone(),
+            (None, Some(workspace)) => workspace
+                .directory
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+            (None, None) => String::new(),
+        };
+        let git = worktree.and_then(|worktree| worktree.git.as_ref());
+        let branch = match worktree {
+            Some(worktree) => git
+                .map_or(worktree.branch.as_deref(), |git| git.branch.as_deref())
+                .unwrap_or("detached")
+                .to_owned(),
+            None => String::new(),
+        };
         let lease = self.tab_info().and_then(|tab| tab.lease);
         let note = match self.notice {
             Some(notice) => notice,
@@ -292,18 +309,13 @@ impl Scene<'_> {
         StatusBar {
             pen: self.pen,
             mode: self.keymap.mode().name(),
-            worktree: &directory,
-            branch: note,
-            dirty: false,
+            worktree: &place,
+            branch: &branch,
+            dirty: git.is_some_and(|git| git.changed > 0),
+            note,
             roll_up: &[],
         }
         .render(Rect::new(0, self.rows - 1, self.cols, 1), buf);
-    }
-
-    fn focused_pane(&self) -> Option<&PaneInfo> {
-        let tab = self.tab_info()?;
-        let leaf = tab.layout.leaf(self.focus?)?;
-        self.panes.get(&leaf.pane.raw())
     }
 
     /// Copies a pane's screen into its place, cut to the panes area. A pane
@@ -561,6 +573,8 @@ mod tests {
         let workspace = WorkspaceInfo {
             workspace: 1,
             name: "default".to_owned(),
+            directory: "/home/n/project".to_owned(),
+            worktree: None,
             tabs: vec![TabInfo {
                 tab: 7,
                 name: "main".to_owned(),

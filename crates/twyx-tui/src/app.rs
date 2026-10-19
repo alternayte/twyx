@@ -38,14 +38,15 @@ use crate::probe;
 use twyx_protocol::connection as client;
 use twyx_protocol::view::View;
 
-/// Attaches the terminal client to the daemon.
-pub fn attach(paths: &twyx_core::paths::Paths) -> Result<()> {
+/// Attaches the terminal client to the daemon, showing `workspace` when
+/// given and else the one a new client shows.
+pub fn attach(paths: &twyx_core::paths::Paths, workspace: Option<u64>) -> Result<()> {
     let config_file = paths.config.join("config.toml");
     let config = twyx_core::config::load(&config_file)?;
     let (cols, rows) = clamp_size(terminal::size().context("read the terminal size")?);
     let (cols, rows) = (cols.max(2), rows.max(1 + CHROME_ROWS));
     let area = tab_area(cols, rows);
-    let connection = client::attach(paths, area.0, area.1, true, ask_to_replace)?;
+    let connection = client::attach(paths, area.0, area.1, true, workspace, ask_to_replace)?;
 
     let mut screen = Screen::start(config.theme)?;
     let result = run(
@@ -94,12 +95,16 @@ pub fn doctor() -> Result<()> {
 
 /// Waits for a daemon after the last one went away, starting one if none
 /// answers. The new daemon adopts the holders, so the panes are still there.
-fn reconnect(paths: &twyx_core::paths::Paths, size: (u16, u16)) -> Result<client::Parts> {
+fn reconnect(
+    paths: &twyx_core::paths::Paths,
+    size: (u16, u16),
+    workspace: Option<u64>,
+) -> Result<client::Parts> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         // A daemon from another build that others use is kept; this client
         // cannot ask in the middle of a screen.
-        let attempt = client::attach(paths, size.0, size.1, true, |_| false);
+        let attempt = client::attach(paths, size.0, size.1, true, workspace, |_| false);
         match attempt {
             Ok(connection) => return Ok(connection.split()),
             Err(error) if Instant::now() >= deadline => {
@@ -136,6 +141,9 @@ fn tty() -> Result<std::fs::File> {
 #[derive(Debug, Default)]
 struct Follow {
     workspace: Option<WorkspaceInfo>,
+    /// The workspace the client first showed, whose first pane starts in
+    /// the client's own directory.
+    first: Option<u64>,
     tab: Option<u64>,
     leaf: Option<LeafId>,
     /// The focused pane.
@@ -239,7 +247,21 @@ fn run(
             };
             dirty = true;
             match message {
-                FromDaemon::Workspace(workspace) => follow.workspace = Some(workspace),
+                FromDaemon::Workspace(workspace) => {
+                    let id = workspace.workspace;
+                    if follow
+                        .workspace
+                        .as_ref()
+                        .is_some_and(|shown| shown.workspace != id)
+                    {
+                        // Another workspace: its emptiness is not the end of
+                        // this client.
+                        follow.had_panes = false;
+                        follow.asked = false;
+                    }
+                    follow.first.get_or_insert(id);
+                    follow.workspace = Some(workspace);
+                }
                 FromDaemon::Focus { tab, leaf } => {
                     follow.tab = tab;
                     follow.leaf = leaf;
@@ -273,13 +295,21 @@ fn run(
                     panes.remove(&pane);
                     views.remove(&pane);
                 }
-                FromDaemon::Refused { .. } | FromDaemon::Welcome(_) => {}
+                FromDaemon::Refused { .. }
+                | FromDaemon::Welcome(_)
+                | FromDaemon::Opened { .. }
+                | FromDaemon::Switched { .. }
+                | FromDaemon::Overview(_)
+                | FromDaemon::WorktreeAdded { .. }
+                | FromDaemon::RemovalPlan(_)
+                | FromDaemon::WorktreeRemoved { .. } => {}
             }
         }
 
         if lost {
             let area = tab_area(size.0, size.1);
-            daemon = reconnect(paths, area)?;
+            let shown = follow.workspace.as_ref().map(|shown| shown.workspace);
+            daemon = reconnect(paths, area, shown)?;
             client_id = daemon.hello.client;
             keymap.reset();
             known(&mut panes, &daemon.hello.panes);
@@ -292,6 +322,7 @@ fn run(
             follow = Follow {
                 had_panes: follow.had_panes,
                 asked: true,
+                first: follow.first,
                 ..Follow::default()
             };
             continue;
@@ -304,9 +335,15 @@ fn run(
             }
             if !follow.asked {
                 follow.asked = true;
+                let first = follow.workspace.as_ref().map(|shown| shown.workspace) == follow.first;
                 let _ = daemon.outgoing.send(ToDaemon::NewPane {
                     launch: Launch::Shell,
-                    cwd: working_directory(),
+                    // Elsewhere the daemon starts it in the workspace's directory.
+                    cwd: if first {
+                        working_directory()
+                    } else {
+                        String::new()
+                    },
                     place: Place::NewTab,
                     history: true,
                 });

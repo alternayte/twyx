@@ -29,7 +29,15 @@ pub struct Parts {
 
 /// Connects as a client. An interactive client is a TUI or desktop client;
 /// a CLI command is not.
-pub fn connect(socket: &Path, cols: u16, rows: u16, interactive: bool) -> Result<Connection> {
+/// Connects to the daemon. An interactive client shows `workspace` when it
+/// still exists, and else the one a new client shows.
+pub fn connect(
+    socket: &Path,
+    cols: u16,
+    rows: u16,
+    interactive: bool,
+    workspace: Option<u64>,
+) -> Result<Connection> {
     let stream = UnixStream::connect(socket)
         .with_context(|| format!("connect to the daemon on {}", socket.display()))?;
     let reader = BufReader::new(stream.try_clone().context("clone the socket")?);
@@ -54,6 +62,7 @@ pub fn connect(socket: &Path, cols: u16, rows: u16, interactive: bool) -> Result
         cols,
         rows,
         interactive,
+        workspace,
     }))?;
     match connection.receive()? {
         FromDaemon::Welcome(hello) => {
@@ -115,10 +124,11 @@ pub fn attach(
     cols: u16,
     rows: u16,
     interactive: bool,
+    workspace: Option<u64>,
     ask: impl FnOnce(u32) -> bool,
 ) -> Result<Connection> {
     ensure_daemon(paths)?;
-    let pid = match connect(&paths.socket(), cols, rows, interactive) {
+    let pid = match connect(&paths.socket(), cols, rows, interactive, workspace) {
         Ok(connection) if connection.hello.build == crate::BUILD_ID => return Ok(connection),
         Ok(connection) => {
             let others = connection.hello.clients;
@@ -137,7 +147,7 @@ pub fn attach(
     };
     stop(paths, pid)?;
     ensure_daemon(paths)?;
-    connect(&paths.socket(), cols, rows, interactive)
+    connect(&paths.socket(), cols, rows, interactive, workspace)
 }
 
 /// Waits for a daemon to go, and ends it if it does not go by itself.

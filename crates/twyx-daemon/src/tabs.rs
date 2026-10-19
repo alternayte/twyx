@@ -30,13 +30,23 @@ impl Daemon {
             return;
         };
         let interactive = self.client(id).is_some_and(|client| client.interactive);
+        let workspace = self.client_workspace(id);
         let existing = self
             .client(id)
             .and_then(|client| client.tab)
-            .or(self.active_tab)
-            .filter(|tab| self.tab(*tab).is_some());
+            .or_else(|| self.landing_tab(workspace))
+            .filter(|tab| self.tab(*tab).is_some_and(|tab| tab.workspace == workspace));
+        // A pane with no directory starts in its workspace's.
+        let cwd = match cwd.is_empty() {
+            true => self
+                .workspaces
+                .get(&workspace)
+                .map(|entry| entry.directory.clone())
+                .unwrap_or_default(),
+            false => cwd,
+        };
         let (tab, created) = match (place, existing) {
-            (Place::NewTab, _) | (_, None) => match self.add_tab(String::new()) {
+            (Place::NewTab, _) | (_, None) => match self.add_tab(workspace, String::new()) {
                 Some(tab) => (tab, true),
                 None => {
                     self.refuse(id, "could not record a new tab".to_owned());
@@ -46,7 +56,9 @@ impl Daemon {
             (_, Some(tab)) => (tab, false),
         };
         if created {
-            self.active_tab = Some(tab);
+            if let Some(entry) = self.workspaces.get_mut(&workspace) {
+                entry.active_tab = Some(tab);
+            }
             if interactive && let Some(client) = self.clients.get_mut(&id) {
                 client.tab = Some(tab);
             }
@@ -59,7 +71,20 @@ impl Daemon {
             .client_focus(id)
             .filter(|(focus_tab, _)| *focus_tab == tab)
             .map(|(_, leaf)| leaf);
-        let pane = match self.reserve_pane(&launch, &cwd, 80, 24, history) {
+        let record = Pane {
+            link: None,
+            cols: 80,
+            rows: 24,
+            state: PaneState::Running,
+            screen: None,
+            spawn_worktree: self.worktree_at(&cwd),
+            launch,
+            cwd,
+            title: String::new(),
+            history,
+            workspace,
+        };
+        let pane = match self.reserve_pane(&record) {
             Ok(pane) => pane,
             Err(error) => {
                 self.refuse(id, format!("{error:#}"));
@@ -92,7 +117,7 @@ impl Daemon {
                 socket: self.paths.pane_socket(pane),
                 pane,
                 argv: &argv,
-                cwd: &cwd,
+                cwd: &record.cwd,
                 cols,
                 rows,
                 history: history.then(|| self.paths.pane_history(pane)),
@@ -121,12 +146,8 @@ impl Daemon {
                 link: Some(link),
                 cols,
                 rows,
-                state: PaneState::Running,
                 screen: Some(welcome.snapshot.clone()),
-                launch,
-                cwd,
-                title: String::new(),
-                history,
+                ..record
             },
         );
         self.broadcast_frames(FromDaemon::Snapshot {
@@ -170,7 +191,7 @@ impl Daemon {
 
     /// Forgets a pane and deletes its history (Invariant 22). A running one
     /// is killed, and its holder is kept until it reports the exit.
-    fn end_pane(&mut self, pane: PaneId) {
+    pub(crate) fn end_pane(&mut self, pane: PaneId) {
         let _ = std::fs::remove_dir_all(self.paths.pane_history(pane));
         if let Some(entry) = self.panes.remove(&pane)
             && let Some(link) = entry.link
@@ -186,31 +207,31 @@ impl Daemon {
     }
 
     fn drop_empty_tab(&mut self, tab: u64) {
-        let Some(index) = self.tabs.iter().position(|(id, _)| *id == tab) else {
+        let Some(entry) = self.tab(tab) else {
             return;
         };
-        if !self.tabs[index].1.layout.is_empty() {
+        if !entry.layout.is_empty() {
             return;
         }
-        self.tabs.remove(index);
-        // Clients on the tab move to its neighbour.
-        let next = self
-            .tabs
-            .get(index)
-            .or_else(|| {
-                index
-                    .checked_sub(1)
-                    .and_then(|before| self.tabs.get(before))
-            })
-            .map(|(id, _)| *id);
+        let workspace = entry.workspace;
+        let siblings = self.workspace_tabs(workspace);
+        let index = siblings.iter().position(|id| *id == tab).unwrap_or(0);
+        self.tabs.retain(|(id, _)| *id != tab);
+        // Clients on the tab move to its neighbour in the workspace.
+        let next = siblings
+            .get(index + 1)
+            .or_else(|| index.checked_sub(1).and_then(|before| siblings.get(before)))
+            .copied();
         for client in self.clients.values_mut() {
             client.focus.remove(&tab);
             if client.tab == Some(tab) {
                 client.tab = next;
             }
         }
-        if self.active_tab == Some(tab) {
-            self.active_tab = next;
+        if let Some(entry) = self.workspaces.get_mut(&workspace)
+            && entry.active_tab == Some(tab)
+        {
+            entry.active_tab = next;
         }
         let orphaned: Vec<u64> = self
             .clients
@@ -249,17 +270,24 @@ impl Daemon {
         let Some(argv) = argv(&entry.launch) else {
             return;
         };
-        let (launch, cwd, cols, rows, history) = (
-            entry.launch.clone(),
-            entry.cwd.clone(),
-            entry.cols,
-            entry.rows,
-            entry.history,
-        );
+        let record = Pane {
+            link: None,
+            cols: entry.cols,
+            rows: entry.rows,
+            state: PaneState::Running,
+            screen: None,
+            launch: entry.launch.clone(),
+            cwd: entry.cwd.clone(),
+            title: String::new(),
+            history: entry.history,
+            workspace: entry.workspace,
+            spawn_worktree: entry.spawn_worktree,
+        };
+        let (cols, rows, history) = (record.cols, record.rows, record.history);
         let Some((tab, leaf)) = self.leaf_of(old) else {
             return;
         };
-        let Ok(pane) = self.reserve_pane(&launch, &cwd, cols, rows, history) else {
+        let Ok(pane) = self.reserve_pane(&record) else {
             return;
         };
         let Ok((link, welcome)) = holders::start(
@@ -268,7 +296,7 @@ impl Daemon {
                 socket: self.paths.pane_socket(pane),
                 pane,
                 argv: &argv,
-                cwd: &cwd,
+                cwd: &record.cwd,
                 cols,
                 rows,
                 history: history.then(|| self.paths.pane_history(pane)),
@@ -288,14 +316,8 @@ impl Daemon {
             pane,
             Pane {
                 link: Some(link),
-                cols,
-                rows,
-                state: PaneState::Running,
                 screen: Some(welcome.snapshot.clone()),
-                launch,
-                cwd,
-                title: String::new(),
-                history,
+                ..record
             },
         );
         self.broadcast_frames(FromDaemon::Snapshot {
@@ -401,9 +423,13 @@ impl Daemon {
         self.broadcast_workspace();
     }
 
+    /// Shows a tab in one client, in the tab's workspace.
     pub(crate) fn select_tab(&mut self, id: u64, tab: u64) {
-        if self.tab(tab).is_none() {
+        let Some(workspace) = self.tab(tab).map(|entry| entry.workspace) else {
             return;
+        };
+        if self.client_workspace(id) != workspace {
+            self.switch_workspace(id, workspace);
         }
         let interactive = match self.clients.get_mut(&id) {
             Some(client) => {
@@ -412,7 +438,9 @@ impl Daemon {
             }
             None => return,
         };
-        self.active_tab = Some(tab);
+        if let Some(entry) = self.workspaces.get_mut(&workspace) {
+            entry.active_tab = Some(tab);
+        }
         if interactive && self.tab(tab).is_some_and(|entry| entry.lease.is_none()) {
             self.take_lease(tab, id);
         }
@@ -420,11 +448,12 @@ impl Daemon {
     }
 
     pub(crate) fn cycle_tab(&mut self, id: u64, forward: bool) {
-        let count = self.tabs.len();
+        let tabs = self.workspace_tabs(self.client_workspace(id));
+        let count = tabs.len();
         let current = self
             .client(id)
             .and_then(|client| client.tab)
-            .and_then(|tab| self.tabs.iter().position(|(entry, _)| *entry == tab));
+            .and_then(|tab| tabs.iter().position(|entry| *entry == tab));
         let (Some(current), true) = (current, count > 0) else {
             return;
         };
@@ -433,11 +462,10 @@ impl Daemon {
         } else {
             (current + count - 1) % count
         };
-        let tab = self.tabs[next].0;
-        self.select_tab(id, tab);
+        self.select_tab(id, tabs[next]);
     }
 
-    fn refuse(&self, id: u64, reason: String) {
+    pub(crate) fn refuse(&self, id: u64, reason: String) {
         if let Some(client) = self.client(id) {
             self.post(&client.out, FromDaemon::Refused { reason });
         }

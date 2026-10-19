@@ -94,6 +94,7 @@ fn draw(pen: &Pen, scene: usize, area: Rect, buf: &mut Buffer) {
         worktree: "twyx",
         branch: "main",
         dirty: true,
+        note: "",
         roll_up: &[
             (AgentState::NeedsApproval, 1),
             (AgentState::Failed, 1),
