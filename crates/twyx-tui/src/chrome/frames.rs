@@ -95,24 +95,36 @@ impl Widget for Frames<'_> {
             } else {
                 self.pen.theme.type_.caption
             };
-            title(buf, frame, self.pen.face(face));
+            title(buf, area, frame, self.pen.face(face));
         }
     }
 }
 
 /// The title sits on the top rule, one rule cell in from the corner and
 /// padded by one cell on each side. A title that does not fit is cut.
-fn title(buf: &mut Buffer, frame: &Frame<'_>, style: ratatui::style::Style) {
+/// A frame that runs past `area` keeps its title only where it shows.
+fn title(buf: &mut Buffer, area: Rect, frame: &Frame<'_>, style: ratatui::style::Style) {
     let pad = SPACE.pad;
     let room = frame.outer.width.saturating_sub(4 + 2 * pad);
+    let y = frame.outer.y;
     if room == 0 || frame.title.is_empty() || frame.outer.height < 2 {
         return;
     }
+    if y < area.top() || y >= area.bottom() {
+        return;
+    }
     let x = frame.outer.x + 2 + pad;
-    let (end, _) = buf.set_stringn(x, frame.outer.y, frame.title, usize::from(room), style);
+    let limit = (x + room).min(area.right());
+    if x >= limit {
+        return;
+    }
+    let (end, _) = buf.set_stringn(x, y, frame.title, usize::from(limit - x), style);
     // The padding cells around the title are blanks on the rule.
-    buf[(x - pad, frame.outer.y)].set_char(' ');
-    buf[(end, frame.outer.y)].set_char(' ');
+    for blank in [x - pad, end] {
+        if blank < area.right() {
+            buf[(blank, y)].set_char(' ');
+        }
+    }
 }
 
 fn glyph(directions: u8) -> Option<char> {

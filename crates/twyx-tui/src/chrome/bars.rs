@@ -180,11 +180,14 @@ impl Widget for StatusBar<'_> {
         if self.dirty {
             branch.push(("*".to_owned(), pen.face(kind.label)));
         }
-        let fields = vec![
+        let fields: Vec<Field> = vec![
             vec![(self.mode.to_uppercase(), pen.face(kind.mode))],
             vec![(self.worktree.to_owned(), pen.face(kind.label))],
             branch,
-        ];
+        ]
+        .into_iter()
+        .filter(|field| width(field) > 0)
+        .collect();
         let left = fit(fields, &vec![(separator(), pen.rule())], room);
         let x = draw(buf, area.x + SPACE.pad, area.y, area.right(), &left);
 
@@ -237,6 +240,9 @@ impl Widget for HintBar<'_> {
             .hints
             .iter()
             .map(|(key, word)| {
+                if key.is_empty() {
+                    return vec![((*word).to_owned(), pen.fg(Tone::Rgb(pen.theme.graphite)))];
+                }
                 vec![
                     ((*key).to_owned(), pen.face(kind.key)),
                     (" ".to_owned(), pen.paper()),

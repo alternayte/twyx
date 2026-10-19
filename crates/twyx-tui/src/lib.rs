@@ -5,7 +5,9 @@
 
 pub mod app;
 pub mod chrome;
+pub mod compositor;
 pub mod emitter;
 pub mod input;
+pub mod mouse;
 pub mod probe;
 pub mod specimen;

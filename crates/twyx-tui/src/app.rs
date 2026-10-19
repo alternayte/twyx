@@ -18,7 +18,7 @@ use crossterm::{execute, terminal};
 
 use twyx_core::keys::{Command, Keymap, Mode, Outcome};
 use twyx_core::layout::LeafId;
-use twyx_core::theme::Rgb;
+use twyx_core::theme::{Rgb, Theme, Variant};
 use twyx_protocol::client::{
     FromDaemon, Launch, PaneInfo, Place, ToDaemon, WorkspaceInfo, request,
 };
@@ -26,8 +26,11 @@ use twyx_protocol::grid::{Frame, Snapshot};
 use twyx_protocol::input::InputEvent;
 use twyx_protocol::wire;
 
+use crate::chrome::{Depth, Pen};
+use crate::compositor::{CHROME_ROWS, Scene, tab_area};
 use crate::emitter::{Capabilities, Emitter};
 use crate::input;
+use crate::mouse;
 use crate::probe;
 use twyx_protocol::connection as client;
 use twyx_protocol::view::View;
@@ -121,7 +124,7 @@ struct Follow {
     workspace: Option<WorkspaceInfo>,
     tab: Option<u64>,
     leaf: Option<LeafId>,
-    /// The pane drawn now.
+    /// The focused pane.
     shown: Option<u64>,
     /// Whether the workspace held a pane since this client attached.
     had_panes: bool,
@@ -154,25 +157,21 @@ fn run(
     screen: &mut Screen,
     mut keymap: Keymap,
 ) -> Result<()> {
-    let cols = cols.max(2);
-    let rows = rows.max(1);
-    let connection = client::connect(&paths.socket(), cols, rows, true)?;
-    let mut daemon = connection.split();
-    let mut size = (cols, rows);
-
-    let mut view = View::new(cols, rows);
-    screen.emitter.resize(cols, rows);
+    let mut size = (cols.max(2), rows.max(1 + CHROME_ROWS));
+    let area = tab_area(size.0, size.1);
+    let mut daemon = client::connect(&paths.socket(), area.0, area.1, true)?.split();
     let mut follow = Follow::default();
-    let mut panes: HashMap<u64, PaneInfo> = daemon
-        .hello
-        .panes
-        .iter()
-        .map(|info| (info.pane, info.clone()))
-        .collect();
+    let mut panes: HashMap<u64, PaneInfo> = HashMap::new();
+    let mut views: HashMap<u64, View> = HashMap::new();
     let mut title = String::new();
+    let mut client_id = daemon.hello.client;
+    let known = |panes: &mut HashMap<u64, PaneInfo>, hello: &[PaneInfo]| {
+        *panes = hello.iter().map(|info| (info.pane, info.clone())).collect();
+    };
+    known(&mut panes, &daemon.hello.panes);
+    let mut dirty = true;
 
     loop {
-        let mut drew = false;
         let mut lost = false;
         loop {
             let message = match daemon.incoming.try_recv() {
@@ -183,19 +182,25 @@ fn run(
                     break;
                 }
             };
+            dirty = true;
             match message {
                 FromDaemon::Workspace(workspace) => follow.workspace = Some(workspace),
                 FromDaemon::Focus { tab, leaf } => {
                     follow.tab = tab;
                     follow.leaf = leaf;
                 }
-                FromDaemon::Snapshot { pane, body, .. } if Some(pane) == follow.shown => {
-                    view.apply_snapshot(wire::decode_body::<Snapshot>(&body)?);
-                    drew = true;
+                FromDaemon::Snapshot { pane, body, .. } => {
+                    let snapshot = wire::decode_body::<Snapshot>(&body)?;
+                    views
+                        .entry(pane)
+                        .or_insert_with(|| View::new(snapshot.screen.cols, snapshot.screen.rows))
+                        .apply_snapshot(snapshot);
                 }
-                FromDaemon::Frame { pane, body, .. } if Some(pane) == follow.shown => {
-                    view.apply_frame(wire::decode_body::<Frame>(&body)?);
-                    drew = true;
+                FromDaemon::Frame { pane, body, .. } => {
+                    // A frame for a pane with no snapshot yet waits for one.
+                    if let Some(view) = views.get_mut(&pane) {
+                        view.apply_frame(wire::decode_body::<Frame>(&body)?);
+                    }
                 }
                 FromDaemon::Clipboard { text, .. } => {
                     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
@@ -211,23 +216,19 @@ fn run(
                 }
                 FromDaemon::PaneClosed { pane } => {
                     panes.remove(&pane);
+                    views.remove(&pane);
                 }
-                FromDaemon::Refused { .. }
-                | FromDaemon::Welcome(_)
-                | FromDaemon::Snapshot { .. }
-                | FromDaemon::Frame { .. } => {}
+                FromDaemon::Refused { .. } | FromDaemon::Welcome(_) => {}
             }
         }
 
         if lost {
-            daemon = reconnect(paths, size)?;
+            let area = tab_area(size.0, size.1);
+            daemon = reconnect(paths, area)?;
+            client_id = daemon.hello.client;
             keymap.reset();
-            panes = daemon
-                .hello
-                .panes
-                .iter()
-                .map(|info| (info.pane, info.clone()))
-                .collect();
+            known(&mut panes, &daemon.hello.panes);
+            views.clear();
             // The new daemon adopts the panes and keeps the leaves; this
             // client's own focus goes back to it.
             if let Some(leaf) = follow.leaf {
@@ -257,19 +258,30 @@ fn run(
         } else if follow.workspace.is_some() {
             follow.had_panes = true;
         }
+        follow.shown = follow.focused_pane();
 
-        let focused = follow.focused_pane();
-        if focused != follow.shown {
-            follow.shown = focused;
-            if let Some(pane) = focused {
-                let _ = daemon.outgoing.send(ToDaemon::Snapshot { pane });
-            }
-        }
-
-        if drew {
-            screen.emitter.draw(&mut view)?;
-            if view.title != title {
-                title.clone_from(&view.title);
+        if dirty {
+            dirty = false;
+            let scene = Scene {
+                pen: &screen.pen,
+                cols: size.0,
+                rows: size.1,
+                client: client_id,
+                workspace: follow.workspace.as_ref(),
+                tab: follow.tab,
+                focus: follow.leaf,
+                panes: &panes,
+                views: &views,
+                keymap: &keymap,
+            };
+            screen.emitter.draw(&scene.compose())?;
+            let focused_title = follow
+                .shown
+                .and_then(|pane| views.get(&pane))
+                .map(|view| view.title.clone())
+                .unwrap_or_default();
+            if focused_title != title {
+                title = focused_title;
                 screen.set_title(&title)?;
             }
         }
@@ -280,19 +292,13 @@ fn run(
         if !event::poll(Duration::from_millis(8)).context("poll the terminal")? {
             continue;
         }
+        dirty = true;
         match event::read().context("read a terminal event")? {
             Event::Resize(new_cols, new_rows) => {
-                let new_cols = new_cols.max(2);
-                let new_rows = new_rows.max(1);
-                size = (new_cols, new_rows);
-                // The view keeps the pane's screen; only the crop changes until
-                // the pane itself is resized.
-                screen.emitter.resize(new_cols, new_rows);
-                screen.emitter.draw(&mut view)?;
-                let _ = daemon.outgoing.send(ToDaemon::Resize {
-                    cols: new_cols,
-                    rows: new_rows,
-                });
+                size = (new_cols.max(2), new_rows.max(1 + CHROME_ROWS));
+                screen.emitter.invalidate();
+                let (cols, rows) = tab_area(size.0, size.1);
+                let _ = daemon.outgoing.send(ToDaemon::Resize { cols, rows });
             }
             Event::Key(key) => {
                 let Some(event) = input::to_input(Event::Key(key)) else {
@@ -320,6 +326,23 @@ fn run(
                             let _ = daemon.outgoing.send(request);
                         }
                     }
+                }
+            }
+            Event::Mouse(mouse) => {
+                let scene = Scene {
+                    pen: &screen.pen,
+                    cols: size.0,
+                    rows: size.1,
+                    client: client_id,
+                    workspace: follow.workspace.as_ref(),
+                    tab: follow.tab,
+                    focus: follow.leaf,
+                    panes: &panes,
+                    views: &views,
+                    keymap: &keymap,
+                };
+                if let Some(request) = mouse::route(&scene, mouse) {
+                    let _ = daemon.outgoing.send(request);
                 }
             }
             other => {
@@ -351,6 +374,8 @@ fn working_directory() -> String {
 pub struct Screen {
     pub emitter: Emitter<std::io::Stdout>,
     capabilities: Capabilities,
+    /// The theme on this terminal's paper.
+    pen: Pen,
     active: bool,
 }
 
@@ -366,10 +391,14 @@ impl std::fmt::Debug for Screen {
 impl Screen {
     fn start() -> Result<Self> {
         terminal::enable_raw_mode().context("enter raw mode")?;
-        let answers = probe::interrogate(&mut tty()?);
-        let capabilities = answers
-            .map(|answers| answers.capabilities())
-            .unwrap_or_default();
+        let answers = probe::interrogate(&mut tty()?).unwrap_or_default();
+        let capabilities = answers.capabilities();
+        let depth = if answers.truecolor {
+            Depth::Truecolor
+        } else {
+            Depth::Palette256
+        };
+        let pen = Pen::on_paper(Theme::on(answers.paper, answers.ink, Variant::Dark), depth);
 
         let mut stdout = std::io::stdout();
         execute!(
@@ -395,6 +424,7 @@ impl Screen {
         Ok(Self {
             emitter: Emitter::new(std::io::stdout(), capabilities),
             capabilities,
+            pen,
             active: true,
         })
     }

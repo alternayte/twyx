@@ -65,10 +65,8 @@ impl FrameBuilder {
 
         let mut changed = Vec::new();
         for (index, row) in view.rows.iter().enumerate() {
-            let differs = match self.last.get(index) {
-                Some(previous) => previous != row,
-                None => true,
-            };
+            // A consumer replaces its whole screen on a new size.
+            let differs = resized || self.last.get(index) != Some(row);
             if differs {
                 changed.push(RowUpdate {
                     row: index as u16,
@@ -140,6 +138,16 @@ mod tests {
             scrollback: 0,
             links: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_frame_after_a_size_change_carries_every_row() {
+        // A client replaces its whole screen on a new size, so a row that
+        // reads the same must still be sent.
+        let mut builder = FrameBuilder::new(4, 3);
+        builder.frame(&view(&["abcd", "efgh", "ijkl"]));
+        let shrunk = builder.frame(&view(&["abcd", "efgh"]));
+        assert_eq!(shrunk.changed.len(), 2);
     }
 
     #[test]
