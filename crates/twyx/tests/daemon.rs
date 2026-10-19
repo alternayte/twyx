@@ -65,7 +65,11 @@ impl Sandbox {
         self.daemon = Some(child);
         let deadline = Instant::now() + Duration::from_secs(5);
         while UnixStream::connect(self.socket()).is_err() {
-            assert!(Instant::now() < deadline, "the daemon never listened");
+            assert!(
+                Instant::now() < deadline,
+                "the daemon never listened: {}",
+                self.daemon_log()
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -625,4 +629,199 @@ fn tabs_open_rename_and_close_with_their_panes() {
         c.tab_count() == 1 && !c.panes.contains_key(&second) && c.tab == Some(tabs[0])
     });
     assert!(client.panes.contains_key(&first));
+}
+
+impl Sandbox {
+    fn panes_dir(&self) -> PathBuf {
+        self.root.join("run/twyx/panes")
+    }
+
+    /// Kills one holder the way a crash or a reboot would.
+    fn kill_holder(&self, pane: u64) {
+        let socket = self.panes_dir().join(format!("{}.sock", stem(pane)));
+        let status = Command::new("pkill")
+            .args(["-9", "-f"])
+            .arg(&socket)
+            .status()
+            .expect("run pkill");
+        assert!(status.success(), "no holder for pane {pane}");
+    }
+
+    /// Starts a holder the daemon has no row for.
+    fn stray_holder(&self, pane: u64) {
+        let socket = self.panes_dir().join(format!("{}.sock", stem(pane)));
+        let mut child = self
+            .command(&[
+                "holder",
+                "--pane",
+                &stem(pane),
+                "--socket",
+                &socket.to_string_lossy(),
+                "--",
+                "/bin/sh",
+                "-c",
+                "exec cat",
+            ])
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start a holder");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !socket.exists() {
+            assert!(Instant::now() < deadline, "the stray holder never listened");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // The sandbox ends it; this reaps it.
+        std::thread::spawn(move || child.wait());
+    }
+}
+
+fn stem(pane: u64) -> String {
+    twyx_core::pane::PaneId::from_raw(pane).stem()
+}
+
+#[test]
+fn invariant_8_after_a_daemon_start_running_means_a_live_holder_owned_by_one_pane() {
+    let mut sandbox = Sandbox::new("inv8");
+    sandbox.start();
+    let mut client = sandbox.connect(80, 10);
+    let cwd = sandbox.cwd();
+    let live = new_pane_at(&mut client, &cwd, sh("exec cat"), Place::Split(Axis::Row));
+    let crashed = new_pane_at(&mut client, &cwd, sh("exec cat"), Place::Split(Axis::Row));
+    client.wait_until("both panes saved", |c| {
+        c.workspace.as_ref().is_some_and(|w| {
+            w.tabs
+                .iter()
+                .map(|t| t.layout.leaves().len())
+                .sum::<usize>()
+                == 2
+        })
+    });
+    drop(client);
+    sandbox.kill();
+    sandbox.kill_holder(crashed);
+    sandbox.stray_holder(999);
+
+    sandbox.start();
+    let mut client = sandbox.connect(80, 10);
+    client.wait_until("the workspace", |c| c.workspace.is_some());
+    let states: HashMap<u64, PaneState> = client
+        .hello
+        .panes
+        .iter()
+        .map(|info| (info.pane, info.state.clone()))
+        .collect();
+    assert_eq!(states.get(&live), Some(&PaneState::Running));
+    assert_eq!(states.get(&crashed), Some(&PaneState::Lost));
+    assert_eq!(states.get(&999), Some(&PaneState::Running));
+
+    let workspace = client.workspace.clone().expect("a workspace");
+    let mut shown: Vec<u64> = workspace
+        .tabs
+        .iter()
+        .flat_map(|tab| tab.layout.leaves())
+        .map(|leaf| leaf.pane.raw())
+        .collect();
+    shown.sort_unstable();
+    let mut expected = vec![live, crashed, 999];
+    expected.sort_unstable();
+    assert_eq!(shown, expected, "every pane in exactly one leaf");
+    let recovered = workspace
+        .tabs
+        .iter()
+        .find(|tab| tab.name == "Recovered")
+        .expect("a Recovered tab");
+    assert_eq!(recovered.layout.leaves()[0].pane.raw(), 999);
+}
+
+#[test]
+fn tabs_and_layouts_survive_a_host_restart_and_ended_panes_run_again() {
+    let mut sandbox = Sandbox::new("reboot");
+    sandbox.start();
+    let mut client = sandbox.connect(80, 10);
+    let cwd = sandbox.cwd();
+    let left = new_pane_at(
+        &mut client,
+        &cwd,
+        sh("echo left; exec cat"),
+        Place::Split(Axis::Row),
+    );
+    let right = new_pane_at(
+        &mut client,
+        &cwd,
+        sh("exec cat"),
+        Place::Split(Axis::Column),
+    );
+    let logs = new_pane_at(&mut client, &cwd, sh("exec cat"), Place::NewTab);
+    client.wait_until("two tabs", |c| c.tab_count() == 2);
+    let logs_tab = client.workspace.as_ref().unwrap().tabs[1].tab;
+    client
+        .send(&ToDaemon::RenameTab {
+            tab: logs_tab,
+            name: "logs".to_owned(),
+        })
+        .expect("rename");
+    client.wait_until("the name", |c| {
+        c.workspace.as_ref().unwrap().tabs[1].name == "logs"
+    });
+    let before = client.workspace.clone().expect("a workspace");
+    drop(client);
+
+    // A host restart ends the daemon and every holder.
+    sandbox.kill();
+    for pane in [left, right, logs] {
+        sandbox.kill_holder(pane);
+    }
+    sandbox.start();
+    let mut client = sandbox.connect(80, 10);
+    client.wait_until("the workspace", |c| c.workspace.is_some());
+    let after = client.workspace.clone().expect("a workspace");
+    assert_eq!(
+        after
+            .tabs
+            .iter()
+            .map(|t| (&t.name, &t.layout))
+            .collect::<Vec<_>>(),
+        before
+            .tabs
+            .iter()
+            .map(|t| (&t.name, &t.layout))
+            .collect::<Vec<_>>(),
+    );
+    for info in &client.hello.panes {
+        assert_eq!(info.state, PaneState::Lost, "pane {}", info.pane);
+    }
+    assert!(client.panes[&left].cwd == cwd);
+
+    client
+        .send(&ToDaemon::RunAgain { pane: left })
+        .expect("run again");
+    client.wait_until("a new pane in the left leaf", |c| {
+        !c.panes.contains_key(&left) && c.panes.len() == 3
+    });
+    let again = *client
+        .panes
+        .keys()
+        .find(|pane| ![right, logs].contains(pane))
+        .expect("the new pane");
+    client.wait_for_text(again, "left");
+}
+
+#[test]
+fn invariant_9_only_the_daemon_opens_the_database() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    for entry in std::fs::read_dir(&crates)
+        .expect("list the crates")
+        .flatten()
+    {
+        let manifest = entry.path().join("Cargo.toml");
+        let Ok(text) = std::fs::read_to_string(&manifest) else {
+            continue;
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        assert_eq!(
+            text.contains("rusqlite"),
+            name == "twyx-daemon",
+            "{name} and the SQLite dependency"
+        );
+    }
 }

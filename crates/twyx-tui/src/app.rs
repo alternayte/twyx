@@ -203,7 +203,11 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
 
         if lost {
             daemon = reconnect(paths, size)?;
-            // The new daemon adopts the panes; it says again what to show.
+            // The new daemon adopts the panes and keeps the leaves; this
+            // client's own focus goes back to it.
+            if let Some(leaf) = follow.leaf {
+                let _ = daemon.outgoing.send(ToDaemon::FocusLeaf { leaf });
+            }
             follow = Follow {
                 had_panes: follow.had_panes,
                 asked: true,

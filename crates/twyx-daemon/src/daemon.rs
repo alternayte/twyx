@@ -5,6 +5,7 @@
 //! thread. This thread owns the state and forwards frames without reading
 //! them.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -15,7 +16,7 @@ use std::thread;
 
 use anyhow::{Context, Result, bail};
 
-use twyx_core::layout::{Cells, Layout, Leaf, LeafId};
+use twyx_core::layout::{Axis, Cells, Layout, Leaf, LeafId};
 use twyx_core::pane::PaneId;
 use twyx_core::paths::Paths;
 use twyx_protocol::client::{
@@ -27,6 +28,7 @@ use twyx_protocol::wire;
 
 use crate::holders::{self, HolderLink};
 use crate::peer;
+use crate::store::{Saved, SavedPane, SavedTab, Store};
 
 static CLIENTS: AtomicU64 = AtomicU64::new(1);
 
@@ -104,9 +106,13 @@ pub struct Daemon {
     pub(crate) tabs: Vec<(u64, Tab)>,
     /// The tab a new client shows.
     pub(crate) active_tab: Option<u64>,
-    pub(crate) next_pane: u64,
     pub(crate) next_leaf: u64,
-    pub(crate) next_tab: u64,
+    pub(crate) store: Store,
+    /// The default workspace's row.
+    pub(crate) workspace: u64,
+    /// Messages for clients, sent once the event that made them is written,
+    /// so no client sees a change a crash could still lose.
+    pub(crate) outbox: RefCell<Vec<(Sender<FromDaemon>, FromDaemon)>>,
 }
 
 /// Starts the daemon and serves it until the socket closes.
@@ -116,6 +122,9 @@ pub fn run(paths: Paths) -> Result<()> {
     let holder_binary = std::env::current_exe().context("find the twyx binary")?;
     let build = env!("CARGO_PKG_VERSION").to_owned();
     let (events, inbound) = mpsc::channel();
+    let store = Store::open(&paths.database())?;
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_owned());
+    let saved = store.load(&home)?;
 
     let mut daemon = Daemon {
         paths,
@@ -127,11 +136,15 @@ pub fn run(paths: Paths) -> Result<()> {
         clients: BTreeMap::new(),
         tabs: Vec::new(),
         active_tab: None,
-        next_pane: 1,
-        next_leaf: 1,
-        next_tab: 1,
+        next_leaf: saved.next_leaf,
+        store,
+        workspace: saved.workspace,
+        outbox: RefCell::new(Vec::new()),
     };
+    daemon.restore(saved);
     daemon.adopt();
+    daemon.reconcile();
+    daemon.save();
     spawn_acceptor(listener, events)?;
     daemon.serve(&inbound)
 }
@@ -152,13 +165,48 @@ fn bind(path: &Path) -> Result<UnixListener> {
 }
 
 impl Daemon {
-    /// Takes over every holder that outlived a daemon. With no record of
-    /// where they were, they go into one "Recovered" tab.
+    /// Brings back the tabs, layouts and panes the last daemon wrote. A pane
+    /// that was running shows as lost until its holder is adopted.
+    fn restore(&mut self, saved: Saved) {
+        self.active_tab = saved.active_tab;
+        for tab in saved.tabs {
+            self.tabs.push((
+                tab.id,
+                Tab {
+                    name: tab.name,
+                    layout: tab.layout,
+                    lease: None,
+                    area: DEFAULT_AREA,
+                    focus: tab.focus,
+                },
+            ));
+        }
+        for pane in saved.panes {
+            self.panes.insert(
+                pane.id,
+                Pane {
+                    link: None,
+                    cols: pane.cols,
+                    rows: pane.rows,
+                    state: match pane.state {
+                        PaneState::Running => PaneState::Lost,
+                        state => state,
+                    },
+                    screen: None,
+                    launch: pane.launch,
+                    cwd: pane.cwd,
+                    title: pane.title,
+                },
+            );
+        }
+    }
+
+    /// Takes over every holder that outlived a daemon. A holder with no
+    /// pane row gets one, and is shown in the "Recovered" tab.
     fn adopt(&mut self) {
         let Ok(entries) = std::fs::read_dir(self.paths.panes_dir()) else {
             return;
         };
-        let mut recovered = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
@@ -167,9 +215,6 @@ impl Daemon {
             let Ok(pane) = stem.parse::<PaneId>() else {
                 continue;
             };
-            if self.panes.contains_key(&pane) {
-                continue;
-            }
             let Ok((link, welcome)) =
                 HolderLink::connect(path.clone(), pane, self.build.clone(), self.events.clone())
             else {
@@ -178,6 +223,26 @@ impl Daemon {
                 continue;
             };
             let (cols, rows) = holders::screen_size(&welcome.snapshot);
+            if let Some(entry) = self.panes.get_mut(&pane) {
+                entry.link = Some(link);
+                entry.state = PaneState::Running;
+                entry.screen = Some(welcome.snapshot);
+                entry.cols = cols;
+                entry.rows = rows;
+                continue;
+            }
+            let row = SavedPane {
+                id: pane,
+                cwd: String::new(),
+                launch: Launch::Unknown,
+                state: PaneState::Running,
+                title: String::new(),
+                cols,
+                rows,
+            };
+            if let Err(error) = self.store.new_pane(self.workspace, &row, Some(pane)) {
+                eprintln!("twyx daemon: {error:#}");
+            }
             self.panes.insert(
                 pane,
                 Pane {
@@ -191,29 +256,130 @@ impl Daemon {
                     title: String::new(),
                 },
             );
-            self.next_pane = self.next_pane.max(pane.raw() + 1);
-            recovered.push(pane);
         }
-        // The directory order is not stable; the oldest pane comes first.
-        recovered.sort();
-        if recovered.is_empty() {
-            return;
-        }
-        let tab = self.add_tab("Recovered".to_owned());
-        for pane in recovered {
-            let leaf = self.new_leaf(pane);
-            if let Some(tab) = self.tab_mut(tab) {
-                match tab.focus {
-                    Some(last) => tab.layout.stack(last, leaf),
-                    None => tab.layout.split(None, leaf, twyx_core::layout::Axis::Row),
+    }
+
+    /// Makes the layouts and the panes agree: a leaf without a pane goes, a
+    /// live pane without a leaf goes into the "Recovered" tab, and an ended
+    /// one without a leaf is forgotten.
+    fn reconcile(&mut self) {
+        for (_, tab) in &mut self.tabs {
+            for leaf in tab.layout.leaves() {
+                if !self.panes.contains_key(&leaf.pane) {
+                    tab.layout.remove(leaf.id);
                 }
-                tab.focus = Some(leaf.id);
             }
         }
+        let shown: Vec<PaneId> = self
+            .tabs
+            .iter()
+            .flat_map(|(_, tab)| tab.layout.leaves())
+            .map(|leaf| leaf.pane)
+            .collect();
+        let unshown: Vec<PaneId> = self
+            .panes
+            .keys()
+            .filter(|pane| !shown.contains(pane))
+            .copied()
+            .collect();
+        let mut recovered = Vec::new();
+        for pane in unshown {
+            if self
+                .panes
+                .get(&pane)
+                .is_some_and(|entry| entry.link.is_some())
+            {
+                recovered.push(pane);
+            } else {
+                self.panes.remove(&pane);
+            }
+        }
+        if !recovered.is_empty()
+            && let Some(tab) = self.add_tab("Recovered".to_owned())
+        {
+            for pane in recovered {
+                let leaf = self.new_leaf(pane);
+                if let Some(tab) = self.tab_mut(tab) {
+                    match tab.focus {
+                        Some(last) => tab.layout.stack(last, leaf),
+                        None => tab.layout.split(None, leaf, Axis::Row),
+                    }
+                    tab.focus = Some(leaf.id);
+                }
+            }
+        }
+        self.tabs.retain(|(_, tab)| !tab.layout.is_empty());
+        if !self.active_tab.is_some_and(|tab| self.tab(tab).is_some()) {
+            self.active_tab = self.tabs.first().map(|(id, _)| *id);
+        }
+    }
+
+    /// Writes the workspace. A failed write keeps the daemon running; the
+    /// next change writes again.
+    pub(crate) fn save(&mut self) {
+        let saved = Saved {
+            workspace: self.workspace,
+            active_tab: self.active_tab,
+            tabs: self
+                .tabs
+                .iter()
+                .map(|(id, tab)| SavedTab {
+                    id: *id,
+                    name: tab.name.clone(),
+                    layout: tab.layout.clone(),
+                    focus: tab.focus,
+                })
+                .collect(),
+            panes: self
+                .panes
+                .iter()
+                .map(|(id, pane)| SavedPane {
+                    id: *id,
+                    cwd: pane.cwd.clone(),
+                    launch: pane.launch.clone(),
+                    state: pane.state.clone(),
+                    title: pane.title.clone(),
+                    cols: pane.cols,
+                    rows: pane.rows,
+                })
+                .collect(),
+            next_leaf: self.next_leaf,
+        };
+        if let Err(error) = self.store.save(&saved) {
+            eprintln!("twyx daemon: {error:#}");
+        }
+    }
+
+    /// Reserves the row, and so the id, of a new pane.
+    pub(crate) fn reserve_pane(
+        &self,
+        launch: &Launch,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<PaneId> {
+        let row = SavedPane {
+            id: PaneId::from_raw(0),
+            cwd: cwd.to_owned(),
+            launch: launch.clone(),
+            state: PaneState::Running,
+            title: String::new(),
+            cols,
+            rows,
+        };
+        self.store.new_pane(self.workspace, &row, None)
     }
 
     fn serve(&mut self, inbound: &Receiver<Event>) -> Result<()> {
         while let Ok(event) = inbound.recv() {
+            // Screens are not state; everything else is written after it lands.
+            let persist = !matches!(
+                &event,
+                Event::Holder {
+                    message: FromHolder::Frame { .. } | FromHolder::Snapshot { .. },
+                    ..
+                }
+            );
             match event {
                 Event::ClientHello { client, hello, out } => self.client_hello(client, hello, out),
                 Event::ClientMessage { client, message } => {
@@ -226,19 +392,28 @@ impl Daemon {
                 Event::Holder { pane, message } => self.holder_message(pane, message),
                 Event::HolderGone { pane } => self.holder_gone(pane),
             }
+            if persist {
+                self.save();
+            }
+            for (out, message) in self.outbox.take() {
+                let _ = out.send(message);
+            }
         }
         Ok(())
     }
 
     fn client_hello(&mut self, id: u64, hello: ClientHello, out: Sender<FromDaemon>) {
-        let _ = out.send(FromDaemon::Welcome(ServerHello {
-            major: MAJOR,
-            minor: MINOR,
-            build: self.build.clone(),
-            pid: std::process::id(),
-            client: id,
-            panes: self.pane_infos(),
-        }));
+        self.post(
+            &out,
+            FromDaemon::Welcome(ServerHello {
+                major: MAJOR,
+                minor: MINOR,
+                build: self.build.clone(),
+                pid: std::process::id(),
+                client: id,
+                panes: self.pane_infos(),
+            }),
+        );
         let tab = self
             .active_tab
             .or_else(|| self.tabs.first().map(|(id, _)| *id));
@@ -254,7 +429,7 @@ impl Daemon {
             },
         );
         if !hello.interactive {
-            let _ = out.send(FromDaemon::Workspace(self.workspace_info()));
+            self.post(&out, FromDaemon::Workspace(self.workspace_info()));
             return;
         }
         if let Some(tab) = tab
@@ -262,16 +437,19 @@ impl Daemon {
         {
             self.take_lease(tab, id);
         }
-        let _ = out.send(FromDaemon::Workspace(self.workspace_info()));
+        self.post(&out, FromDaemon::Workspace(self.workspace_info()));
         self.send_focus(id);
 
         for (pane, entry) in &self.panes {
             if let Some(screen) = &entry.screen {
-                let _ = out.send(FromDaemon::Snapshot {
-                    pane: pane.raw(),
-                    seq: 0,
-                    body: screen.clone(),
-                });
+                self.post(
+                    &out,
+                    FromDaemon::Snapshot {
+                        pane: pane.raw(),
+                        seq: 0,
+                        body: screen.clone(),
+                    },
+                );
             }
             if let Some(link) = &entry.link {
                 link.send(ToHolder::Snapshot);
@@ -367,11 +545,14 @@ impl Daemon {
                 if let Some(screen) = &entry.screen
                     && let Some(client) = self.clients.get(&id)
                 {
-                    let _ = client.out.send(FromDaemon::Snapshot {
-                        pane: pane.raw(),
-                        seq: 0,
-                        body: screen.clone(),
-                    });
+                    self.post(
+                        &client.out,
+                        FromDaemon::Snapshot {
+                            pane: pane.raw(),
+                            seq: 0,
+                            body: screen.clone(),
+                        },
+                    );
                 }
             }
         }
@@ -571,9 +752,14 @@ impl Daemon {
             .map(|(_, tab)| tab)
     }
 
-    pub(crate) fn add_tab(&mut self, name: String) -> u64 {
-        let id = self.next_tab;
-        self.next_tab += 1;
+    pub(crate) fn add_tab(&mut self, name: String) -> Option<u64> {
+        let id = match self.store.new_tab(self.workspace) {
+            Ok(id) => id,
+            Err(error) => {
+                eprintln!("twyx daemon: {error:#}");
+                return None;
+            }
+        };
         self.tabs.push((
             id,
             Tab {
@@ -584,7 +770,7 @@ impl Daemon {
                 focus: None,
             },
         ));
-        id
+        Some(id)
     }
 
     pub(crate) fn new_leaf(&mut self, pane: PaneId) -> Leaf {
@@ -626,10 +812,13 @@ impl Daemon {
             return;
         };
         let focus = self.client_focus(id);
-        let _ = client.out.send(FromDaemon::Focus {
-            tab: focus.map(|(tab, _)| tab).or(client.tab),
-            leaf: focus.map(|(_, leaf)| leaf),
-        });
+        self.post(
+            &client.out,
+            FromDaemon::Focus {
+                tab: focus.map(|(tab, _)| tab).or(client.tab),
+                leaf: focus.map(|(_, leaf)| leaf),
+            },
+        );
     }
 
     fn pane_info(&self, pane: PaneId, entry: &Pane) -> PaneInfo {
@@ -680,16 +869,20 @@ impl Daemon {
         }
     }
 
+    pub(crate) fn post(&self, out: &Sender<FromDaemon>, message: FromDaemon) {
+        self.outbox.borrow_mut().push((out.clone(), message));
+    }
+
     pub(crate) fn broadcast(&self, message: FromDaemon) {
         for client in self.clients.values() {
-            let _ = client.out.send(message.clone());
+            self.post(&client.out, message.clone());
         }
     }
 
     /// Screens go only to interactive clients.
     pub(crate) fn broadcast_frames(&self, message: FromDaemon) {
         for client in self.clients.values().filter(|client| client.interactive) {
-            let _ = client.out.send(message.clone());
+            self.post(&client.out, message.clone());
         }
     }
 }

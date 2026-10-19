@@ -13,6 +13,8 @@ workspace = true
 anyhow = "1"
 nix = { version = "0.29", features = ["user", "fs", "socket"] }
 rustix = { version = "1", features = ["process", "net", "fs"] }
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
+serde_json = "1"
 twyx-core = { workspace = true }
 twyx-holder = { workspace = true }
 twyx-protocol = { workspace = true }

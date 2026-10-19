@@ -23,7 +23,13 @@ impl Daemon {
             .or(self.active_tab)
             .filter(|tab| self.tab(*tab).is_some());
         let (tab, created) = match (place, existing) {
-            (Place::NewTab, _) | (_, None) => (self.add_tab(String::new()), true),
+            (Place::NewTab, _) | (_, None) => match self.add_tab(String::new()) {
+                Some(tab) => (tab, true),
+                None => {
+                    self.refuse(id, "could not record a new tab".to_owned());
+                    return;
+                }
+            },
             (_, Some(tab)) => (tab, false),
         };
         if created {
@@ -40,8 +46,14 @@ impl Daemon {
             .client_focus(id)
             .filter(|(focus_tab, _)| *focus_tab == tab)
             .map(|(_, leaf)| leaf);
-        let pane = PaneId::from_raw(self.next_pane);
-        self.next_pane += 1;
+        let pane = match self.reserve_pane(&launch, &cwd, 80, 24) {
+            Ok(pane) => pane,
+            Err(error) => {
+                self.refuse(id, format!("{error:#}"));
+                self.drop_empty_tab(tab);
+                return;
+            }
+        };
         let leaf = self.new_leaf(pane);
         let Some(entry) = self.tab_mut(tab) else {
             return;
@@ -229,8 +241,9 @@ impl Daemon {
         let Some((tab, leaf)) = self.leaf_of(old) else {
             return;
         };
-        let pane = PaneId::from_raw(self.next_pane);
-        self.next_pane += 1;
+        let Ok(pane) = self.reserve_pane(&launch, &cwd, cols, rows) else {
+            return;
+        };
         let Ok((link, welcome)) = holders::start(
             holders::Start {
                 binary: &self.holder_binary,
@@ -369,7 +382,7 @@ impl Daemon {
 
     fn refuse(&self, id: u64, reason: String) {
         if let Some(client) = self.client(id) {
-            let _ = client.out.send(FromDaemon::Refused { reason });
+            self.post(&client.out, FromDaemon::Refused { reason });
         }
     }
 

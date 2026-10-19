@@ -127,9 +127,13 @@ impl Terminal {
         let outgoing = parts.outgoing.clone();
         self.outgoing = Some(outgoing.clone());
 
-        // The daemon says what to show; a reconnect asks again.
+        // The daemon says what to show. A reconnect keeps this window's own
+        // focus: the new daemon keeps the leaves.
         {
             let mut shared = self.shared();
+            if let Some(leaf) = shared.leaf {
+                let _ = outgoing.send(ToDaemon::FocusLeaf { leaf });
+            }
             shared.workspace = None;
             shared.tab = None;
             shared.leaf = None;

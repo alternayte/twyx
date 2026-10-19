@@ -73,6 +73,10 @@ impl Paths {
     pub fn panes_dir(&self) -> PathBuf {
         self.runtime.join("panes")
     }
+
+    pub fn database(&self) -> PathBuf {
+        self.state.join("twyx.db")
+    }
 }
 
 fn xdg(variable: &str, fallback: &str) -> Result<PathBuf> {

@@ -6,4 +6,5 @@
 pub mod daemon;
 mod holders;
 pub mod peer;
+mod store;
 mod tabs;
