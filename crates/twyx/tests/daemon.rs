@@ -184,6 +184,10 @@ impl Client {
                     .screens
                     .entry(*pane)
                     .or_insert_with(|| vec![vec![String::new(); cols]; rows]);
+                screen.resize(rows, vec![String::new(); cols]);
+                for row in screen.iter_mut() {
+                    row.resize(cols, String::new());
+                }
                 for update in frame.changed {
                     if let Some(row) = screen.get_mut(update.row as usize) {
                         *row = update.cells.into_iter().map(|cell| cell.text).collect();
