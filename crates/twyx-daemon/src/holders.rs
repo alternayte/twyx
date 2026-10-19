@@ -3,7 +3,7 @@
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -133,8 +133,7 @@ pub(crate) fn start(
         bail!("a pane needs a command");
     }
     let scrollback_lines = twyx_holder::session::lines(tuning::PANE_SCROLLBACK_BYTES, start.cols);
-    let mut command = Command::new(start.binary);
-    command.arg("holder");
+    let mut command = twyx_core::launch::holder(start.binary, &start.pane.to_string());
     if let Some(history) = &start.history {
         command.arg("--history").arg(history);
     }

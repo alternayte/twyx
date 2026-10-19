@@ -162,9 +162,7 @@ pub fn ensure_daemon(paths: &twyx_core::paths::Paths) -> Result<()> {
         return Ok(());
     }
     let binary = daemon_binary()?;
-    std::process::Command::new(binary)
-        .arg("daemon")
-        .arg("run")
+    twyx_core::launch::daemon(&binary)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
