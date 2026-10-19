@@ -49,3 +49,16 @@ The path starts with `/`, `~/` or `{parent}`, and must contain `{branch}`. `{par
 [worktrees]
 location = "~/worktrees/{repo}/{branch}"
 ```
+
+## `[agents]`
+
+| Key | Values | Default |
+|---|---|---|
+| `default` | `claude`, `pi`, `opencode`, `codex`, `cursor` | none: an agent pane runs your shell |
+
+A recipe pane with `agent = true` starts the default agent.
+
+```toml
+[agents]
+default = "claude"
+```
