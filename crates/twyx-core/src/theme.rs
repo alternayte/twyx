@@ -1,7 +1,8 @@
 //! Direction: a draughtsman's drawing sheet: graphite hairlines and a ruled
 //! title block drawn on the user's own paper, greys mixed from the user's own
 //! ink, and one blue pencil mark for where the hand is; nothing is filled and
-//! nothing moves.
+//! nothing moves, except on the desktop, where the pencil mark travels to
+//! its new place.
 //!
 //! The theme tokens. Every colour, glyph and spacing value the chrome uses is
 //! read from here.
@@ -194,6 +195,103 @@ pub const SPACE: Space = Space {
     pad: 1,
     gap: 1,
     sidebar: 30,
+};
+
+/// The desktop client's measures, in logical pixels, and its one motion.
+///
+/// The sheet is lettered in one technical face: monospaced, one stroke
+/// weight plus a semibold, like stencil lettering on a drawing. Sizes step by
+/// a ratio of 1.125 from the pane text, so the hierarchy comes from weight and
+/// case more than size. Every measure is a multiple of a 4 px unit; rules are
+/// 1 px hairlines and corners are square.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Desktop {
+    /// Font families in order of preference; the first one installed wins.
+    pub fonts: &'static [&'static str],
+    pub size: Sizes,
+    /// Extra spacing for capitalised field labels, in ems.
+    pub tracking: f32,
+    pub unit: f32,
+    /// A hairline: borders, separators, the title block's rules.
+    pub rule: f32,
+    /// The blue pencil mark: the active tab's underline and the focused
+    /// pane's border.
+    pub mark: f32,
+    pub pad: f32,
+    pub gap: f32,
+    pub sidebar: f32,
+    pub tab_bar: f32,
+    pub status_bar: f32,
+    pub palette_width: f32,
+    pub motion: Motion,
+}
+
+/// Type sizes, in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sizes {
+    pub caption: f32,
+    /// Pane text, chrome labels and titles.
+    pub body: f32,
+    /// Document headings, smallest to largest.
+    pub heading: [f32; 3],
+}
+
+/// How the pencil mark moves. Reduced motion makes every duration zero.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Motion {
+    /// The mark travelling to a new tab, pane or palette entry, with an
+    /// ease-out curve.
+    pub travel: std::time::Duration,
+    /// An agent state mark changing colour.
+    pub fade: std::time::Duration,
+}
+
+impl Motion {
+    /// Where a move is after `elapsed`, from 0.0 to 1.0: a cubic ease-out.
+    pub fn ease(duration: std::time::Duration, elapsed: std::time::Duration) -> f32 {
+        if duration.is_zero() || elapsed >= duration {
+            return 1.0;
+        }
+        let t = elapsed.as_secs_f32() / duration.as_secs_f32();
+        1.0 - (1.0 - t).powi(3)
+    }
+
+    /// The same motion with every duration zero.
+    pub fn reduced(self) -> Self {
+        Self {
+            travel: std::time::Duration::ZERO,
+            fade: std::time::Duration::ZERO,
+        }
+    }
+}
+
+pub const DESKTOP: Desktop = Desktop {
+    fonts: &[
+        "JetBrains Mono",
+        "SF Mono",
+        "Menlo",
+        "DejaVu Sans Mono",
+        "Liberation Mono",
+    ],
+    size: Sizes {
+        caption: 11.5,
+        body: 13.0,
+        heading: [14.5, 16.5, 18.5],
+    },
+    tracking: 0.06,
+    unit: 4.0,
+    rule: 1.0,
+    mark: 2.0,
+    pad: 8.0,
+    gap: 8.0,
+    sidebar: 240.0,
+    tab_bar: 28.0,
+    status_bar: 24.0,
+    palette_width: 560.0,
+    motion: Motion {
+        travel: std::time::Duration::from_millis(120),
+        fade: std::time::Duration::from_millis(120),
+    },
 };
 
 /// The state of an agent session, as the sidebar, inbox and status bar
@@ -453,6 +551,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn desktop_measures_sit_on_the_unit_and_sizes_step_by_the_ratio() {
+        for measure in [
+            DESKTOP.pad,
+            DESKTOP.gap,
+            DESKTOP.sidebar,
+            DESKTOP.tab_bar,
+            DESKTOP.status_bar,
+            DESKTOP.palette_width,
+        ] {
+            assert_eq!(measure % DESKTOP.unit, 0.0, "{measure}");
+        }
+        let mut size = DESKTOP.size.body;
+        for heading in DESKTOP.size.heading {
+            size *= 1.125;
+            assert!((heading - size).abs() < 0.3, "{heading} against {size}");
+        }
+        assert!((DESKTOP.size.caption - DESKTOP.size.body / 1.125).abs() < 0.3);
+    }
+
+    #[test]
+    fn the_mark_eases_out_and_reduced_motion_arrives_at_once() {
+        let motion = DESKTOP.motion;
+        let half = Motion::ease(motion.travel, motion.travel / 2);
+        assert!(half > 0.8 && half < 1.0, "{half}");
+        let reduced = motion.reduced();
+        assert_eq!(Motion::ease(reduced.travel, std::time::Duration::ZERO), 1.0);
     }
 
     #[test]
