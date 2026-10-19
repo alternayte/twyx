@@ -2,6 +2,7 @@
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
+use twyx_core::keys::{Chord, Key};
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -64,6 +65,50 @@ pub struct KeyEvent {
 }
 
 impl KeyEvent {
+    /// The key as the keymap sees it. A shifted character becomes its own
+    /// key: on a US layout, shift with `\` is `|`. Releases have none.
+    pub fn chord(&self) -> Option<Chord> {
+        if self.kind == KeyKind::Release {
+            return None;
+        }
+        let mut shift = self.mods.contains(Modifiers::SHIFT);
+        let key = match self.code {
+            KeyCode::Char(ch) => {
+                let ch = match (shift, self.shifted) {
+                    (true, Some(shifted)) => shifted,
+                    (true, None) if ch.is_ascii_lowercase() => ch.to_ascii_uppercase(),
+                    _ => ch,
+                };
+                if ch != ' ' {
+                    shift = false;
+                }
+                Key::Char(ch)
+            }
+            KeyCode::Enter => Key::Enter,
+            KeyCode::Tab => Key::Tab,
+            KeyCode::Backspace => Key::Backspace,
+            KeyCode::Escape => Key::Escape,
+            KeyCode::Delete => Key::Delete,
+            KeyCode::Insert => Key::Insert,
+            KeyCode::Home => Key::Home,
+            KeyCode::End => Key::End,
+            KeyCode::PageUp => Key::PageUp,
+            KeyCode::PageDown => Key::PageDown,
+            KeyCode::Up => Key::Up,
+            KeyCode::Down => Key::Down,
+            KeyCode::Left => Key::Left,
+            KeyCode::Right => Key::Right,
+            KeyCode::F(number) => Key::F(number),
+            KeyCode::Unidentified => return None,
+        };
+        Some(Chord {
+            key,
+            ctrl: self.mods.contains(Modifiers::CTRL),
+            alt: self.mods.contains(Modifiers::ALT),
+            shift,
+        })
+    }
+
     pub fn press(code: KeyCode, mods: Modifiers) -> Self {
         Self {
             code,

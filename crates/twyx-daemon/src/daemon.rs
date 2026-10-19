@@ -532,6 +532,21 @@ impl Daemon {
                 self.broadcast_workspace();
             }
             ToDaemon::CloseTab { tab } => self.close_tab(tab),
+            ToDaemon::CloseFocusedTab => {
+                if let Some(tab) = self.client(id).and_then(|client| client.tab) {
+                    self.close_tab(tab);
+                }
+            }
+            ToDaemon::CycleTab { forward } => self.cycle_tab(id, forward),
+            ToDaemon::SelectTabAt { index } => {
+                if let Some((tab, _)) = self.tabs.get(index) {
+                    let tab = *tab;
+                    self.select_tab(id, tab);
+                }
+            }
+            ToDaemon::NudgeFloating { side } => {
+                self.edit_focused(id, |layout, leaf| layout.nudge_floating(leaf, side));
+            }
         }
     }
 

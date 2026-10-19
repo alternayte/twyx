@@ -1,6 +1,7 @@
 //! The client protocol: one socket, the daemon on the listening end.
 
 use serde::{Deserialize, Serialize};
+use twyx_core::keys::Command;
 use twyx_core::layout::{Axis, Fractions, Layout, LeafId, Side};
 
 use crate::input::InputEvent;
@@ -148,6 +149,18 @@ pub enum ToDaemon {
     SelectTab {
         tab: u64,
     },
+    /// The next or previous tab, wrapping at the ends.
+    CycleTab {
+        forward: bool,
+    },
+    /// The tab at a zero-based position.
+    SelectTabAt {
+        index: usize,
+    },
+    /// Moves the focused floating pane one step.
+    NudgeFloating {
+        side: Side,
+    },
     RenameTab {
         tab: u64,
         name: String,
@@ -156,6 +169,8 @@ pub enum ToDaemon {
     CloseTab {
         tab: u64,
     },
+    /// Closes the tab this client shows.
+    CloseFocusedTab,
     /// Ask the daemon to exit. Panes keep running.
     Shutdown,
 }
@@ -201,4 +216,39 @@ pub enum FromDaemon {
         pane: u64,
         text: String,
     },
+}
+
+/// The request a keymap command makes of the daemon, for a client whose
+/// focused pane is `focused`. `None` for a command the client handles alone.
+pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon> {
+    let cwd = || focused.map(|pane| pane.cwd.clone()).unwrap_or_default();
+    let new_pane = |place| ToDaemon::NewPane {
+        launch: Launch::Shell,
+        cwd: cwd(),
+        place,
+    };
+    Some(match command {
+        Command::SplitRight => new_pane(Place::Split(Axis::Row)),
+        Command::SplitDown => new_pane(Place::Split(Axis::Column)),
+        Command::NewStacked => new_pane(Place::Stack),
+        Command::NewFloating => new_pane(Place::Floating),
+        Command::NewTab => new_pane(Place::NewTab),
+        Command::ClosePane => ToDaemon::ClosePane,
+        Command::RunAgain => ToDaemon::RunAgain {
+            pane: focused?.pane,
+        },
+        Command::Focus(side) => ToDaemon::Focus { side },
+        Command::Resize(side) => ToDaemon::ResizePane { side },
+        Command::Swap(side) => ToDaemon::SwapPane { side },
+        Command::MoveFloating(side) => ToDaemon::NudgeFloating { side },
+        Command::ToggleZoom => ToDaemon::ToggleZoom,
+        Command::ToggleFloating => ToDaemon::ToggleFloating,
+        Command::NextTab => ToDaemon::CycleTab { forward: true },
+        Command::PreviousTab => ToDaemon::CycleTab { forward: false },
+        Command::GoToTab(number) => ToDaemon::SelectTabAt {
+            index: usize::from(number.saturating_sub(1)),
+        },
+        Command::CloseTab => ToDaemon::CloseFocusedTab,
+        Command::Detach | Command::Enter(_) => return None,
+    })
 }

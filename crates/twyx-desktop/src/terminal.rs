@@ -1,5 +1,6 @@
 //! The window: the focused pane, drawn with GPUI, talking to the daemon.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,20 +11,20 @@ use gpui::{
     ScrollWheelEvent, Window, canvas, div, px,
 };
 
+use twyx_core::keys::{Command, Keymap, Mode, Outcome};
 use twyx_core::layout::LeafId;
 use twyx_core::paths::Paths;
-use twyx_protocol::client::{FromDaemon, Launch, Place, ToDaemon, WorkspaceInfo};
+use twyx_protocol::client::{
+    FromDaemon, Launch, PaneInfo, Place, ToDaemon, WorkspaceInfo, request,
+};
 use twyx_protocol::connection;
 use twyx_protocol::grid::{Frame, Snapshot};
-use twyx_protocol::input::{InputEvent, KeyCode, Modifiers, MouseAction, MouseEvent};
+use twyx_protocol::input::{InputEvent, Modifiers, MouseAction, MouseEvent};
 use twyx_protocol::view::View;
 use twyx_protocol::wire;
 
 use crate::keys;
 use crate::paint::{self, Metrics};
-
-/// The key twyx takes from the pane. S2 makes it configurable.
-const PREFIX: char = 'g';
 
 /// State the daemon task and the window both touch.
 struct Shared {
@@ -31,6 +32,7 @@ struct Shared {
     /// The pane drawn now: the focused leaf's.
     pane: Option<u64>,
     workspace: Option<WorkspaceInfo>,
+    panes: HashMap<u64, PaneInfo>,
     tab: Option<u64>,
     leaf: Option<LeafId>,
     /// Whether the workspace held a pane since the window opened.
@@ -46,7 +48,7 @@ pub struct Terminal {
     focus: FocusHandle,
     grid: (u16, u16),
     bounds: Bounds<Pixels>,
-    prefix_pending: bool,
+    keymap: Keymap,
     focused_once: bool,
     connected: bool,
 }
@@ -67,12 +69,13 @@ impl Terminal {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>, keymap: Keymap) -> Self {
         let metrics = Metrics::measure(window.text_system(), px(13.0));
         let shared = Arc::new(Mutex::new(Shared {
             view: View::new(80, 24),
             pane: None,
             workspace: None,
+            panes: HashMap::new(),
             tab: None,
             leaf: None,
             had_panes: false,
@@ -87,7 +90,7 @@ impl Terminal {
             focus: cx.focus_handle(),
             grid: (80, 24),
             bounds: Bounds::new(gpui::point(px(0.0), px(0.0)), gpui::size(px(0.0), px(0.0))),
-            prefix_pending: false,
+            keymap,
             focused_once: false,
             connected: false,
         };
@@ -135,6 +138,12 @@ impl Terminal {
                 let _ = outgoing.send(ToDaemon::FocusLeaf { leaf });
             }
             shared.workspace = None;
+            shared.panes = parts
+                .hello
+                .panes
+                .iter()
+                .map(|info| (info.pane, info.clone()))
+                .collect();
             shared.tab = None;
             shared.leaf = None;
         }
@@ -218,9 +227,13 @@ impl Terminal {
                             dirty = true;
                         }
                         FromDaemon::Refused { reason } => eprintln!("twyx-desktop: {reason}"),
+                        FromDaemon::Pane(info) => {
+                            state.panes.insert(info.pane, info);
+                        }
+                        FromDaemon::PaneClosed { pane } => {
+                            state.panes.remove(&pane);
+                        }
                         FromDaemon::Welcome(_)
-                        | FromDaemon::Pane(_)
-                        | FromDaemon::PaneClosed { .. }
                         | FromDaemon::Unsupported { .. }
                         | FromDaemon::Snapshot { .. }
                         | FromDaemon::Frame { .. } => {}
@@ -294,27 +307,26 @@ impl Terminal {
             return;
         };
 
-        if key.code == KeyCode::Char(PREFIX) && key.mods.contains(Modifiers::CTRL) {
-            if self.prefix_pending {
-                self.prefix_pending = false;
-                self.send(InputEvent::Key(key));
-            } else {
-                self.prefix_pending = true;
+        let outcome = match key.chord() {
+            Some(chord) => self.keymap.press(chord),
+            None if self.keymap.mode() == Mode::Normal => Outcome::ToPane,
+            None => Outcome::Consumed,
+        };
+        match outcome {
+            Outcome::ToPane => self.send(InputEvent::Key(key)),
+            Outcome::Consumed => {}
+            Outcome::Run(Command::Detach) => cx.quit(),
+            Outcome::Run(command) => {
+                let request = {
+                    let shared = self.shared();
+                    let focused = shared.pane.and_then(|pane| shared.panes.get(&pane));
+                    request(command, focused)
+                };
+                if let (Some(request), Some(outgoing)) = (request, &self.outgoing) {
+                    let _ = outgoing.send(request);
+                }
             }
-            return;
         }
-
-        if self.prefix_pending {
-            self.prefix_pending = false;
-            if key.code == KeyCode::Char('q') && key.mods.is_empty() {
-                cx.quit();
-                return;
-            }
-            self.send(InputEvent::Key(key));
-            return;
-        }
-
-        self.send(InputEvent::Key(key));
     }
 
     fn on_mouse(

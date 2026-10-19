@@ -380,6 +380,24 @@ impl Daemon {
         self.send_focus(id);
     }
 
+    pub(crate) fn cycle_tab(&mut self, id: u64, forward: bool) {
+        let count = self.tabs.len();
+        let current = self
+            .client(id)
+            .and_then(|client| client.tab)
+            .and_then(|tab| self.tabs.iter().position(|(entry, _)| *entry == tab));
+        let (Some(current), true) = (current, count > 0) else {
+            return;
+        };
+        let next = if forward {
+            (current + 1) % count
+        } else {
+            (current + count - 1) % count
+        };
+        let tab = self.tabs[next].0;
+        self.select_tab(id, tab);
+    }
+
     fn refuse(&self, id: u64, reason: String) {
         if let Some(client) = self.client(id) {
             self.post(&client.out, FromDaemon::Refused { reason });

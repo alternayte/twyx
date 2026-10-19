@@ -416,6 +416,22 @@ impl Layout {
         }
     }
 
+    /// Moves a floating leaf one step toward `side`.
+    pub fn nudge_floating(&mut self, id: LeafId, side: Side) {
+        let Some(floating) = self.floating.iter().find(|floating| floating.leaf.id == id) else {
+            return;
+        };
+        let mut geometry = floating.geometry;
+        let step = tuning::FLOATING_STEP;
+        match side {
+            Side::Left => geometry.x -= step,
+            Side::Right => geometry.x += step,
+            Side::Up => geometry.y -= step,
+            Side::Down => geometry.y += step,
+        }
+        self.move_floating(id, geometry);
+    }
+
     pub fn leaf(&self, id: LeafId) -> Option<Leaf> {
         self.leaves().into_iter().find(|leaf| leaf.id == id)
     }

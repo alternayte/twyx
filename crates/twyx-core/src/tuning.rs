@@ -45,3 +45,6 @@ pub const MIN_RATIO: f32 = 0.05;
 
 /// How far one resize step moves a rule, as a share of the parent split.
 pub const RESIZE_STEP: f32 = 0.05;
+
+/// How far one move step takes a floating pane, as a share of the tab area.
+pub const FLOATING_STEP: f32 = 0.05;

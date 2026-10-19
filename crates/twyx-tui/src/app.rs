@@ -1,6 +1,7 @@
 //! The terminal client: one pane, the outer terminal, and the daemon between
 //! them.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
@@ -9,16 +10,20 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyModifiers, KeyboardEnhancementFlags,
+    EnableFocusChange, EnableMouseCapture, Event, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, terminal};
 
+use twyx_core::keys::{Command, Keymap, Mode, Outcome};
 use twyx_core::layout::LeafId;
 use twyx_core::theme::Rgb;
-use twyx_protocol::client::{FromDaemon, Launch, Place, ToDaemon, WorkspaceInfo};
+use twyx_protocol::client::{
+    FromDaemon, Launch, PaneInfo, Place, ToDaemon, WorkspaceInfo, request,
+};
 use twyx_protocol::grid::{Frame, Snapshot};
+use twyx_protocol::input::InputEvent;
 use twyx_protocol::wire;
 
 use crate::emitter::{Capabilities, Emitter};
@@ -27,16 +32,14 @@ use crate::probe;
 use twyx_protocol::connection as client;
 use twyx_protocol::view::View;
 
-/// The key twyx takes from the pane. S2 makes it configurable.
-const PREFIX: char = 'g';
-
 /// Attaches the terminal client to the daemon.
 pub fn attach(paths: &twyx_core::paths::Paths) -> Result<()> {
+    let config = twyx_core::config::load(&paths.config.join("config.toml"))?;
     client::ensure_daemon(paths)?;
     let (cols, rows) = clamp_size(terminal::size().context("read the terminal size")?);
 
     let mut screen = Screen::start()?;
-    let result = run(paths, cols, rows, &mut screen);
+    let result = run(paths, cols, rows, &mut screen, config.keymap);
     screen.stop();
     result
 }
@@ -144,7 +147,13 @@ impl Follow {
     }
 }
 
-fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Screen) -> Result<()> {
+fn run(
+    paths: &twyx_core::paths::Paths,
+    cols: u16,
+    rows: u16,
+    screen: &mut Screen,
+    mut keymap: Keymap,
+) -> Result<()> {
     let cols = cols.max(2);
     let rows = rows.max(1);
     let connection = client::connect(&paths.socket(), cols, rows, true)?;
@@ -153,8 +162,13 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
 
     let mut view = View::new(cols, rows);
     screen.emitter.resize(cols, rows);
-    let mut prefix_pending = false;
     let mut follow = Follow::default();
+    let mut panes: HashMap<u64, PaneInfo> = daemon
+        .hello
+        .panes
+        .iter()
+        .map(|info| (info.pane, info.clone()))
+        .collect();
     let mut title = String::new();
 
     loop {
@@ -192,10 +206,14 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
                 }
                 // Only a first pane that could not start leaves nothing to show.
                 FromDaemon::Refused { reason } if follow.is_empty() => anyhow::bail!("{reason}"),
+                FromDaemon::Pane(info) => {
+                    panes.insert(info.pane, info);
+                }
+                FromDaemon::PaneClosed { pane } => {
+                    panes.remove(&pane);
+                }
                 FromDaemon::Refused { .. }
                 | FromDaemon::Welcome(_)
-                | FromDaemon::Pane(_)
-                | FromDaemon::PaneClosed { .. }
                 | FromDaemon::Snapshot { .. }
                 | FromDaemon::Frame { .. } => {}
             }
@@ -203,6 +221,13 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
 
         if lost {
             daemon = reconnect(paths, size)?;
+            keymap.reset();
+            panes = daemon
+                .hello
+                .panes
+                .iter()
+                .map(|info| (info.pane, info.clone()))
+                .collect();
             // The new daemon adopts the panes and keeps the leaves; this
             // client's own focus goes back to it.
             if let Some(leaf) = follow.leaf {
@@ -270,31 +295,31 @@ fn run(paths: &twyx_core::paths::Paths, cols: u16, rows: u16, screen: &mut Scree
                 });
             }
             Event::Key(key) => {
-                if key.code == KeyCode::Char(PREFIX)
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                {
-                    if prefix_pending {
-                        prefix_pending = false;
-                        if let Some(event) = input::to_input(Event::Key(key)) {
-                            let _ = daemon.outgoing.send(ToDaemon::Input(event));
-                        }
-                    } else {
-                        prefix_pending = true;
-                    }
+                let Some(event) = input::to_input(Event::Key(key)) else {
                     continue;
-                }
-                if prefix_pending {
-                    prefix_pending = false;
-                    if let KeyCode::Char('q') = key.code {
-                        return Ok(());
-                    }
-                    if let Some(event) = input::to_input(Event::Key(key)) {
+                };
+                let chord = match &event {
+                    InputEvent::Key(key) => key.chord(),
+                    _ => None,
+                };
+                let outcome = match chord {
+                    Some(chord) => keymap.press(chord),
+                    // A release goes to the pane only outside the modes.
+                    None if keymap.mode() == Mode::Normal => Outcome::ToPane,
+                    None => Outcome::Consumed,
+                };
+                match outcome {
+                    Outcome::ToPane => {
                         let _ = daemon.outgoing.send(ToDaemon::Input(event));
                     }
-                    continue;
-                }
-                if let Some(event) = input::to_input(Event::Key(key)) {
-                    let _ = daemon.outgoing.send(ToDaemon::Input(event));
+                    Outcome::Consumed => {}
+                    Outcome::Run(Command::Detach) => return Ok(()),
+                    Outcome::Run(command) => {
+                        let focused = follow.shown.and_then(|pane| panes.get(&pane));
+                        if let Some(request) = request(command, focused) {
+                            let _ = daemon.outgoing.send(request);
+                        }
+                    }
                 }
             }
             other => {

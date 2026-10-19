@@ -13,3 +13,4 @@ workspace = true
 anyhow = "1"
 rustix = { version = "1", features = ["fs", "process"] }
 serde = { version = "1", features = ["derive"] }
+toml = "1"
