@@ -4,8 +4,10 @@
 //! Nothing here fills a background, except on a sheet twyx paints itself.
 
 pub mod bars;
+pub mod dialog;
 pub mod frames;
 pub mod palette;
+pub mod sidebar;
 
 use ratatui::style::{Color, Modifier, Style};
 use twyx_core::theme::{Face, Rgb, Sheet, Theme, Tone};

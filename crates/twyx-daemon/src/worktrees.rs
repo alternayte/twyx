@@ -627,12 +627,19 @@ impl Daemon {
     /// status older than the interval, reads the status again. Also ends
     /// removals whose panes would not end.
     pub(crate) fn tick(&mut self) {
-        let shown: BTreeSet<u64> = self
+        let sidebar = self
             .clients
             .values()
-            .filter(|client| client.interactive)
-            .filter_map(|client| self.workspaces.get(&client.workspace)?.worktree)
-            .collect();
+            .any(|client| client.interactive && client.sidebar);
+        let shown: BTreeSet<u64> = if sidebar {
+            self.worktrees.keys().copied().collect()
+        } else {
+            self.clients
+                .values()
+                .filter(|client| client.interactive)
+                .filter_map(|client| self.workspaces.get(&client.workspace)?.worktree)
+                .collect()
+        };
         let mut stale = Vec::new();
         for id in shown {
             let Some(worktree) = self.worktrees.get_mut(&id) else {

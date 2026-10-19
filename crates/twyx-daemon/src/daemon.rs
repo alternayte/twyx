@@ -107,6 +107,8 @@ pub(crate) struct Client {
     pub used: u64,
     /// Whether the client gets every change to the overview.
     pub watching: bool,
+    /// Whether the client shows its sidebar, and so every worktree.
+    pub sidebar: bool,
 }
 
 #[derive(Debug)]
@@ -569,6 +571,7 @@ impl Daemon {
                 focus: BTreeMap::new(),
                 used: self.uses,
                 watching: false,
+                sidebar: false,
             },
         );
         if !hello.interactive {
@@ -603,6 +606,17 @@ impl Daemon {
     fn client_message(&mut self, id: u64, message: ToDaemon) {
         match message {
             ToDaemon::Hello(_) | ToDaemon::Shutdown => {}
+            ToDaemon::ShowSidebar { shown } => {
+                if let Some(client) = self.clients.get_mut(&id) {
+                    client.sidebar = shown;
+                }
+                if shown {
+                    let all: Vec<u64> = self.worktrees.keys().copied().collect();
+                    for worktree in all {
+                        self.request_status(worktree);
+                    }
+                }
+            }
             ToDaemon::WatchOverview => {
                 if let Some(client) = self.clients.get_mut(&id) {
                     client.watching = true;

@@ -155,11 +155,14 @@ pub enum Mode {
     /// Moves a cursor over the pane's screen and scrollback, selects and
     /// copies.
     Copy,
+    /// Moves through the sidebar's projects, worktrees, workspaces and
+    /// panes, and runs worktree actions.
+    Workspace,
 }
 
 impl Mode {
     /// The modes a user can bind keys in, with their config names.
-    pub const BOUND: [(Mode, &'static str); 7] = [
+    pub const BOUND: [(Mode, &'static str); 8] = [
         (Mode::Command, "command"),
         (Mode::Pane, "pane"),
         (Mode::Tab, "tab"),
@@ -167,6 +170,7 @@ impl Mode {
         (Mode::Move, "move"),
         (Mode::Floating, "floating"),
         (Mode::Copy, "copy"),
+        (Mode::Workspace, "workspace"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -179,6 +183,7 @@ impl Mode {
             Mode::Move => "move",
             Mode::Floating => "floating",
             Mode::Copy => "copy",
+            Mode::Workspace => "workspace",
         }
     }
 }
@@ -250,6 +255,16 @@ pub enum Command {
     CopySearch,
     CopyNext,
     CopyPrevious,
+    ToggleSidebar,
+    Switcher,
+    SidebarUp,
+    SidebarDown,
+    SidebarOpen,
+    NextWorkspace,
+    PreviousWorkspace,
+    NewWorktree,
+    RemoveWorktree,
+    SetupWorktree,
 }
 
 const SIDES: [(Side, &str); 4] = [
@@ -303,6 +318,16 @@ impl Command {
             Command::CopySearch => "copy-search".to_owned(),
             Command::CopyNext => "copy-next".to_owned(),
             Command::CopyPrevious => "copy-previous".to_owned(),
+            Command::ToggleSidebar => "toggle-sidebar".to_owned(),
+            Command::Switcher => "switcher".to_owned(),
+            Command::SidebarUp => "sidebar-up".to_owned(),
+            Command::SidebarDown => "sidebar-down".to_owned(),
+            Command::SidebarOpen => "sidebar-open".to_owned(),
+            Command::NextWorkspace => "next-workspace".to_owned(),
+            Command::PreviousWorkspace => "previous-workspace".to_owned(),
+            Command::NewWorktree => "new-worktree".to_owned(),
+            Command::RemoveWorktree => "remove-worktree".to_owned(),
+            Command::SetupWorktree => "setup-worktree".to_owned(),
         }
     }
 
@@ -339,6 +364,15 @@ impl Command {
             Command::CopySearch => "search".to_owned(),
             Command::CopyNext => "next".to_owned(),
             Command::CopyPrevious => "previous".to_owned(),
+            Command::ToggleSidebar => "sidebar".to_owned(),
+            Command::Switcher => "switch".to_owned(),
+            Command::SidebarUp | Command::SidebarDown => "move".to_owned(),
+            Command::SidebarOpen => "open".to_owned(),
+            Command::NextWorkspace => "next".to_owned(),
+            Command::PreviousWorkspace => "previous".to_owned(),
+            Command::NewWorktree => "new worktree".to_owned(),
+            Command::RemoveWorktree => "remove".to_owned(),
+            Command::SetupWorktree => "set up".to_owned(),
         }
     }
 
@@ -360,6 +394,16 @@ impl Command {
             Command::RenameTab,
             Command::Palette,
             Command::Detach,
+            Command::ToggleSidebar,
+            Command::Switcher,
+            Command::NextWorkspace,
+            Command::PreviousWorkspace,
+            Command::NewWorktree,
+            Command::RemoveWorktree,
+            Command::SetupWorktree,
+            Command::SidebarUp,
+            Command::SidebarDown,
+            Command::SidebarOpen,
         ];
         for (side, _) in SIDES {
             all.extend([
@@ -448,6 +492,9 @@ impl Default for Keymap {
             key('z', C::ToggleZoom),
             key(':', C::Palette),
             key('d', C::Detach),
+            key('w', C::Enter(Mode::Workspace)),
+            key('s', C::Switcher),
+            key('b', C::ToggleSidebar),
         ];
         command.extend(arrows(C::Focus));
         command.extend((1..=9).map(|n| key(char::from(b'0' + n), C::GoToTab(n))));
@@ -514,6 +561,24 @@ impl Default for Keymap {
             ),
         ]);
 
+        // The actions come first, so a narrow hint bar keeps them.
+        let workspace = vec![
+            (Chord::plain(Key::Enter), C::SidebarOpen),
+            key('n', C::NewWorktree),
+            key('x', C::RemoveWorktree),
+            key('u', C::SetupWorktree),
+            key('s', C::Switcher),
+            key('b', C::ToggleSidebar),
+            key('j', C::SidebarDown),
+            (Chord::plain(Down), C::SidebarDown),
+            key('k', C::SidebarUp),
+            (Chord::plain(Up), C::SidebarUp),
+            key('l', C::NextWorkspace),
+            (Chord::plain(Right), C::NextWorkspace),
+            key('h', C::PreviousWorkspace),
+            (Chord::plain(Left), C::PreviousWorkspace),
+        ];
+
         Self {
             prefix: Chord::ctrl(Char('g')),
             bindings: vec![
@@ -524,6 +589,7 @@ impl Default for Keymap {
                 (Mode::Move, arrows(C::Swap)),
                 (Mode::Floating, floating),
                 (Mode::Copy, copy),
+                (Mode::Workspace, workspace),
             ],
             mode: Mode::Normal,
         }
@@ -589,6 +655,20 @@ impl Keymap {
                     }
                     hints.push(("hjkl".to_owned(), word.clone()));
                     seen.push(word);
+                    continue;
+                }
+                Command::SidebarUp | Command::SidebarDown => {
+                    if !seen.iter().any(|word| word == "sidebar jk") {
+                        seen.push("sidebar jk".to_owned());
+                        hints.push(("jk".to_owned(), "move".to_owned()));
+                    }
+                    continue;
+                }
+                Command::NextWorkspace | Command::PreviousWorkspace => {
+                    if !seen.iter().any(|word| word == "workspace hl") {
+                        seen.push("workspace hl".to_owned());
+                        hints.push(("hl".to_owned(), "workspace".to_owned()));
+                    }
                     continue;
                 }
                 Command::GoToTab(_) => {

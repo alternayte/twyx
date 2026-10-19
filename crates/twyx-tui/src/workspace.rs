@@ -1,0 +1,535 @@
+//! The sidebar and the workspace actions: the overview the daemon keeps
+//! current, the workspace mode cursor, and the requests and answers of the
+//! worktree actions.
+
+use std::collections::HashMap;
+
+use twyx_core::keys::Command;
+use twyx_core::layout::LeafId;
+use twyx_protocol::client::{FromDaemon, Overview, PaneInfo, RemovalPlan, ToDaemon, WorkspaceInfo};
+use twyx_protocol::sidebar::{self, Kind, Row, Target};
+
+use crate::compositor::pane_title;
+use crate::overlay::{Overlay, Purpose};
+
+/// What a command or an answer asks of the client.
+#[derive(Debug, Default, PartialEq)]
+pub struct Effect {
+    pub requests: Vec<ToDaemon>,
+    pub overlay: Option<Overlay>,
+    /// Leave workspace mode.
+    pub leave: bool,
+    /// The sidebar docked or undocked: the tab area changed.
+    pub resized: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct Workspaces {
+    pub overview: Option<Overview>,
+    /// Whether the sidebar stays beside the panes.
+    pub docked: bool,
+    /// The workspace mode cursor, as a row index.
+    pub cursor: usize,
+    pub rows: Vec<Row>,
+    /// The outcome of the last action, for the status bar.
+    pub message: Option<String>,
+    /// A worktree this client asked for, to show once it exists.
+    switch_to_new: bool,
+    /// The worktree this client asked to set up.
+    setup_for: Option<u64>,
+}
+
+impl Workspaces {
+    /// Builds the rows again from the overview.
+    pub fn refresh(
+        &mut self,
+        shown: Option<&WorkspaceInfo>,
+        focus: Option<LeafId>,
+        panes: &HashMap<u64, PaneInfo>,
+    ) {
+        let Some(overview) = &self.overview else {
+            self.rows.clear();
+            return;
+        };
+        self.rows = sidebar::rows(
+            overview,
+            shown.map(|shown| shown.workspace),
+            focus,
+            |pane| pane_title(panes, pane),
+        );
+        self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
+    }
+
+    /// Puts the cursor on the client's own workspace.
+    pub fn focus_current(&mut self) {
+        if let Some(index) = self
+            .rows
+            .iter()
+            .position(|row| row.current && row.kind != Kind::Pane)
+            .or_else(|| self.rows.iter().position(|row| row.current))
+        {
+            self.cursor = index;
+        }
+    }
+
+    /// The request that shows a row's workspace, worktree or pane.
+    pub fn open(&self, index: usize) -> Option<ToDaemon> {
+        Some(match self.rows.get(index)?.target.clone()? {
+            Target::Workspace(workspace) => ToDaemon::SwitchWorkspace { workspace },
+            Target::Open(path) => ToDaemon::Open { path, switch: true },
+            Target::Pane(leaf) => ToDaemon::FocusLeaf { leaf },
+        })
+    }
+
+    /// The workspaces in sidebar order, for next and previous.
+    fn order(&self) -> Vec<u64> {
+        let mut order = Vec::new();
+        for row in &self.rows {
+            if let Some(Target::Workspace(workspace)) = row.target
+                && row.kind != Kind::Pane
+                && !order.contains(&workspace)
+            {
+                order.push(workspace);
+            }
+        }
+        order
+    }
+
+    /// The project and worktree a worktree action applies to: the cursor's
+    /// row in workspace mode, else the shown workspace.
+    fn subject(&self, in_mode: bool, shown: Option<&WorkspaceInfo>) -> (Option<u64>, Option<u64>) {
+        if in_mode && let Some(row) = self.rows.get(self.cursor) {
+            return (row.project, row.worktree);
+        }
+        let worktree = shown.and_then(|shown| shown.worktree.as_ref());
+        (
+            worktree.map(|worktree| worktree.project).or_else(|| {
+                let id = shown?.workspace;
+                self.overview
+                    .as_ref()?
+                    .workspaces
+                    .iter()
+                    .find(|summary| summary.workspace == id)?
+                    .project
+            }),
+            worktree.map(|worktree| worktree.worktree),
+        )
+    }
+
+    fn git_project(&self, project: u64) -> bool {
+        self.overview.as_ref().is_some_and(|overview| {
+            overview
+                .projects
+                .iter()
+                .any(|entry| entry.project == project && entry.git)
+        })
+    }
+
+    /// Runs one workspace command.
+    pub fn command(
+        &mut self,
+        command: Command,
+        in_mode: bool,
+        shown: Option<&WorkspaceInfo>,
+    ) -> Effect {
+        let mut effect = Effect::default();
+        match command {
+            Command::ToggleSidebar => {
+                self.docked = !self.docked;
+                effect.resized = true;
+            }
+            Command::Switcher => {
+                effect.overlay = Some(Overlay::switcher());
+                effect.leave = true;
+            }
+            Command::SidebarUp => self.cursor = self.cursor.saturating_sub(1),
+            Command::SidebarDown => {
+                self.cursor = (self.cursor + 1).min(self.rows.len().saturating_sub(1));
+            }
+            Command::SidebarOpen => {
+                effect.requests.extend(self.open(self.cursor));
+                effect.leave = true;
+            }
+            Command::NextWorkspace | Command::PreviousWorkspace => {
+                let order = self.order();
+                let at = shown
+                    .and_then(|shown| order.iter().position(|id| *id == shown.workspace))
+                    .unwrap_or(0);
+                let next = if command == Command::NextWorkspace {
+                    (at + 1) % order.len().max(1)
+                } else {
+                    (at + order.len().max(1) - 1) % order.len().max(1)
+                };
+                if let Some(workspace) = order.get(next) {
+                    effect.requests.push(ToDaemon::SwitchWorkspace {
+                        workspace: *workspace,
+                    });
+                }
+            }
+            Command::NewWorktree => match self.subject(in_mode, shown) {
+                (Some(project), _) if self.git_project(project) => {
+                    effect.overlay = Some(Overlay::Prompt {
+                        title: "new worktree: branch".to_owned(),
+                        text: String::new(),
+                        purpose: Purpose::NewWorktree { project },
+                    });
+                }
+                _ => self.message = Some("not in a Git repository".to_owned()),
+            },
+            Command::RemoveWorktree => match self.subject(in_mode, shown) {
+                (_, Some(worktree)) => {
+                    effect.requests.push(ToDaemon::PlanRemoval { worktree });
+                }
+                _ => self.message = Some("no worktree here".to_owned()),
+            },
+            Command::SetupWorktree => match self.subject(in_mode, shown) {
+                (_, Some(worktree)) => {
+                    self.setup_for = Some(worktree);
+                    effect.requests.push(ToDaemon::Setup { worktree });
+                }
+                _ => self.message = Some("no worktree here".to_owned()),
+            },
+            _ => {}
+        }
+        effect
+    }
+
+    /// Takes a prompt's text.
+    pub fn prompted(&mut self, purpose: Purpose, text: String) -> Effect {
+        let mut effect = Effect::default();
+        if let Purpose::NewWorktree { project } = purpose {
+            self.switch_to_new = true;
+            self.message = Some(format!("creating {text}"));
+            effect.requests.push(ToDaemon::NewWorktree {
+                project,
+                branch: text,
+                start: None,
+            });
+        }
+        effect
+    }
+
+    /// Takes a confirmation's key.
+    pub fn confirmed(&mut self, purpose: Purpose, key: char) -> Effect {
+        let mut effect = Effect::default();
+        match purpose {
+            Purpose::RemoveWorktree { plan } => {
+                effect.requests.push(ToDaemon::RemoveWorktree {
+                    plan,
+                    delete_branch: key == 'd',
+                });
+            }
+            Purpose::TrustSetup { worktree, hash } => {
+                effect
+                    .requests
+                    .push(ToDaemon::TrustSetup { worktree, hash });
+            }
+            Purpose::NewWorktree { .. } => {}
+        }
+        effect
+    }
+
+    /// Takes an answer from the daemon.
+    pub fn answer(&mut self, message: &FromDaemon) -> Effect {
+        let mut effect = Effect::default();
+        match message {
+            FromDaemon::Overview(overview) => self.overview = Some(overview.clone()),
+            FromDaemon::WorktreeAdded {
+                worktree,
+                workspace,
+                setup,
+            } => {
+                let mut text = format!("created {}", worktree.name);
+                if setup.untrusted {
+                    text.push_str("; its setup file is not trusted (ctrl-g w u)");
+                }
+                if let Some(error) = setup.errors.first() {
+                    text = format!("{text}; setup: {error}");
+                }
+                self.message = Some(text);
+                if std::mem::take(&mut self.switch_to_new) {
+                    effect.requests.push(ToDaemon::SwitchWorkspace {
+                        workspace: *workspace,
+                    });
+                }
+            }
+            FromDaemon::RemovalPlan(plan) => effect.overlay = Some(removal(plan)),
+            FromDaemon::WorktreeRemoved { branch, .. } => {
+                self.message = Some(match branch {
+                    Some(Ok(branch)) => format!("removed the worktree and the branch {branch}"),
+                    Some(Err(error)) => format!("removed the worktree; {error}"),
+                    None => "removed the worktree".to_owned(),
+                });
+            }
+            FromDaemon::SetupFile(info) => {
+                match (info, self.setup_for) {
+                    (Some(info), _) if !info.trusted => {
+                        let mut lines = vec![format!("{} in the worktree", info.path)];
+                        lines.push(format!("sha256 {}", info.hash));
+                        if let Some(error) = &info.error {
+                            lines.push(error.clone());
+                        }
+                        lines.extend(
+                            info.shared
+                                .iter()
+                                .map(|path| format!("links {path} from the main worktree")),
+                        );
+                        lines.extend(
+                            info.commands
+                                .iter()
+                                .map(|command| format!("runs {command}")),
+                        );
+                        lines.push("Trust covers this file as it is now, not the scripts its commands run.".to_owned());
+                        effect.overlay = Some(Overlay::Confirm {
+                            title: "trust the setup file".to_owned(),
+                            lines,
+                            keys: vec![('y', "trust and set up".to_owned())],
+                            purpose: Purpose::TrustSetup {
+                                worktree: info.worktree,
+                                hash: info.hash.clone(),
+                            },
+                        });
+                    }
+                    (_, Some(worktree)) => effect.requests.push(ToDaemon::RunSetup { worktree }),
+                    (_, None) => {}
+                }
+            }
+            FromDaemon::SetupTrusted { worktree } => {
+                effect.requests.push(ToDaemon::RunSetup {
+                    worktree: *worktree,
+                });
+            }
+            FromDaemon::SetupDone { report, .. } => {
+                self.setup_for = None;
+                let mut parts = Vec::new();
+                if !report.copied.is_empty() {
+                    parts.push(format!("copied {}", report.copied.len()));
+                }
+                if !report.linked.is_empty() {
+                    parts.push(format!("linked {}", report.linked.len()));
+                }
+                if report.pane.is_some() {
+                    parts.push("setup runs in the setup tab".to_owned());
+                }
+                parts.extend(report.errors.iter().cloned());
+                self.message = Some(if parts.is_empty() {
+                    "nothing to set up".to_owned()
+                } else {
+                    parts.join("; ")
+                });
+            }
+            FromDaemon::Refused { reason } => {
+                self.switch_to_new = false;
+                self.message = Some(reason.clone());
+            }
+            _ => {}
+        }
+        effect
+    }
+}
+
+/// The removal prompt: what the worktree would lose, and the keys.
+fn removal(plan: &RemovalPlan) -> Overlay {
+    let mut lines = vec![format!("{} at {}", plan.worktree.name, plan.worktree.path)];
+    for (code, path) in plan.dirty.iter().take(8) {
+        lines.push(format!("discards {code} {path}"));
+    }
+    if plan.dirty.len() > 8 {
+        lines.push(format!("discards {} more changes", plan.dirty.len() - 8));
+    }
+    match plan.unpushed_total {
+        0 => {}
+        1 => lines.push("1 commit is on no remote".to_owned()),
+        count => lines.push(format!("{count} commits are on no remote")),
+    }
+    let base = plan
+        .base
+        .as_deref()
+        .map(|base| base.trim_start_matches("refs/heads/"))
+        .unwrap_or("the base branch");
+    for commit in &plan.unmerged {
+        lines.push(format!("not in {base}: {} {}", commit.oid, commit.subject));
+    }
+    for pane in &plan.panes {
+        let panes = HashMap::from([(pane.pane, pane.clone())]);
+        lines.push(format!(
+            "kills pane {} {}",
+            pane.pane,
+            pane_title(&panes, pane.pane)
+        ));
+    }
+    if lines.len() == 1 {
+        lines.push(
+            "It has no changes, no unpushed or unmerged commits and no live panes.".to_owned(),
+        );
+    }
+    let mut keys = vec![('y', "remove".to_owned())];
+    if let Some(branch) = &plan.branch {
+        let how = if plan.unmerged.is_empty() { "-d" } else { "-D" };
+        keys.push(('d', format!("remove and delete {branch} ({how})")));
+    }
+    Overlay::Confirm {
+        title: "remove worktree".to_owned(),
+        lines,
+        keys,
+        purpose: Purpose::RemoveWorktree { plan: plan.plan },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use twyx_protocol::client::{GitState, PaneRef, ProjectInfo, WorkspaceSummary, WorktreeInfo};
+
+    fn workspaces() -> Workspaces {
+        let worktree = |id: u64, name: &str, workspace: Option<u64>| WorktreeInfo {
+            worktree: id,
+            project: 1,
+            name: name.to_owned(),
+            path: format!("/src/{name}"),
+            branch: Some(name.to_owned()),
+            git: Some(GitState {
+                branch: Some(name.to_owned()),
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                changed: 0,
+            }),
+            error: None,
+            workspace,
+        };
+        let summary = |id: u64, worktree: Option<u64>, project: Option<u64>| WorkspaceSummary {
+            workspace: id,
+            name: format!("w{id}"),
+            directory: String::new(),
+            project,
+            worktree,
+            tabs: 1,
+            panes: vec![PaneRef {
+                pane: id,
+                tab: id,
+                leaf: LeafId(id),
+            }],
+            clients: 0,
+        };
+        let mut workspaces = Workspaces {
+            overview: Some(Overview {
+                projects: vec![ProjectInfo {
+                    project: 1,
+                    name: "app".to_owned(),
+                    path: "/src/app/.git".to_owned(),
+                    git: true,
+                    worktrees: vec![worktree(10, "main", Some(2)), worktree(11, "fix", None)],
+                }],
+                workspaces: vec![summary(1, None, None), summary(2, Some(10), Some(1))],
+            }),
+            ..Workspaces::default()
+        };
+        workspaces.refresh(None, None, &HashMap::new());
+        workspaces
+    }
+
+    #[test]
+    fn the_cursor_opens_worktrees_workspaces_and_panes() {
+        let mut workspaces = workspaces();
+        // app, main, its pane, fix, default, its pane
+        assert_eq!(workspaces.rows.len(), 6);
+        assert_eq!(
+            workspaces.open(1),
+            Some(ToDaemon::SwitchWorkspace { workspace: 2 })
+        );
+        assert_eq!(
+            workspaces.open(3),
+            Some(ToDaemon::Open {
+                path: "/src/fix".to_owned(),
+                switch: true
+            })
+        );
+        assert_eq!(
+            workspaces.open(5),
+            Some(ToDaemon::FocusLeaf { leaf: LeafId(1) })
+        );
+        workspaces.cursor = 4;
+        let effect = workspaces.command(Command::SidebarDown, true, None);
+        assert_eq!(workspaces.cursor, 5);
+        assert!(effect.requests.is_empty());
+        workspaces.command(Command::SidebarDown, true, None);
+        assert_eq!(workspaces.cursor, 5, "the cursor stops at the last row");
+    }
+
+    #[test]
+    fn a_new_worktree_asks_for_a_branch_then_shows_it() {
+        let mut workspaces = workspaces();
+        workspaces.cursor = 3;
+        let effect = workspaces.command(Command::NewWorktree, true, None);
+        let Some(Overlay::Prompt { purpose, .. }) = effect.overlay else {
+            panic!("no prompt");
+        };
+        let effect = workspaces.prompted(purpose, "topic".to_owned());
+        assert_eq!(
+            effect.requests,
+            vec![ToDaemon::NewWorktree {
+                project: 1,
+                branch: "topic".to_owned(),
+                start: None
+            }]
+        );
+        let info = workspaces.overview.as_ref().unwrap().projects[0].worktrees[1].clone();
+        let effect = workspaces.answer(&FromDaemon::WorktreeAdded {
+            worktree: info,
+            workspace: 9,
+            setup: Default::default(),
+        });
+        assert_eq!(
+            effect.requests,
+            vec![ToDaemon::SwitchWorkspace { workspace: 9 }]
+        );
+        // A plain directory's workspace has no worktree to make.
+        workspaces.cursor = 4;
+        let effect = workspaces.command(Command::NewWorktree, true, None);
+        assert!(effect.overlay.is_none());
+    }
+
+    #[test]
+    fn removal_asks_with_the_plan_and_deletes_the_branch_only_on_d() {
+        let mut workspaces = workspaces();
+        workspaces.cursor = 3;
+        let effect = workspaces.command(Command::RemoveWorktree, true, None);
+        assert_eq!(
+            effect.requests,
+            vec![ToDaemon::PlanRemoval { worktree: 11 }]
+        );
+        let plan = RemovalPlan {
+            plan: 4,
+            worktree: workspaces.overview.as_ref().unwrap().projects[0].worktrees[1].clone(),
+            dirty: Vec::new(),
+            unpushed: Vec::new(),
+            unpushed_total: 0,
+            unmerged: Vec::new(),
+            base: None,
+            branch: Some("fix".to_owned()),
+            panes: Vec::new(),
+        };
+        let effect = workspaces.answer(&FromDaemon::RemovalPlan(plan));
+        let Some(Overlay::Confirm { keys, purpose, .. }) = effect.overlay else {
+            panic!("no confirmation");
+        };
+        assert_eq!(keys.len(), 2);
+        assert_eq!(
+            workspaces.confirmed(purpose.clone(), 'y').requests,
+            vec![ToDaemon::RemoveWorktree {
+                plan: 4,
+                delete_branch: false
+            }]
+        );
+        assert_eq!(
+            workspaces.confirmed(purpose, 'd').requests,
+            vec![ToDaemon::RemoveWorktree {
+                plan: 4,
+                delete_branch: true
+            }]
+        );
+    }
+}

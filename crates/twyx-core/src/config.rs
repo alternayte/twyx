@@ -124,6 +124,7 @@ struct RawKeys {
     #[serde(rename = "move")]
     move_: Option<Bindings>,
     floating: Option<Bindings>,
+    workspace: Option<Bindings>,
 }
 
 /// Reads the config file. A missing file is the defaults.
@@ -239,6 +240,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         (Mode::Resize, keys.resize),
         (Mode::Move, keys.move_),
         (Mode::Floating, keys.floating),
+        (Mode::Workspace, keys.workspace),
     ];
     for (mode, bindings) in modes {
         for (key, command) in bindings.unwrap_or_default() {

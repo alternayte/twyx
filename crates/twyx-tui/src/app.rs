@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    EnableFocusChange, EnableMouseCapture, Event, KeyboardEnhancementFlags, MouseButton,
+    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, terminal};
@@ -26,15 +26,18 @@ use twyx_protocol::client::{
 use twyx_protocol::grid::{Frame, Snapshot};
 use twyx_protocol::holder::CopyAction;
 use twyx_protocol::input::InputEvent;
+use twyx_protocol::sidebar::Target;
 use twyx_protocol::wire;
 
+use crate::chrome::sidebar::Sidebar;
 use crate::chrome::{Depth, Pen};
-use crate::compositor::{CHROME_ROWS, Scene, tab_area};
+use crate::compositor::{CHROME_ROWS, Scene, SidebarScene, tab_area};
 use crate::emitter::{Capabilities, Emitter};
 use crate::input;
 use crate::mouse::{Action, Mouse};
 use crate::overlay::{Choice, Outcome as OverlayOutcome, Overlay};
 use crate::probe;
+use crate::workspace::{Effect, Workspaces};
 use twyx_protocol::connection as client;
 use twyx_protocol::view::View;
 
@@ -45,7 +48,7 @@ pub fn attach(paths: &twyx_core::paths::Paths, workspace: Option<u64>) -> Result
     let config = twyx_core::config::load(&config_file)?;
     let (cols, rows) = clamp_size(terminal::size().context("read the terminal size")?);
     let (cols, rows) = (cols.max(2), rows.max(1 + CHROME_ROWS));
-    let area = tab_area(cols, rows);
+    let area = tab_area(cols, rows, false);
     let connection = client::attach(paths, area.0, area.1, true, workspace, ask_to_replace)?;
 
     let mut screen = Screen::start(config.theme)?;
@@ -213,6 +216,10 @@ fn run(
     let mut dirty = true;
     let mut mouse = Mouse::default();
     let mut overlay: Option<Overlay> = None;
+    let mut workspaces = Workspaces::default();
+    let _ = daemon.outgoing.send(ToDaemon::WatchOverview);
+    // What the daemon was last told about this client's sidebar.
+    let mut sidebar_told = false;
     // Everything the compositor and the mouse need to know, now.
     macro_rules! scene {
         () => {
@@ -229,9 +236,38 @@ fn run(
                 keymap: &keymap,
                 selection: mouse.selection(),
                 overlay: overlay.as_ref(),
-                notice: notice.as_deref(),
+                notice: workspaces.message.as_deref().or(notice.as_deref()),
+                overview: workspaces.overview.as_ref(),
+                sidebar: (workspaces.docked || keymap.mode() == Mode::Workspace).then_some(
+                    SidebarScene {
+                        rows: &workspaces.rows,
+                        cursor: (keymap.mode() == Mode::Workspace).then_some(workspaces.cursor),
+                        docked: workspaces.docked,
+                    },
+                ),
             }
         };
+    }
+    // Sends an effect's requests and takes its overlay.
+    macro_rules! apply {
+        ($effect:expr) => {{
+            let effect: Effect = $effect;
+            for request in effect.requests {
+                let _ = daemon.outgoing.send(request);
+            }
+            if effect.overlay.is_some() {
+                keymap.reset();
+                overlay = effect.overlay;
+            }
+            if effect.leave {
+                keymap.reset();
+            }
+            if effect.resized {
+                screen.emitter.invalidate();
+                let (cols, rows) = tab_area(size.0, size.1, workspaces.docked);
+                let _ = daemon.outgoing.send(ToDaemon::Resize { cols, rows });
+            }
+        }};
     }
 
     loop {
@@ -295,27 +331,29 @@ fn run(
                     panes.remove(&pane);
                     views.remove(&pane);
                 }
-                FromDaemon::Refused { .. }
-                | FromDaemon::Welcome(_)
+                FromDaemon::Welcome(_)
                 | FromDaemon::Opened { .. }
                 | FromDaemon::Switched { .. }
+                | FromDaemon::Recipes(_)
+                | FromDaemon::RecipeOpened { .. }
+                | FromDaemon::RecipeTrusted { .. } => {}
+                answer @ (FromDaemon::Refused { .. }
                 | FromDaemon::Overview(_)
                 | FromDaemon::WorktreeAdded { .. }
                 | FromDaemon::RemovalPlan(_)
                 | FromDaemon::WorktreeRemoved { .. }
-                | FromDaemon::Recipes(_)
-                | FromDaemon::RecipeOpened { .. }
-                | FromDaemon::RecipeTrusted { .. }
                 | FromDaemon::SetupFile(_)
                 | FromDaemon::SetupTrusted { .. }
-                | FromDaemon::SetupDone { .. } => {}
+                | FromDaemon::SetupDone { .. }) => apply!(workspaces.answer(&answer)),
             }
         }
 
         if lost {
-            let area = tab_area(size.0, size.1);
+            let area = tab_area(size.0, size.1, workspaces.docked);
             let shown = follow.workspace.as_ref().map(|shown| shown.workspace);
             daemon = reconnect(paths, area, shown)?;
+            let _ = daemon.outgoing.send(ToDaemon::WatchOverview);
+            sidebar_told = false;
             client_id = daemon.hello.client;
             keymap.reset();
             known(&mut panes, &daemon.hello.panes);
@@ -358,6 +396,14 @@ fn run(
             follow.had_panes = true;
         }
         follow.shown = follow.focused_pane();
+        workspaces.refresh(follow.workspace.as_ref(), follow.leaf, &panes);
+        let sidebar_shown = workspaces.docked || keymap.mode() == Mode::Workspace;
+        if sidebar_shown != sidebar_told {
+            sidebar_told = sidebar_shown;
+            let _ = daemon.outgoing.send(ToDaemon::ShowSidebar {
+                shown: sidebar_shown,
+            });
+        }
 
         if let Some(reloaded) = watch.poll() {
             match reloaded {
@@ -399,10 +445,11 @@ fn run(
             Event::Resize(new_cols, new_rows) => {
                 size = (new_cols.max(2), new_rows.max(1 + CHROME_ROWS));
                 screen.emitter.invalidate();
-                let (cols, rows) = tab_area(size.0, size.1);
+                let (cols, rows) = tab_area(size.0, size.1, workspaces.docked);
                 let _ = daemon.outgoing.send(ToDaemon::Resize { cols, rows });
             }
             Event::Key(key) => {
+                workspaces.message = None;
                 let Some(event) = input::to_input(Event::Key(key)) else {
                     continue;
                 };
@@ -435,6 +482,16 @@ fn run(
                             let _ = daemon.outgoing.send(ToDaemon::RenameTab { tab, name });
                             None
                         }
+                        OverlayOutcome::Prompted { purpose, text } => {
+                            overlay = None;
+                            apply!(workspaces.prompted(purpose, text));
+                            None
+                        }
+                        OverlayOutcome::Confirmed { purpose, key } => {
+                            overlay = None;
+                            apply!(workspaces.confirmed(purpose, key));
+                            None
+                        }
                         OverlayOutcome::Choose(choice) => {
                             overlay = None;
                             match choice {
@@ -445,6 +502,17 @@ fn run(
                                 }
                                 Choice::Leaf(leaf) => {
                                     let _ = daemon.outgoing.send(ToDaemon::FocusLeaf { leaf });
+                                    None
+                                }
+                                Choice::Go(target) => {
+                                    let request = match target {
+                                        Target::Workspace(workspace) => {
+                                            ToDaemon::SwitchWorkspace { workspace }
+                                        }
+                                        Target::Open(path) => ToDaemon::Open { path, switch: true },
+                                        Target::Pane(leaf) => ToDaemon::FocusLeaf { leaf },
+                                    };
+                                    let _ = daemon.outgoing.send(request);
                                     None
                                 }
                             }
@@ -468,6 +536,9 @@ fn run(
                             CopyAction::Exit
                         };
                         let _ = daemon.outgoing.send(ToDaemon::Copy(action));
+                    }
+                    if before != after && after == Mode::Workspace {
+                        workspaces.focus_current();
                     }
                     match outcome {
                         Outcome::ToPane => {
@@ -505,6 +576,21 @@ fn run(
                             overlay = Some(Overlay::Rename { tab, name });
                         }
                     }
+                    Some(
+                        command @ (Command::ToggleSidebar
+                        | Command::Switcher
+                        | Command::SidebarUp
+                        | Command::SidebarDown
+                        | Command::SidebarOpen
+                        | Command::NextWorkspace
+                        | Command::PreviousWorkspace
+                        | Command::NewWorktree
+                        | Command::RemoveWorktree
+                        | Command::SetupWorktree),
+                    ) => {
+                        let in_mode = keymap.mode() == Mode::Workspace;
+                        apply!(workspaces.command(command, in_mode, follow.workspace.as_ref()));
+                    }
                     Some(command) => {
                         let focused = follow.shown.and_then(|pane| panes.get(&pane));
                         if let Some(request) = request(command, focused) {
@@ -515,6 +601,23 @@ fn run(
             }
             Event::Mouse(event) => {
                 if overlay.is_some() {
+                    continue;
+                }
+                // A click on a sidebar row shows what it stands for.
+                if let Some(area) = scene!().sidebar_area()
+                    && event.column < area.right()
+                {
+                    let cursor = (keymap.mode() == Mode::Workspace).then_some(workspaces.cursor);
+                    if event.kind == MouseEventKind::Down(MouseButton::Left)
+                        && let Some(row) =
+                            Sidebar::row_at(workspaces.rows.len(), cursor, area, event.row)
+                    {
+                        workspaces.cursor = row;
+                        if let Some(request) = workspaces.open(row) {
+                            let _ = daemon.outgoing.send(request);
+                        }
+                        keymap.reset();
+                    }
                     continue;
                 }
                 let actions = mouse.handle(&scene!(), event);

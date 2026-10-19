@@ -186,9 +186,15 @@ pub const RULES: Rules = Rules {
 pub struct Space {
     pub pad: u16,
     pub gap: u16,
+    /// The sidebar's width, its rule included.
+    pub sidebar: u16,
 }
 
-pub const SPACE: Space = Space { pad: 1, gap: 1 };
+pub const SPACE: Space = Space {
+    pad: 1,
+    gap: 1,
+    sidebar: 30,
+};
 
 /// The state of an agent session, as the sidebar, inbox and status bar
 /// show it.

@@ -449,6 +449,11 @@ pub enum ToDaemon {
     Shutdown,
     /// Sends an `Overview` now and after every change to it, for a sidebar.
     WatchOverview,
+    /// Whether this client shows its sidebar: the daemon then keeps every
+    /// worktree's branch and dirty state current, not only the shown one's.
+    ShowSidebar {
+        shown: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -578,6 +583,16 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
         Command::CopyNext => ToDaemon::Copy(CopyAction::Next),
         Command::CopyPrevious => ToDaemon::Copy(CopyAction::Previous),
         Command::Detach
+        | Command::ToggleSidebar
+        | Command::Switcher
+        | Command::SidebarUp
+        | Command::SidebarDown
+        | Command::SidebarOpen
+        | Command::NextWorkspace
+        | Command::PreviousWorkspace
+        | Command::NewWorktree
+        | Command::RemoveWorktree
+        | Command::SetupWorktree
         | Command::Enter(_)
         | Command::Palette
         | Command::RenameTab

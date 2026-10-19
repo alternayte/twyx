@@ -12,13 +12,16 @@ use ratatui::style::{Color, Modifier};
 use ratatui::widgets::Widget;
 use twyx_core::keys::{Command, Keymap, Mode};
 use twyx_core::layout::{Cells, Fractions, LeafId, Placed};
-use twyx_protocol::client::{Launch, PaneInfo, PaneState, TabInfo, WorkspaceInfo};
+use twyx_core::theme::SPACE;
+use twyx_protocol::client::{Launch, Overview, PaneInfo, PaneState, TabInfo, WorkspaceInfo};
 use twyx_protocol::grid::{Attrs, Cell, Colour, Cursor};
+use twyx_protocol::sidebar::Row;
 use twyx_protocol::view::View;
 
 use crate::chrome::Pen;
 use crate::chrome::bars::{HintBar, StatusBar, Tab, TabBar};
 use crate::chrome::frames::{Frame, Frames};
+use crate::chrome::sidebar::Sidebar;
 use crate::emitter::Grid;
 use crate::mouse::Selection;
 use crate::overlay::Overlay;
@@ -48,11 +51,52 @@ pub struct Scene<'a> {
     pub overlay: Option<&'a Overlay>,
     /// A message for the status bar, such as a config error.
     pub notice: Option<&'a str>,
+    /// Every project, worktree and workspace, once the daemon sent them.
+    pub overview: Option<&'a Overview>,
+    pub sidebar: Option<SidebarScene<'a>>,
 }
 
-/// The tab area: the screen between the tab bar and the status bar.
-pub fn tab_area(cols: u16, rows: u16) -> (u16, u16) {
-    (cols, rows.saturating_sub(CHROME_ROWS).max(1))
+/// The sidebar on one screen.
+#[derive(Debug, Clone, Copy)]
+pub struct SidebarScene<'a> {
+    pub rows: &'a [Row],
+    pub cursor: Option<usize>,
+    /// Beside the panes, which make room for it; else over them, for as
+    /// long as workspace mode is open.
+    pub docked: bool,
+}
+
+/// A pane's name: its title, else its program.
+pub fn pane_title(panes: &HashMap<u64, PaneInfo>, pane: u64) -> String {
+    let Some(info) = panes.get(&pane) else {
+        return String::new();
+    };
+    if !info.title.is_empty() {
+        return info.title.clone();
+    }
+    match &info.launch {
+        Launch::Command(argv) => argv
+            .first()
+            .map(|program| program.rsplit('/').next().unwrap_or(program).to_owned())
+            .unwrap_or_default(),
+        Launch::Shell => "shell".to_owned(),
+        Launch::Unknown => "recovered".to_owned(),
+    }
+}
+
+/// The sidebar's width on a screen `cols` wide.
+pub fn sidebar_width(cols: u16) -> u16 {
+    SPACE.sidebar.min(cols / 2)
+}
+
+/// The tab area: the screen between the tab bar and the status bar, beside
+/// a docked sidebar.
+pub fn tab_area(cols: u16, rows: u16, docked: bool) -> (u16, u16) {
+    let sidebar = if docked { sidebar_width(cols) } else { 0 };
+    (
+        cols.saturating_sub(sidebar).max(2),
+        rows.saturating_sub(CHROME_ROWS).max(1),
+    )
 }
 
 impl Scene<'_> {
@@ -106,13 +150,32 @@ impl Scene<'_> {
         lines.join("\n")
     }
 
+    /// The column the tab area starts at: right of a docked sidebar.
+    pub fn origin(&self) -> u16 {
+        match self.sidebar {
+            Some(sidebar) if sidebar.docked => sidebar_width(self.cols),
+            _ => 0,
+        }
+    }
+
+    /// Where the sidebar is on this screen, when it shows.
+    pub fn sidebar_area(&self) -> Option<Rect> {
+        self.sidebar?;
+        Some(Rect::new(
+            0,
+            1,
+            sidebar_width(self.cols),
+            self.rows.saturating_sub(CHROME_ROWS),
+        ))
+    }
+
     /// Where each leaf of the client's tab lands on this screen.
     pub fn placed(&self) -> Vec<Placed> {
         let Some(tab) = self.tab_info() else {
             return Vec::new();
         };
         let area = Cells {
-            x: 0,
+            x: self.origin(),
             y: 1,
             width: tab.cols,
             height: tab.rows,
@@ -121,20 +184,7 @@ impl Scene<'_> {
     }
 
     pub fn title(&self, pane: u64) -> String {
-        let Some(info) = self.panes.get(&pane) else {
-            return String::new();
-        };
-        if !info.title.is_empty() {
-            return info.title.clone();
-        }
-        match &info.launch {
-            Launch::Command(argv) => argv
-                .first()
-                .map(|program| program.rsplit('/').next().unwrap_or(program).to_owned())
-                .unwrap_or_default(),
-            Launch::Shell => "shell".to_owned(),
-            Launch::Unknown => "recovered".to_owned(),
-        }
+        pane_title(self.panes, pane)
     }
 
     /// The keys that run a command, from the prefix: `ctrl-g p a`.
@@ -169,12 +219,23 @@ impl Scene<'_> {
             return grid;
         }
         let pen = self.pen;
-        let panes_area = Rect::new(0, 1, self.cols, self.rows.saturating_sub(CHROME_ROWS));
+        let origin = self.origin();
+        let panes_area = Rect::new(
+            origin,
+            1,
+            self.cols - origin,
+            self.rows.saturating_sub(CHROME_ROWS),
+        );
         let mut links = Links::default();
 
         let mut chrome = sentinel(screen);
         self.tab_bar(&mut chrome);
         self.status_bar(&mut chrome);
+        if let (Some(sidebar), Some(area)) = (self.sidebar, self.sidebar_area())
+            && sidebar.docked
+        {
+            self.render_sidebar(sidebar, area, &mut chrome);
+        }
 
         let placed = self.placed();
         let tiled: Vec<&Placed> = placed.iter().filter(|p| !p.floating && p.frame).collect();
@@ -218,6 +279,14 @@ impl Scene<'_> {
             self.pane(&mut grid, &mut links, placed, panes_area);
         }
 
+        if let (Some(sidebar), Some(area)) = (self.sidebar, self.sidebar_area())
+            && !sidebar.docked
+        {
+            let mut layer = sentinel(screen);
+            self.render_sidebar(sidebar, area, &mut layer);
+            overlay_cells(&mut grid, &layer);
+        }
+
         if self.keymap.mode() != Mode::Normal && panes_area.height > 1 {
             let mut layer = sentinel(screen);
             let hints = self.keymap.hints();
@@ -243,6 +312,16 @@ impl Scene<'_> {
         grid.links = links.targets;
         grid.cursor = cursor;
         grid
+    }
+
+    fn render_sidebar(&self, sidebar: SidebarScene<'_>, area: Rect, buf: &mut Buffer) {
+        Sidebar {
+            pen: self.pen,
+            rows: sidebar.rows,
+            cursor: sidebar.cursor,
+            rule: !sidebar.docked,
+        }
+        .render(area, buf);
     }
 
     fn tab_bar(&self, buf: &mut Buffer) {
@@ -606,6 +685,8 @@ mod tests {
             selection: None,
             overlay: None,
             notice: None,
+            overview: None,
+            sidebar: None,
         }
         .compose();
         grid.cells

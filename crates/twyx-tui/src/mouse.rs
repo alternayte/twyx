@@ -355,7 +355,7 @@ fn under(placed: &[Placed], col: u16, row: u16) -> Option<&Placed> {
 /// side the rule is on. The tab's own edges are not rules to drag.
 fn rule_at(scene: &Scene<'_>, placed: &[Placed], col: u16, row: u16) -> Option<(LeafId, Side)> {
     let (cols, rows) = scene.tab_size()?;
-    let (right_edge, bottom_edge) = (cols.saturating_sub(1), rows);
+    let (right_edge, bottom_edge) = ((scene.origin() + cols).saturating_sub(1), rows);
     placed
         .iter()
         .filter(|p| !p.floating && p.frame && p.content)
