@@ -2,27 +2,56 @@
 
 use gpui::{
     App, Bounds, Font, FontWeight, Hsla, Pixels, Point, SharedString, TextAlign, TextRun,
-    TextSystem, UnderlineStyle, Window, fill, font, point, px, rgb,
+    TextSystem, UnderlineStyle, Window, WindowAppearance, fill, font, point, px, rgb,
 };
+use twyx_core::theme::{DESKTOP, Rgb, Sheet, Theme, Variant};
 use twyx_protocol::grid::{Attrs, Cell, Colour, Underline};
 use twyx_protocol::view::View;
 
-/// The colours a pane falls back to when a cell names none.
+/// A pane's colours: the sheet's paper, ink and sixteen terminal colours,
+/// with the blue pencil for the cursor.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub foreground: Hsla,
     pub background: Hsla,
     pub cursor: Hsla,
+    pub ansi: [Hsla; 16],
 }
 
-impl Default for Palette {
-    fn default() -> Self {
+impl Palette {
+    pub fn of(variant: Variant) -> Self {
+        let sheet = Sheet::of(variant);
         Self {
-            foreground: rgb(0xcdd6f4).into(),
-            background: rgb(0x1e1e2e).into(),
-            cursor: rgb(0xf5e0dc).into(),
+            foreground: hsla(sheet.ink),
+            background: hsla(sheet.paper),
+            cursor: hsla(Theme::sheet(variant).accent),
+            ansi: sheet.ansi.map(hsla),
         }
     }
+}
+
+pub fn hsla(colour: Rgb) -> Hsla {
+    rgb(u32::from(colour.r) << 16 | u32::from(colour.g) << 8 | u32::from(colour.b)).into()
+}
+
+/// The sheet that matches the system's light or dark appearance.
+pub fn variant(appearance: WindowAppearance) -> Variant {
+    match appearance {
+        WindowAppearance::Light | WindowAppearance::VibrantLight => Variant::Light,
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => Variant::Dark,
+    }
+}
+
+/// The first of the sheet's fonts that is installed.
+pub fn family(text_system: &TextSystem) -> &'static str {
+    let installed = text_system.all_font_names();
+    DESKTOP
+        .fonts
+        .iter()
+        .copied()
+        .find(|family| installed.iter().any(|name| name == family))
+        .or_else(|| DESKTOP.fonts.last().copied())
+        .unwrap_or("monospace")
 }
 
 /// What a grid needs to know before it can be laid out.
@@ -35,8 +64,8 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    pub fn measure(text_system: &TextSystem, font_size: Pixels) -> Self {
-        let font = font("Menlo");
+    pub fn measure(text_system: &TextSystem, family: &'static str, font_size: Pixels) -> Self {
+        let font = font(family);
         let font_id = text_system.resolve_font(&font);
         let cell_width = text_system
             .ch_advance(font_id, font_size)
@@ -75,10 +104,10 @@ pub fn paint(
     view: &View,
     bounds: Bounds<Pixels>,
     metrics: &Metrics,
+    palette: Palette,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let palette = Palette::default();
     window.paint_quad(fill(bounds, palette.background));
 
     for (row, cells) in view.cells.iter().enumerate() {
@@ -166,8 +195,8 @@ fn shape_input(cells: &[Cell], metrics: &Metrics, palette: Palette) -> (String, 
 }
 
 fn style_of(cell: &Cell, metrics: &Metrics, palette: Palette) -> TextRun {
-    let mut foreground = colour(cell.fg, palette.foreground);
-    let mut background = colour(cell.bg, palette.background);
+    let mut foreground = colour(cell.fg, palette.foreground, &palette);
+    let mut background = colour(cell.bg, palette.background, &palette);
     if cell.attrs.contains(Attrs::REVERSE) {
         std::mem::swap(&mut foreground, &mut background);
     }
@@ -190,6 +219,7 @@ fn style_of(cell: &Cell, metrics: &Metrics, palette: Palette) -> TextRun {
                 color: Some(colour(
                     cell.underline_colour.unwrap_or(Colour::Default),
                     foreground,
+                    &palette,
                 )),
                 wavy: cell.underline == Underline::Curly,
             }),
@@ -204,9 +234,10 @@ fn style_of(cell: &Cell, metrics: &Metrics, palette: Palette) -> TextRun {
     }
 }
 
-fn colour(colour: Colour, default: Hsla) -> Hsla {
+fn colour(colour: Colour, default: Hsla, palette: &Palette) -> Hsla {
     match colour {
         Colour::Default => default,
+        Colour::Palette(index) if index < 16 => palette.ansi[usize::from(index)],
         Colour::Palette(index) => palette_colour(index),
         Colour::Rgb { r, g, b } => {
             rgb(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)).into()
@@ -214,25 +245,20 @@ fn colour(colour: Colour, default: Hsla) -> Hsla {
     }
 }
 
-/// The 256-colour palette, as a dark theme renders it.
+/// The xterm colour cube and grey ramp, above the sheet's sixteen.
 fn palette_colour(index: u8) -> Hsla {
-    const ANSI: [u32; 16] = [
-        0x45475a, 0xf38ba8, 0xa6e3a1, 0xf9e2af, 0x89b4fa, 0xf5c2e7, 0x94e2d5, 0xbac2de, 0x585b70,
-        0xf38ba8, 0xa6e3a1, 0xf9e2af, 0x89b4fa, 0xf5c2e7, 0x94e2d5, 0xa6adc8,
-    ];
     match index {
-        0..=15 => rgb(ANSI[index as usize]).into(),
-        16..=231 => {
-            let index = index - 16;
+        232.. => {
+            let level = 8 + (index - 232) * 10;
+            rgb(u32::from(level) << 16 | u32::from(level) << 8 | u32::from(level)).into()
+        }
+        _ => {
+            let index = index.saturating_sub(16);
             let r = index / 36;
             let g = (index % 36) / 6;
             let b = index % 6;
             let level = |value: u8| if value == 0 { 0 } else { 55 + value * 40 };
             rgb(u32::from(level(r)) << 16 | u32::from(level(g)) << 8 | u32::from(level(b))).into()
-        }
-        _ => {
-            let level = 8 + (index - 232) * 10;
-            rgb(u32::from(level) << 16 | u32::from(level) << 8 | u32::from(level)).into()
         }
     }
 }
@@ -262,7 +288,7 @@ mod tests {
             cell("x", Colour::Default),
         ];
 
-        let (text, runs) = shape_input(&cells, &metrics, Palette::default());
+        let (text, runs) = shape_input(&cells, &metrics, Palette::of(Variant::Dark));
 
         assert_eq!(text, "➜ 字x");
         assert_eq!(runs.len(), 4);

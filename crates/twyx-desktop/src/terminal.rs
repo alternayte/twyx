@@ -14,6 +14,7 @@ use gpui::{
 use twyx_core::keys::{Command, Keymap, Mode, Outcome};
 use twyx_core::layout::LeafId;
 use twyx_core::paths::Paths;
+use twyx_core::theme::DESKTOP;
 use twyx_protocol::client::{
     FromDaemon, Launch, PaneInfo, Place, ToDaemon, WorkspaceInfo, request,
 };
@@ -74,7 +75,13 @@ impl Terminal {
     }
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>, keymap: Keymap) -> Self {
-        let metrics = Metrics::measure(window.text_system(), px(13.0));
+        let metrics = Metrics::measure(
+            window.text_system(),
+            paint::family(window.text_system()),
+            px(DESKTOP.size.body),
+        );
+        cx.observe_window_appearance(window, |_, _, cx| cx.notify())
+            .detach();
         let shared = Arc::new(Mutex::new(Shared {
             view: View::new(80, 24),
             pane: None,
@@ -504,6 +511,7 @@ impl Render for Terminal {
 
         let shared = Arc::clone(&self.shared);
         let metrics = self.metrics.clone();
+        let palette = paint::Palette::of(paint::variant(window.appearance()));
         let focused = self.focus.clone();
 
         div()
@@ -537,7 +545,7 @@ impl Render for Terminal {
                             .unwrap_or_else(|poison| poison.into_inner())
                             .view
                             .clone();
-                        paint::paint(&view, bounds_state, &metrics, window, cx);
+                        paint::paint(&view, bounds_state, &metrics, palette, window, cx);
                         let _ = bounds;
                         let _ = &focused;
                     },

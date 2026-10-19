@@ -209,8 +209,6 @@ pub struct Desktop {
     /// Font families in order of preference; the first one installed wins.
     pub fonts: &'static [&'static str],
     pub size: Sizes,
-    /// Extra spacing for capitalised field labels, in ems.
-    pub tracking: f32,
     pub unit: f32,
     /// A hairline: borders, separators, the title block's rules.
     pub rule: f32,
@@ -278,7 +276,6 @@ pub const DESKTOP: Desktop = Desktop {
         body: 13.0,
         heading: [14.5, 16.5, 18.5],
     },
-    tracking: 0.06,
     unit: 4.0,
     rule: 1.0,
     mark: 2.0,

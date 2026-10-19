@@ -23,7 +23,7 @@ fn main() {
     );
 
     // Menlo's advance is 0.602 em, and its ascent plus descent 1.164 em.
-    let metrics = paint::Metrics::measure(&TextSystem::new(platform_text), px(13.0));
+    let metrics = paint::Metrics::measure(&TextSystem::new(platform_text), "Menlo", px(13.0));
     let cell = f32::from(metrics.cell_width);
     let line = f32::from(metrics.line_height);
     assert!((7.7..8.0).contains(&cell), "Menlo at 13px is {cell}px wide");
