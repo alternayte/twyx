@@ -49,6 +49,9 @@ pub enum WorktreeCommand {
         from: Option<String>,
         #[arg(long)]
         project: Option<String>,
+        /// A recipe to open in the new worktree's workspace.
+        #[arg(long)]
+        recipe: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -66,12 +69,12 @@ pub enum WorktreeCommand {
     },
 }
 
-fn connect(paths: &Paths) -> Result<Connection> {
+pub(crate) fn connect(paths: &Paths) -> Result<Connection> {
     client::attach(paths, 80, 24, false, None, |_| false)
 }
 
 /// Waits for the reply `pick` takes; a refusal is the error.
-fn wait<T>(
+pub(crate) fn wait<T>(
     connection: &mut Connection,
     mut pick: impl FnMut(FromDaemon) -> Option<T>,
 ) -> Result<T> {
@@ -87,7 +90,7 @@ fn wait<T>(
     }
 }
 
-fn print_json(value: &impl Serialize) -> Result<()> {
+pub(crate) fn print_json(value: &impl Serialize) -> Result<()> {
     println!(
         "{}",
         serde_json::to_string_pretty(value).context("write JSON")?
@@ -100,7 +103,11 @@ fn absolute(path: &Path) -> Result<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
-fn open_path(connection: &mut Connection, path: &Path, switch: bool) -> Result<(u64, Option<u64>)> {
+pub(crate) fn open_path(
+    connection: &mut Connection,
+    path: &Path,
+    switch: bool,
+) -> Result<(u64, Option<u64>)> {
     connection.send(&ToDaemon::Open {
         path: absolute(path)?,
         switch,
@@ -422,7 +429,20 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
         WorktreeCommand::New {
             branch,
             from,
+            project: _,
+            recipe: Some(recipe),
+            json,
+        } => {
+            if from.is_some() {
+                bail!("--from does not go with --recipe; the recipe's [worktree] from applies");
+            }
+            crate::recipes::run(&mut connection, &recipe, Some(branch), true, json)
+        }
+        WorktreeCommand::New {
+            branch,
+            from,
             project,
+            recipe: None,
             json,
         } => {
             let project = find_project(&mut connection, &mut overview, project.as_deref())?;
@@ -473,7 +493,12 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
             if !json {
                 print_plan(&plan);
             }
-            let confirmed = yes || (!json && ask("Remove it?")?);
+            let confirmed = yes
+                || (!json
+                    && ask(
+                        "Remove it?",
+                        "not removed: pass --yes to remove without a terminal to ask on",
+                    )?);
             if !confirmed {
                 if json {
                     return print_json(&serde_json::json!({ "plan": plan, "removed": false }));
@@ -551,10 +576,11 @@ fn print_plan(plan: &RemovalPlan) {
     }
 }
 
-/// Asks on the terminal; no terminal is no.
-fn ask(question: &str) -> Result<bool> {
+/// Asks on the terminal. With no terminal to ask on, `without` is the
+/// error.
+pub(crate) fn ask(question: &str, without: &str) -> Result<bool> {
     if !std::io::stdin().is_terminal() {
-        bail!("not removed: pass --yes to remove without a terminal to ask on");
+        bail!("{without}");
     }
     print!("{question} [y/N] ");
     std::io::stdout().flush().context("write the question")?;

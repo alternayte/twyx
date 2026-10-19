@@ -21,6 +21,8 @@ pub struct Config {
     /// `[worktrees] location`: where a new worktree goes, with `{parent}`,
     /// `{repo}` and `{branch}`.
     pub worktree_location: Option<String>,
+    /// `[agents] default`: the agent kind an agent pane starts.
+    pub default_agent: Option<String>,
 }
 
 impl Default for Config {
@@ -30,6 +32,7 @@ impl Default for Config {
             theme: ThemeConfig::default(),
             history: true,
             worktree_location: None,
+            default_agent: None,
         }
     }
 }
@@ -82,6 +85,13 @@ struct Raw {
     theme: Option<RawTheme>,
     history: Option<RawHistory>,
     worktrees: Option<RawWorktrees>,
+    agents: Option<RawAgents>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawAgents {
+    default: Option<Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,7 +143,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
     let fail = |at: Option<std::ops::Range<usize>>, reason: String| ConfigError {
         file: file.to_path_buf(),
         line: at.map_or(1, |at| {
-            text[..at.start.min(text.len())].lines().count().max(1)
+            text[..at.start.min(text.len())].matches('\n').count() + 1
         }),
         reason,
     };
@@ -191,6 +201,21 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         }
         None => None,
     };
+    let default_agent = match raw.agents.and_then(|agents| agents.default) {
+        Some(kind) if crate::agent::command(kind.get_ref()).is_none() => {
+            let known: Vec<&str> = crate::agent::KINDS.iter().map(|(name, _)| *name).collect();
+            return Err(fail(
+                Some(kind.span()),
+                format!(
+                    "{:?} is not an agent kind; the kinds are {}",
+                    kind.get_ref(),
+                    known.join(", ")
+                ),
+            ));
+        }
+        Some(kind) => Some(kind.into_inner()),
+        None => None,
+    };
     let mut keymap = Keymap::default();
     let Some(keys) = raw.keys else {
         return Ok(Config {
@@ -198,6 +223,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
             theme,
             history,
             worktree_location,
+            default_agent,
         });
     };
     if let Some(prefix) = keys.prefix {
@@ -243,6 +269,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         theme,
         history,
         worktree_location,
+        default_agent,
     })
 }
 
@@ -297,6 +324,8 @@ mod tests {
             .expect_err("no branch in the location");
         assert_eq!(error.line, 2);
         let error = read("[worktrees]\nlocation = \"wt/{branch}\"\n").expect_err("a relative path");
+        assert_eq!(error.line, 2);
+        let error = read("[agents]\ndefault = \"gpt\"\n").expect_err("an unknown agent");
         assert_eq!(error.line, 2);
     }
 

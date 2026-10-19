@@ -7,6 +7,7 @@ pub mod daemon;
 mod git;
 mod holders;
 pub mod peer;
+mod recipes;
 mod store;
 mod tabs;
 mod workspaces;

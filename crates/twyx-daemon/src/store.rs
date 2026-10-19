@@ -81,6 +81,16 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE panes DROP COLUMN spawn_worktree;
     ALTER TABLE panes ADD COLUMN spawn_worktree INTEGER REFERENCES worktrees(id);
 ",
+    "
+    CREATE TABLE trust (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project INTEGER NOT NULL REFERENCES projects(id),
+        path TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        granted_at INTEGER NOT NULL,
+        UNIQUE (project, path, content_hash)
+    );
+",
 ];
 
 #[derive(Debug)]
@@ -103,6 +113,7 @@ pub(crate) struct SavedPane {
     pub workspace: u64,
     pub cwd: String,
     pub spawn_worktree: Option<u64>,
+    pub env: Vec<(String, String)>,
     pub launch: Launch,
     pub state: PaneState,
     pub title: String,
@@ -290,7 +301,7 @@ impl Store {
 
         let panes = self.rows(
             "SELECT id, workspace, spawn_dir, spawn_worktree, command, process_state, exit_code,
-                    signal, last_title, cols, rows, history
+                    signal, last_title, cols, rows, history, env_overrides
              FROM panes ORDER BY id",
             |row| {
                 let state: String = row.get(5)?;
@@ -300,6 +311,7 @@ impl Store {
                     workspace: row.get(1)?,
                     cwd: row.get(2)?,
                     spawn_worktree: row.get(3)?,
+                    env: serde_json::from_str(&row.get::<_, String>(12)?).unwrap_or_default(),
                     launch: serde_json::from_str(&command).unwrap_or(Launch::Unknown),
                     state: match state.as_str() {
                         "running" => PaneState::Running,
@@ -486,6 +498,31 @@ impl Store {
         Ok(())
     }
 
+    /// Whether a file of a project is trusted with exactly this content.
+    pub(crate) fn trusted(&self, project: u64, path: &str, hash: &str) -> Result<bool> {
+        self.db
+            .query_row(
+                "SELECT 1 FROM trust WHERE project = ?1 AND path = ?2 AND content_hash = ?3",
+                params![project, path, hash],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|found| found.is_some())
+            .context("read the trust store")
+    }
+
+    pub(crate) fn trust(&self, project: u64, path: &str, hash: &str) -> Result<()> {
+        self.db
+            .execute(
+                "INSERT INTO trust (project, path, content_hash, granted_at)
+                 VALUES (?1, ?2, ?3, unixepoch())
+                 ON CONFLICT DO NOTHING",
+                params![project, path, hash],
+            )
+            .context("record trust")?;
+        Ok(())
+    }
+
     /// Reserves a tab id that no earlier tab had.
     pub(crate) fn new_tab(&self, workspace: u64) -> Result<u64> {
         let empty = serde_json::to_string(&Layout::default()).context("write a layout")?;
@@ -504,8 +541,9 @@ impl Store {
         self.db
             .execute(
                 "INSERT INTO panes (id, workspace, spawn_dir, spawn_worktree, command,
-                                    process_state, holder_major, cols, rows, history)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9)",
+                                    process_state, holder_major, cols, rows, history,
+                                    env_overrides)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9, ?10)",
                 params![
                     id.map(PaneId::raw),
                     pane.workspace,
@@ -516,6 +554,7 @@ impl Store {
                     pane.cols,
                     pane.rows,
                     pane.history,
+                    serde_json::to_string(&pane.env).context("write the variables")?,
                 ],
             )
             .context("reserve a pane")?;

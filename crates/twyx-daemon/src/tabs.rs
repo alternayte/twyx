@@ -1,6 +1,10 @@
 //! Tab and layout commands: new, close and run-again panes, focus, resize,
 //! swap, zoom, float, and the tabs themselves.
 
+use std::path::PathBuf;
+
+use anyhow::Context;
+
 use twyx_core::layout::{Axis, Cells, Layout, LeafId, Side};
 use twyx_core::pane::PaneId;
 use twyx_core::tuning;
@@ -25,10 +29,10 @@ impl Daemon {
             self.config = config;
         }
         let history = history && self.config.history;
-        let Some(argv) = argv(&launch) else {
+        if argv(&launch).is_none() {
             self.refuse(id, "a pane needs a command".to_owned());
             return;
-        };
+        }
         let interactive = self.client(id).is_some_and(|client| client.interactive);
         let workspace = self.client_workspace(id);
         let existing = self
@@ -83,6 +87,7 @@ impl Daemon {
             title: String::new(),
             history,
             workspace,
+            env: Vec::new(),
         };
         let pane = match self.reserve_pane(&record) {
             Ok(pane) => pane,
@@ -109,25 +114,13 @@ impl Daemon {
             .find(|placed| placed.leaf.id == leaf.id)
             .map(|placed| placed.inner)
             .unwrap_or_default();
-        let (cols, rows) = (inner.width.max(2), inner.height.max(1));
-
-        let started = holders::start(
-            holders::Start {
-                binary: &self.holder_binary,
-                socket: self.paths.pane_socket(pane),
-                pane,
-                argv: &argv,
-                cwd: &record.cwd,
-                cols,
-                rows,
-                history: history.then(|| self.paths.pane_history(pane)),
-                after: None,
-            },
-            &self.build,
-            &self.events,
-        );
-        let (link, welcome) = match started {
-            Ok(started) => started,
+        let record = Pane {
+            cols: inner.width.max(2),
+            rows: inner.height.max(1),
+            ..record
+        };
+        match self.start_pane(pane, record, None) {
+            Ok(()) => {}
             Err(error) => {
                 self.refuse(id, format!("{error:#}"));
                 // Nothing to show: take the leaf back out.
@@ -138,7 +131,38 @@ impl Daemon {
                 self.broadcast_workspace();
                 return;
             }
-        };
+        }
+        self.set_focus(id, tab, leaf.id);
+        self.apply_size(tab);
+        self.broadcast_workspace();
+        self.send_focus_all();
+    }
+
+    /// Starts a reserved pane's holder at the record's size, and shows the
+    /// pane to every client.
+    pub(crate) fn start_pane(
+        &mut self,
+        pane: PaneId,
+        record: Pane,
+        after: Option<PathBuf>,
+    ) -> anyhow::Result<()> {
+        let argv = argv(&record.launch).context("a pane needs a command")?;
+        let (link, welcome) = holders::start(
+            holders::Start {
+                binary: &self.holder_binary,
+                socket: self.paths.pane_socket(pane),
+                pane,
+                argv: &argv,
+                cwd: &record.cwd,
+                env: &record.env,
+                cols: record.cols,
+                rows: record.rows,
+                history: record.history.then(|| self.paths.pane_history(pane)),
+                after,
+            },
+            &self.build,
+            &self.events,
+        )?;
         let (cols, rows) = holders::screen_size(&welcome.snapshot);
         self.panes.insert(
             pane,
@@ -156,10 +180,7 @@ impl Daemon {
             body: welcome.snapshot,
         });
         self.broadcast_pane(pane);
-        self.set_focus(id, tab, leaf.id);
-        self.apply_size(tab);
-        self.broadcast_workspace();
-        self.send_focus_all();
+        Ok(())
     }
 
     /// Removes a leaf, ends its pane, and gives its focus to a neighbour.
@@ -206,7 +227,7 @@ impl Daemon {
         self.broadcast(FromDaemon::PaneClosed { pane: pane.raw() });
     }
 
-    fn drop_empty_tab(&mut self, tab: u64) {
+    pub(crate) fn drop_empty_tab(&mut self, tab: u64) {
         let Some(entry) = self.tab(tab) else {
             return;
         };
@@ -267,9 +288,9 @@ impl Daemon {
         if entry.state == PaneState::Running {
             return;
         }
-        let Some(argv) = argv(&entry.launch) else {
+        if argv(&entry.launch).is_none() {
             return;
-        };
+        }
         let record = Pane {
             link: None,
             cols: entry.cols,
@@ -282,50 +303,23 @@ impl Daemon {
             history: entry.history,
             workspace: entry.workspace,
             spawn_worktree: entry.spawn_worktree,
+            env: entry.env.clone(),
         };
-        let (cols, rows, history) = (record.cols, record.rows, record.history);
         let Some((tab, leaf)) = self.leaf_of(old) else {
             return;
         };
         let Ok(pane) = self.reserve_pane(&record) else {
             return;
         };
-        let Ok((link, welcome)) = holders::start(
-            holders::Start {
-                binary: &self.holder_binary,
-                socket: self.paths.pane_socket(pane),
-                pane,
-                argv: &argv,
-                cwd: &record.cwd,
-                cols,
-                rows,
-                history: history.then(|| self.paths.pane_history(pane)),
-                // The old run's history shows above the new one.
-                after: Some(self.paths.pane_history(old)),
-            },
-            &self.build,
-            &self.events,
-        ) else {
+        // The old run's history shows above the new one.
+        let after = Some(self.paths.pane_history(old));
+        if self.start_pane(pane, record, after).is_err() {
             return;
-        };
+        }
         if let Some(entry) = self.tab_mut(tab) {
             entry.layout.replace_pane(leaf.id, pane);
         }
         self.end_pane(old);
-        self.panes.insert(
-            pane,
-            Pane {
-                link: Some(link),
-                screen: Some(welcome.snapshot.clone()),
-                ..record
-            },
-        );
-        self.broadcast_frames(FromDaemon::Snapshot {
-            pane: pane.raw(),
-            seq: 0,
-            body: welcome.snapshot,
-        });
-        self.broadcast_pane(pane);
         self.set_focus(id, tab, leaf.id);
         self.apply_size(tab);
         self.broadcast_workspace();
@@ -479,7 +473,7 @@ impl Daemon {
 }
 
 /// The command a pane runs. An adopted pane with no record cannot run again.
-fn argv(launch: &Launch) -> Option<Vec<String>> {
+pub(crate) fn argv(launch: &Launch) -> Option<Vec<String>> {
     match launch {
         Launch::Shell => Some(vec![
             std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned()),

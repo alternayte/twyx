@@ -77,6 +77,8 @@ pub(crate) struct Pane {
     pub workspace: u64,
     /// The worktree the pane started in; it never changes.
     pub spawn_worktree: Option<u64>,
+    /// Variables the pane's command gets over the daemon's own.
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug)]
@@ -270,6 +272,7 @@ impl Daemon {
                     history: pane.history,
                     workspace: pane.workspace,
                     spawn_worktree: pane.spawn_worktree,
+                    env: pane.env,
                 },
             );
         }
@@ -327,6 +330,7 @@ impl Daemon {
                 workspace: self.default_workspace,
                 cwd: String::new(),
                 spawn_worktree: None,
+                env: Vec::new(),
                 launch: Launch::Unknown,
                 state: PaneState::Running,
                 title: String::new(),
@@ -351,6 +355,7 @@ impl Daemon {
                     history: false,
                     workspace: self.default_workspace,
                     spawn_worktree: None,
+                    env: Vec::new(),
                 },
             );
         }
@@ -454,6 +459,7 @@ impl Daemon {
                     workspace: pane.workspace,
                     cwd: pane.cwd.clone(),
                     spawn_worktree: pane.spawn_worktree,
+                    env: pane.env.clone(),
                     launch: pane.launch.clone(),
                     state: pane.state.clone(),
                     title: pane.title.clone(),
@@ -476,6 +482,7 @@ impl Daemon {
             workspace: pane.workspace,
             cwd: pane.cwd.clone(),
             spawn_worktree: pane.spawn_worktree,
+            env: pane.env.clone(),
             launch: pane.launch.clone(),
             state: PaneState::Running,
             title: String::new(),
@@ -733,9 +740,21 @@ impl Daemon {
                 project,
                 branch,
                 start,
-            } => self.new_worktree(id, project, branch, start),
+            } => self.new_worktree(id, project, branch, start, None),
             ToDaemon::PlanRemoval { worktree } => self.plan_removal(id, worktree),
             ToDaemon::RemoveWorktree { plan } => self.remove_worktree(id, plan),
+            ToDaemon::Recipes { workspace } => self.list_recipes(id, workspace),
+            ToDaemon::RunRecipe {
+                workspace,
+                name,
+                branch,
+                switch,
+            } => self.run_recipe(id, workspace, name, branch, switch),
+            ToDaemon::TrustRecipe {
+                workspace,
+                name,
+                hash,
+            } => self.trust_recipe(id, workspace, name, hash),
         }
     }
 

@@ -302,7 +302,10 @@ fn run(
                 | FromDaemon::Overview(_)
                 | FromDaemon::WorktreeAdded { .. }
                 | FromDaemon::RemovalPlan(_)
-                | FromDaemon::WorktreeRemoved { .. } => {}
+                | FromDaemon::WorktreeRemoved { .. }
+                | FromDaemon::Recipes(_)
+                | FromDaemon::RecipeOpened { .. }
+                | FromDaemon::RecipeTrusted { .. } => {}
             }
         }
 

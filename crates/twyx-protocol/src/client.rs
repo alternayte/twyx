@@ -164,6 +164,50 @@ pub struct RemovalPlan {
     pub panes: Vec<PaneInfo>,
 }
 
+/// Where a recipe comes from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RecipeSource {
+    BuiltIn,
+    /// A file in the user's config; it needs no trust.
+    User {
+        path: String,
+    },
+    /// A file in the workspace's `.twyx/recipes`; it runs only while its
+    /// content is trusted.
+    Repository {
+        path: String,
+        /// The SHA-256 of the content shown here.
+        hash: String,
+        trusted: bool,
+    },
+}
+
+/// One pane of a recipe, as the trust prompt lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecipePaneInfo {
+    pub name: String,
+    /// `None` runs the shell.
+    pub command: Option<String>,
+    pub dir: Option<String>,
+    pub env: Vec<(String, String)>,
+    pub agent: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecipeInfo {
+    pub name: String,
+    pub description: String,
+    pub source: RecipeSource,
+    /// Why the file could not be read; such a recipe cannot run.
+    pub error: Option<String>,
+    pub tabs: u32,
+    pub panes: Vec<RecipePaneInfo>,
+    /// Whether it opens in a new worktree.
+    pub new_worktree: bool,
+    /// A recipe of the same name in a source that wins over this one.
+    pub shadowed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommitInfo {
     pub oid: String,
@@ -324,6 +368,25 @@ pub enum ToDaemon {
     RemoveWorktree {
         plan: u64,
     },
+    /// The recipes a workspace can run: built in, the user's, and its
+    /// repository's.
+    Recipes {
+        workspace: u64,
+    },
+    /// Opens a recipe's tabs in a workspace, or in a new worktree on
+    /// `branch`. `switch` works as for `Open`.
+    RunRecipe {
+        workspace: u64,
+        name: String,
+        branch: Option<String>,
+        switch: bool,
+    },
+    /// Trusts a repository recipe whose content has this hash.
+    TrustRecipe {
+        workspace: u64,
+        name: String,
+        hash: String,
+    },
     /// Ask the daemon to exit. Panes keep running.
     Shutdown,
 }
@@ -390,6 +453,16 @@ pub enum FromDaemon {
     RemovalPlan(RemovalPlan),
     WorktreeRemoved {
         worktree: u64,
+    },
+    Recipes(Vec<RecipeInfo>),
+    /// A recipe opened its tabs in a workspace, shown in `client`.
+    RecipeOpened {
+        workspace: u64,
+        tabs: Vec<u64>,
+        client: Option<u64>,
+    },
+    RecipeTrusted {
+        name: String,
     },
 }
 

@@ -3,6 +3,7 @@
 
 mod cli;
 mod projects;
+mod recipes;
 
 fn main() {
     if let Err(error) = cli::run() {

@@ -115,6 +115,8 @@ pub(crate) struct Start<'a> {
     pub pane: PaneId,
     pub argv: &'a [String],
     pub cwd: &'a str,
+    /// Variables for the command, over the daemon's own.
+    pub env: &'a [(String, String)],
     pub cols: u16,
     pub rows: u16,
     /// Where the holder writes the pane's history, if it keeps one.
@@ -139,6 +141,9 @@ pub(crate) fn start(
     }
     if let Some(after) = &start.after {
         command.arg("--after").arg(after);
+    }
+    for (name, value) in start.env {
+        command.arg(format!("--env={name}={value}"));
     }
     command
         .arg("--pane")

@@ -59,6 +59,11 @@ enum Command {
         #[command(subcommand)]
         command: crate::projects::WorktreeCommand,
     },
+    /// List, run and trust recipes.
+    Recipe {
+        #[command(subcommand)]
+        command: crate::recipes::RecipeCommand,
+    },
     /// Work with pane history.
     History {
         #[command(subcommand)]
@@ -101,6 +106,9 @@ enum Command {
         /// A history to show above the new output, for a pane that runs again.
         #[arg(long)]
         after: Option<PathBuf>,
+        /// A variable for the command, as NAME=VALUE.
+        #[arg(long = "env")]
+        env: Vec<String>,
         /// The command and its arguments.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         argv: Vec<String>,
@@ -189,6 +197,7 @@ pub fn run() -> Result<()> {
         Command::Ls { json } => crate::projects::ls(json),
         Command::Workspace { command } => crate::projects::workspace(command),
         Command::Worktree { command } => crate::projects::worktree(command),
+        Command::Recipe { command } => crate::recipes::recipe(command),
         Command::History {
             command: HistoryCommand::Purge,
         } => {
@@ -212,6 +221,7 @@ pub fn run() -> Result<()> {
             scrollback_lines,
             history,
             after,
+            env,
             argv,
         } => holder(HolderArgs {
             pane,
@@ -222,6 +232,7 @@ pub fn run() -> Result<()> {
             scrollback_lines,
             history,
             after,
+            env,
             argv,
         }),
     }
@@ -404,6 +415,7 @@ struct HolderArgs {
     scrollback_lines: Option<u32>,
     history: Option<PathBuf>,
     after: Option<PathBuf>,
+    env: Vec<String>,
     argv: Vec<String>,
 }
 
@@ -417,6 +429,7 @@ fn holder(args: HolderArgs) -> Result<()> {
         scrollback_lines,
         history,
         after,
+        env: overrides,
         argv,
     } = args;
     let pane: PaneId = pane.parse().context("pane id")?;
@@ -427,7 +440,15 @@ fn holder(args: HolderArgs) -> Result<()> {
         Some(cwd) => cwd,
         None => std::env::current_dir().context("current directory")?,
     };
-    let env = vec![
+    let mut env: Vec<(String, String)> = overrides
+        .iter()
+        .filter_map(|setting| {
+            let (name, value) = setting.split_once('=')?;
+            Some((name.to_owned(), value.to_owned()))
+        })
+        .collect();
+    // twyx's own variables come last, so a recipe cannot hide the pane.
+    env.extend([
         ("TWYX_PANE_ID".to_owned(), pane.to_string()),
         (
             "TWYX_SOCKET".to_owned(),
@@ -435,7 +456,7 @@ fn holder(args: HolderArgs) -> Result<()> {
         ),
         ("TERM".to_owned(), "xterm-256color".to_owned()),
         ("COLORTERM".to_owned(), "truecolor".to_owned()),
-    ];
+    ]);
 
     let spawn = Spawn {
         argv,

@@ -98,6 +98,7 @@ pub(crate) enum Done {
         project: u64,
         path: PathBuf,
         listed: Result<Vec<WorktreeEntry>, String>,
+        then: Option<Then>,
     },
     Planned {
         client: u64,
@@ -110,6 +111,10 @@ pub(crate) enum Done {
         result: Result<(), String>,
     },
 }
+
+/// A recipe to open in a new worktree once it exists, and whether to
+/// switch to it.
+pub(crate) type Then = (Box<twyx_core::recipe::Recipe>, bool);
 
 #[derive(Debug)]
 pub(crate) struct Findings {
@@ -256,6 +261,7 @@ impl Daemon {
                 project,
                 path,
                 listed,
+                then,
             } => {
                 let added = listed
                     .and_then(|listed| self.sync(project, &listed).map_err(|e| message(&e)))
@@ -277,7 +283,9 @@ impl Daemon {
                 match added {
                     Ok((id, workspace)) => {
                         self.request_status(id);
-                        if let Some(worktree) = self.worktree_info(id) {
+                        if let Some((recipe, switch)) = then {
+                            self.open_recipe(client, workspace, &recipe, switch);
+                        } else if let Some(worktree) = self.worktree_info(id) {
                             self.reply(
                                 client,
                                 FromDaemon::WorktreeAdded {
@@ -604,6 +612,7 @@ impl Daemon {
         project: u64,
         branch: String,
         start: Option<String>,
+        then: Option<Then>,
     ) {
         let Some(entry) = self.projects.get(&project).filter(|project| project.git) else {
             self.refuse(client, format!("project {project} is not a Git repository"));
@@ -637,6 +646,7 @@ impl Daemon {
                 project,
                 path,
                 listed: added.map_err(|error| message(&error)),
+                then,
             }
         });
     }

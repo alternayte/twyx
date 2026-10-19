@@ -267,6 +267,9 @@ impl Terminal {
                         | FromDaemon::WorktreeAdded { .. }
                         | FromDaemon::RemovalPlan(_)
                         | FromDaemon::WorktreeRemoved { .. }
+                        | FromDaemon::Recipes(_)
+                        | FromDaemon::RecipeOpened { .. }
+                        | FromDaemon::RecipeTrusted { .. }
                         | FromDaemon::Unsupported { .. }
                         | FromDaemon::Snapshot { .. }
                         | FromDaemon::Frame { .. } => {}
