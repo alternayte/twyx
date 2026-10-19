@@ -24,3 +24,13 @@ The variant sets the accent and the colours of agent states. `auto` asks the ter
 variant = "light"
 accent = "#c8401c"
 ```
+
+## `[history]`
+
+Each pane keeps its screen and scrollback on disk, so they survive a crash, a power loss and a host restart. A pane that ended shows its history, and "Run again" puts it above the new run. Closing a pane deletes its history, and `twyx history purge` deletes all of it. The files are in `~/.local/state/twyx/history`, readable only by you.
+
+| Key | Values | Default |
+|---|---|---|
+| `enabled` | `true`, `false` | `true` |
+
+`twyx pane new --no-history` turns history off for one pane.

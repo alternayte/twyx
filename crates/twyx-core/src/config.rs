@@ -12,10 +12,22 @@ use toml::Spanned;
 use crate::keys::{Chord, Command, Keymap, Mode};
 use crate::theme::{Rgb, Theme, Variant};
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub keymap: Keymap,
     pub theme: ThemeConfig,
+    /// `[history] enabled`: whether panes keep a history on disk.
+    pub history: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            keymap: Keymap::default(),
+            theme: ThemeConfig::default(),
+            history: true,
+        }
+    }
 }
 
 /// `[theme]`: the reference sheet's colours apply on any paper.
@@ -64,6 +76,13 @@ type Bindings = BTreeMap<Spanned<String>, Spanned<String>>;
 struct Raw {
     keys: Option<RawKeys>,
     theme: Option<RawTheme>,
+    history: Option<RawHistory>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHistory {
+    enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,9 +156,17 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
             );
         }
     }
+    let history = raw
+        .history
+        .and_then(|history| history.enabled)
+        .unwrap_or(true);
     let mut keymap = Keymap::default();
     let Some(keys) = raw.keys else {
-        return Ok(Config { keymap, theme });
+        return Ok(Config {
+            keymap,
+            theme,
+            history,
+        });
     };
     if let Some(prefix) = keys.prefix {
         keymap.prefix = prefix
@@ -179,7 +206,11 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
             keymap.bind(mode, chord, command);
         }
     }
-    Ok(Config { keymap, theme })
+    Ok(Config {
+        keymap,
+        theme,
+        history,
+    })
 }
 
 #[cfg(test)]

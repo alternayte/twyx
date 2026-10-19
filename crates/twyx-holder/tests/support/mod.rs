@@ -60,6 +60,7 @@ impl Pane {
             spawn,
             scrollback_lines: 1000,
             exit_grace: Duration::from_millis(100),
+            history: None,
         };
         let geometry = Geometry {
             cols,

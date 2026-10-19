@@ -257,6 +257,7 @@ impl Terminal {
                         launch: Launch::Shell,
                         cwd: working_directory(),
                         place: Place::NewTab,
+                        history: true,
                     });
                 } else if state.workspace.is_some() && !empty {
                     state.had_panes = true;

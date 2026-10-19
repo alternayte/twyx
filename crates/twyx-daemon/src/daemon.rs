@@ -68,6 +68,8 @@ pub(crate) struct Pane {
     pub launch: Launch,
     pub cwd: String,
     pub title: String,
+    /// Whether the pane keeps a history on disk.
+    pub history: bool,
 }
 
 #[derive(Debug)]
@@ -112,6 +114,8 @@ pub struct Daemon {
     pub(crate) workspace: u64,
     /// Holders of a protocol major this daemon cannot adopt.
     pub(crate) legacy: Vec<LegacyHolder>,
+    /// The last good config.
+    pub(crate) config: twyx_core::config::Config,
     /// Messages for clients, sent once the event that made them is written,
     /// so no client sees a change a crash could still lose.
     pub(crate) outbox: RefCell<Vec<(Sender<FromDaemon>, FromDaemon)>>,
@@ -127,6 +131,7 @@ pub fn run(paths: Paths) -> Result<()> {
     let store = Store::open(&paths.database())?;
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_owned());
     let saved = store.load(&home)?;
+    let config_file = paths.config.join("config.toml");
 
     let mut daemon = Daemon {
         paths,
@@ -143,6 +148,10 @@ pub fn run(paths: Paths) -> Result<()> {
         workspace: saved.workspace,
         outbox: RefCell::new(Vec::new()),
         legacy: Vec::new(),
+        config: twyx_core::config::load(&config_file).unwrap_or_else(|error| {
+            eprintln!("twyx daemon: {error}");
+            twyx_core::config::Config::default()
+        }),
     };
     daemon.restore(saved);
     daemon.adopt();
@@ -185,6 +194,8 @@ impl Daemon {
             ));
         }
         for pane in saved.panes {
+            // Until a holder is adopted, the pane shows its history.
+            let screen = history_screen(&self.paths.pane_history(pane.id), pane.cols, pane.rows);
             self.panes.insert(
                 pane.id,
                 Pane {
@@ -195,10 +206,11 @@ impl Daemon {
                         PaneState::Running => PaneState::Lost,
                         state => state,
                     },
-                    screen: None,
+                    screen,
                     launch: pane.launch,
                     cwd: pane.cwd,
                     title: pane.title,
+                    history: pane.history,
                 },
             );
         }
@@ -259,6 +271,7 @@ impl Daemon {
                 title: String::new(),
                 cols,
                 rows,
+                history: false,
             };
             if let Err(error) = self.store.new_pane(self.workspace, &row, Some(pane)) {
                 eprintln!("twyx daemon: {error:#}");
@@ -274,6 +287,7 @@ impl Daemon {
                     launch: Launch::Unknown,
                     cwd: String::new(),
                     title: String::new(),
+                    history: false,
                 },
             );
         }
@@ -361,6 +375,7 @@ impl Daemon {
                     title: pane.title.clone(),
                     cols: pane.cols,
                     rows: pane.rows,
+                    history: pane.history,
                 })
                 .collect(),
             next_leaf: self.next_leaf,
@@ -377,6 +392,7 @@ impl Daemon {
         cwd: &str,
         cols: u16,
         rows: u16,
+        history: bool,
     ) -> Result<PaneId> {
         let row = SavedPane {
             id: PaneId::from_raw(0),
@@ -386,6 +402,7 @@ impl Daemon {
             title: String::new(),
             cols,
             rows,
+            history,
         };
         self.store.new_pane(self.workspace, &row, None)
     }
@@ -525,7 +542,17 @@ impl Daemon {
                 }
             }
             ToDaemon::Snapshot { pane } => self.snapshot(id, PaneId::from_raw(pane)),
-            ToDaemon::NewPane { launch, cwd, place } => self.new_pane(id, launch, cwd, place),
+            ToDaemon::NewPane {
+                launch,
+                cwd,
+                place,
+                history,
+            } => self.new_pane(id, launch, cwd, place, history),
+            ToDaemon::PurgeHistory => {
+                // Running holders write a new history from their next
+                // checkpoint.
+                let _ = std::fs::remove_dir_all(self.paths.history());
+            }
             ToDaemon::KillPane { pane } => {
                 if let Some(entry) = self.panes.get(&PaneId::from_raw(pane))
                     && let Some(link) = &entry.link
@@ -713,6 +740,9 @@ impl Daemon {
                 && let Some(link) = self.closing.remove(&pane)
             {
                 link.send(ToHolder::AckExit);
+                // A checkpoint between the close and the exit may have
+                // written the history again.
+                let _ = std::fs::remove_dir_all(self.paths.pane_history(pane));
             }
             return;
         }
@@ -956,6 +986,27 @@ impl Daemon {
             self.post(&client.out, message.clone());
         }
     }
+}
+
+/// A pane's last screen from its history, as a snapshot body, for a pane
+/// whose holder is gone.
+fn history_screen(dir: &Path, cols: u16, rows: u16) -> Option<Vec<u8>> {
+    let (checkpoint, log) = twyx_holder::history::read(dir).ok()??;
+    let geometry = twyx_holder::engine::Geometry {
+        cols: cols.max(2),
+        rows: rows.max(1),
+        scrollback_lines: 0,
+    };
+    let mut engine = twyx_holder::engine::Engine::restore(
+        geometry,
+        Box::new(std::io::sink()),
+        &checkpoint,
+        &log,
+    )?;
+    let view = engine.view();
+    let snapshot =
+        twyx_holder::frame::FrameBuilder::new(view.cols, view.rows.len() as u16).snapshot(&view);
+    wire::encode_body(&snapshot).ok()
 }
 
 pub(crate) fn area_cells((cols, rows): (u16, u16)) -> Cells {

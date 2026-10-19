@@ -23,6 +23,7 @@ use twyx_protocol::wire;
 use crate::encode;
 use crate::engine::{Engine, EngineSignal};
 use crate::frame::FrameBuilder;
+use crate::history::History;
 use crate::pty::{Master, Pty, Spawn};
 use crate::queue::{InputQueue, QueueWriter};
 use crate::signals::{PaneSignal, Scanner};
@@ -35,6 +36,8 @@ pub struct Config {
     pub spawn: Spawn,
     pub scrollback_lines: u32,
     pub exit_grace: std::time::Duration,
+    /// Where the pane's history goes; `None` writes none.
+    pub history: Option<PathBuf>,
 }
 
 enum Event {
@@ -62,9 +65,15 @@ pub fn run(
     spawn_waiter(child, events.clone())?;
     spawn_acceptor(listener, events)?;
 
+    let history = match &config.history {
+        Some(dir) => Some(History::start(dir.clone())?),
+        None => None,
+    };
+
     Core {
         config: &config,
         engine,
+        history,
         master: &master,
         input: &input,
         killer,
@@ -77,6 +86,7 @@ pub fn run(
 struct Core<'a> {
     config: &'a Config,
     engine: Engine,
+    history: Option<History>,
     master: &'a Master,
     input: &'a InputQueue,
     killer: Box<dyn ChildKiller + Send + Sync>,
@@ -93,6 +103,10 @@ impl Core<'_> {
         let mut deadline: Option<Instant> = None;
 
         loop {
+            // A pane that ended writes no more history; its log has it all.
+            if exited.is_none() {
+                self.checkpoint();
+            }
             let mut events = Vec::new();
             match inbound.recv_timeout(tuning::FRAME_INTERVAL) {
                 Ok(event) => events.push(event),
@@ -175,7 +189,23 @@ impl Core<'_> {
         Ok(())
     }
 
+    /// Writes a checkpoint when one is due. Encoding happens here, on the
+    /// engine's thread; the disk is the writer's.
+    fn checkpoint(&mut self) {
+        let Some(history) = &mut self.history else {
+            return;
+        };
+        if history.due()
+            && let Some(snapshot) = self.engine.encode_snapshot()
+        {
+            history.checkpoint(snapshot);
+        }
+    }
+
     fn output(&mut self, bytes: &[u8], out: &mut Option<Sender<FromHolder>>) {
+        if let Some(history) = &mut self.history {
+            history.output(bytes);
+        }
         for signal in self.scanner.scan(bytes) {
             let signal = match signal {
                 PaneSignal::Notification { title, body } => Signal::Notification {

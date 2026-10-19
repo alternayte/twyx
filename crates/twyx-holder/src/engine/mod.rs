@@ -50,6 +50,26 @@ pub fn create(
     }
 }
 
+/// An engine that starts with a pane's history above a divider, for a pane
+/// that runs again. A history that cannot be read gives a plain engine.
+pub fn create_after(
+    geometry: Geometry,
+    answerback: Box<dyn std::io::Write + Send>,
+    history: &std::path::Path,
+) -> anyhow::Result<Engine> {
+    let Ok(Some((checkpoint, log))) = crate::history::read(history) else {
+        return create(geometry, answerback);
+    };
+    let Some(mut engine) = Engine::restore(geometry, answerback, &checkpoint, &log) else {
+        return create(geometry, Box::new(std::io::sink()));
+    };
+    engine.advance(DIVIDER);
+    Ok(engine)
+}
+
+/// The line between a pane's old history and its new run.
+const DIVIDER: &[u8] = b"\r\n\x1b[2m-- ran again --\x1b[0m\r\n";
+
 /// Interns the link targets the grid refers to, so a cell carries a number.
 #[derive(Debug, Default)]
 pub(crate) struct Links {

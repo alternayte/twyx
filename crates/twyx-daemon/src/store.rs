@@ -14,7 +14,8 @@ use twyx_core::pane::PaneId;
 use twyx_protocol::client::{Launch, PaneState};
 
 /// Each entry moves the schema one version on. Never edit one; add another.
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
     CREATE TABLE workspaces (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         directory TEXT NOT NULL UNIQUE,
@@ -50,7 +51,11 @@ const MIGRATIONS: &[&str] = &["
         name TEXT PRIMARY KEY,
         value INTEGER NOT NULL
     );
-"];
+",
+    "
+    ALTER TABLE panes ADD COLUMN history INTEGER NOT NULL DEFAULT 1;
+",
+];
 
 #[derive(Debug)]
 pub(crate) struct Store {
@@ -74,6 +79,7 @@ pub(crate) struct SavedPane {
     pub title: String,
     pub cols: u16,
     pub rows: u16,
+    pub history: bool,
 }
 
 /// The default workspace, as the daemon last wrote it.
@@ -190,7 +196,7 @@ impl Store {
             .db
             .prepare(
                 "SELECT id, spawn_dir, command, process_state, exit_code, signal, last_title,
-                        cols, rows
+                        cols, rows, history
                  FROM panes WHERE workspace = ?1 ORDER BY id",
             )
             .context("read the panes")?;
@@ -206,11 +212,12 @@ impl Store {
                     row.get::<_, String>(6)?,
                     row.get::<_, u16>(7)?,
                     row.get::<_, u16>(8)?,
+                    row.get::<_, bool>(9)?,
                 ))
             })
             .context("read the panes")?
             .map(|row| {
-                let (id, cwd, command, state, code, signal, title, cols, rows) =
+                let (id, cwd, command, state, code, signal, title, cols, rows, history) =
                     row.context("read a pane")?;
                 Ok(SavedPane {
                     id: PaneId::from_raw(id),
@@ -229,6 +236,7 @@ impl Store {
                     title,
                     cols,
                     rows,
+                    history,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -276,8 +284,8 @@ impl Store {
         self.db
             .execute(
                 "INSERT INTO panes (id, workspace, spawn_dir, command, process_state,
-                                    holder_major, cols, rows)
-                 VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
+                                    holder_major, cols, rows, history)
+                 VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, ?8)",
                 params![
                     id.map(PaneId::raw),
                     workspace,
@@ -286,6 +294,7 @@ impl Store {
                     twyx_protocol::holder::MAJOR,
                     pane.cols,
                     pane.rows,
+                    pane.history,
                 ],
             )
             .context("reserve a pane")?;

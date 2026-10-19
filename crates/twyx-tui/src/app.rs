@@ -308,6 +308,7 @@ fn run(
                     launch: Launch::Shell,
                     cwd: working_directory(),
                     place: Place::NewTab,
+                    history: true,
                 });
             }
         } else if follow.workspace.is_some() {

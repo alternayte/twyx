@@ -33,6 +33,11 @@ enum Command {
         #[command(subcommand)]
         command: PaneCommand,
     },
+    /// Work with pane history.
+    History {
+        #[command(subcommand)]
+        command: HistoryCommand,
+    },
     /// Print what the outer terminal supports.
     Doctor,
     /// Show the theme specimen: the chrome over sample panes.
@@ -64,6 +69,12 @@ enum Command {
         /// Lines of scrollback to keep.
         #[arg(long)]
         scrollback_lines: Option<u32>,
+        /// Where to write the pane's history.
+        #[arg(long)]
+        history: Option<PathBuf>,
+        /// A history to show above the new output, for a pane that runs again.
+        #[arg(long)]
+        after: Option<PathBuf>,
         /// The command and its arguments.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         argv: Vec<String>,
@@ -91,6 +102,12 @@ enum Paper {
 }
 
 #[derive(Debug, Subcommand)]
+enum HistoryCommand {
+    /// Delete every pane's history. Running panes start a new one.
+    Purge,
+}
+
+#[derive(Debug, Subcommand)]
 enum DaemonCommand {
     /// Run the daemon in the foreground.
     Run,
@@ -114,6 +131,9 @@ enum PaneCommand {
         /// Where the pane goes, next to the tab's focused pane.
         #[arg(long, value_enum, default_value_t = PanePlace::Right)]
         place: PanePlace,
+        /// Keep no history of this pane on disk.
+        #[arg(long)]
+        no_history: bool,
         /// The command and its arguments. The login shell when empty.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         argv: Vec<String>,
@@ -135,6 +155,15 @@ pub fn run() -> Result<()> {
     match command {
         Command::Daemon { command } => daemon(command),
         Command::Pane { command } => pane(command),
+        Command::History {
+            command: HistoryCommand::Purge,
+        } => {
+            let paths = Paths::discover()?;
+            let mut connection = command_client(&paths)?;
+            connection.send(&ToDaemon::PurgeHistory)?;
+            println!("deleted all pane history");
+            Ok(())
+        }
         Command::Doctor => twyx_tui::app::doctor(),
         Command::Specimen { paper } => twyx_tui::specimen::run(paper.map(|paper| match paper {
             Paper::Light => Variant::Light,
@@ -147,8 +176,20 @@ pub fn run() -> Result<()> {
             rows,
             cwd,
             scrollback_lines,
+            history,
+            after,
             argv,
-        } => holder(pane, socket, cols, rows, cwd, scrollback_lines, argv),
+        } => holder(HolderArgs {
+            pane,
+            socket,
+            cols,
+            rows,
+            cwd,
+            scrollback_lines,
+            history,
+            after,
+            argv,
+        }),
     }
 }
 
@@ -235,7 +276,12 @@ fn daemon(command: DaemonCommand) -> Result<()> {
 fn pane(command: PaneCommand) -> Result<()> {
     let paths = Paths::discover()?;
     match command {
-        PaneCommand::New { cwd, place, argv } => {
+        PaneCommand::New {
+            cwd,
+            place,
+            no_history,
+            argv,
+        } => {
             let mut connection = command_client(&paths)?;
             let known: Vec<u64> = connection
                 .hello
@@ -262,6 +308,7 @@ fn pane(command: PaneCommand) -> Result<()> {
                     PanePlace::Float => Place::Floating,
                     PanePlace::Tab => Place::NewTab,
                 },
+                history: !no_history,
             })?;
             loop {
                 match connection.receive()? {
@@ -314,15 +361,30 @@ fn state(state: &PaneState) -> String {
     }
 }
 
-fn holder(
+struct HolderArgs {
     pane: String,
     socket: PathBuf,
     cols: u16,
     rows: u16,
     cwd: Option<PathBuf>,
     scrollback_lines: Option<u32>,
+    history: Option<PathBuf>,
+    after: Option<PathBuf>,
     argv: Vec<String>,
-) -> Result<()> {
+}
+
+fn holder(args: HolderArgs) -> Result<()> {
+    let HolderArgs {
+        pane,
+        socket,
+        cols,
+        rows,
+        cwd,
+        scrollback_lines,
+        history,
+        after,
+        argv,
+    } = args;
     let pane: PaneId = pane.parse().context("pane id")?;
     if argv.is_empty() {
         bail!("a pane needs a command");
@@ -368,9 +430,11 @@ fn holder(
         spawn,
         scrollback_lines,
         exit_grace: twyx_core::tuning::EXIT_GRACE,
+        history,
     };
 
-    twyx_holder::runtime::run(config, |answerback| {
-        twyx_holder::engine::create(geometry, answerback)
+    twyx_holder::runtime::run(config, |answerback| match &after {
+        Some(earlier) => twyx_holder::engine::create_after(geometry, answerback, earlier),
+        None => twyx_holder::engine::create(geometry, answerback),
     })
 }

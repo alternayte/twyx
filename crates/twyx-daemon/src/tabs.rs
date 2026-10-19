@@ -11,7 +11,20 @@ use crate::daemon::{Daemon, Pane, area_cells};
 use crate::holders;
 
 impl Daemon {
-    pub(crate) fn new_pane(&mut self, id: u64, launch: Launch, cwd: String, place: Place) {
+    pub(crate) fn new_pane(
+        &mut self,
+        id: u64,
+        launch: Launch,
+        cwd: String,
+        place: Place,
+        history: bool,
+    ) {
+        // A changed config applies from the next pane; a bad one keeps the
+        // last good.
+        if let Ok(config) = twyx_core::config::load(&self.paths.config.join("config.toml")) {
+            self.config = config;
+        }
+        let history = history && self.config.history;
         let Some(argv) = argv(&launch) else {
             self.refuse(id, "a pane needs a command".to_owned());
             return;
@@ -46,7 +59,7 @@ impl Daemon {
             .client_focus(id)
             .filter(|(focus_tab, _)| *focus_tab == tab)
             .map(|(_, leaf)| leaf);
-        let pane = match self.reserve_pane(&launch, &cwd, 80, 24) {
+        let pane = match self.reserve_pane(&launch, &cwd, 80, 24, history) {
             Ok(pane) => pane,
             Err(error) => {
                 self.refuse(id, format!("{error:#}"));
@@ -82,6 +95,8 @@ impl Daemon {
                 cwd: &cwd,
                 cols,
                 rows,
+                history: history.then(|| self.paths.pane_history(pane)),
+                after: None,
             },
             &self.build,
             &self.events,
@@ -111,6 +126,7 @@ impl Daemon {
                 launch,
                 cwd,
                 title: String::new(),
+                history,
             },
         );
         self.broadcast_frames(FromDaemon::Snapshot {
@@ -152,9 +168,10 @@ impl Daemon {
         self.send_focus_all();
     }
 
-    /// Forgets a pane. A running one is killed, and its holder is kept until
-    /// it reports the exit.
+    /// Forgets a pane and deletes its history (Invariant 22). A running one
+    /// is killed, and its holder is kept until it reports the exit.
     fn end_pane(&mut self, pane: PaneId) {
+        let _ = std::fs::remove_dir_all(self.paths.pane_history(pane));
         if let Some(entry) = self.panes.remove(&pane)
             && let Some(link) = entry.link
         {
@@ -232,16 +249,17 @@ impl Daemon {
         let Some(argv) = argv(&entry.launch) else {
             return;
         };
-        let (launch, cwd, cols, rows) = (
+        let (launch, cwd, cols, rows, history) = (
             entry.launch.clone(),
             entry.cwd.clone(),
             entry.cols,
             entry.rows,
+            entry.history,
         );
         let Some((tab, leaf)) = self.leaf_of(old) else {
             return;
         };
-        let Ok(pane) = self.reserve_pane(&launch, &cwd, cols, rows) else {
+        let Ok(pane) = self.reserve_pane(&launch, &cwd, cols, rows, history) else {
             return;
         };
         let Ok((link, welcome)) = holders::start(
@@ -253,6 +271,9 @@ impl Daemon {
                 cwd: &cwd,
                 cols,
                 rows,
+                history: history.then(|| self.paths.pane_history(pane)),
+                // The old run's history shows above the new one.
+                after: Some(self.paths.pane_history(old)),
             },
             &self.build,
             &self.events,
@@ -274,6 +295,7 @@ impl Daemon {
                 launch,
                 cwd,
                 title: String::new(),
+                history,
             },
         );
         self.broadcast_frames(FromDaemon::Snapshot {

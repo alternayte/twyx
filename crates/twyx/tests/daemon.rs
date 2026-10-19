@@ -311,6 +311,7 @@ fn new_pane(client: &mut Client, cwd: &str, script: &str) {
             ]),
             cwd: cwd.to_owned(),
             place: Place::Split(Axis::Row),
+            history: true,
         })
         .expect("ask for a pane");
 }
@@ -475,6 +476,7 @@ fn new_pane_at(client: &mut Client, cwd: &str, launch: Launch, place: Place) -> 
             launch,
             cwd: cwd.to_owned(),
             place,
+            history: true,
         })
         .expect("ask for a pane");
     let mut created = None;
@@ -925,4 +927,138 @@ fn a_holder_too_old_to_adopt_is_listed_with_its_pid() {
     let legacy = &client.hello.legacy[0];
     assert_eq!((legacy.major, legacy.pid), (0, Some(std::process::id())));
     assert!(socket.exists(), "a legacy holder keeps its socket");
+}
+
+impl Sandbox {
+    fn history(&self, pane: u64) -> PathBuf {
+        self.root.join("state/twyx/history").join(stem(pane))
+    }
+
+    fn wait_for_history(&self, pane: u64) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.history(pane).join("checkpoint-1").exists() {
+            assert!(Instant::now() < deadline, "no history for pane {pane}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[test]
+fn invariant_21_a_pane_whose_holder_died_shows_its_last_screen_from_history() {
+    let mut sandbox = Sandbox::new("inv21");
+    sandbox.start();
+    let mut client = sandbox.connect(60, 10);
+    let cwd = sandbox.cwd();
+    let pane = new_pane_at(
+        &mut client,
+        &cwd,
+        sh("for n in 1 2 3; do echo \"history line $n\"; done; exec cat"),
+        Place::Split(Axis::Row),
+    );
+    client.wait_for_text(pane, "history line 3");
+    sandbox.wait_for_history(pane);
+    // Output after the checkpoint lands in the log.
+    client.type_text("logged-after\r");
+    client.wait_for_text(pane, "logged-after");
+    std::thread::sleep(Duration::from_millis(300));
+    let before = client.text(pane);
+    drop(client);
+
+    sandbox.kill();
+    sandbox.kill_holder(pane);
+    sandbox.start();
+    let mut client = sandbox.connect(60, 10);
+    client.wait_until("the restored screen", |c| c.text(pane) == before);
+    assert_eq!(client.panes[&pane].state, PaneState::Lost);
+}
+
+#[test]
+fn invariant_22_closing_a_pane_deletes_its_history_and_a_pane_without_one_writes_none() {
+    let mut sandbox = Sandbox::new("inv22");
+    sandbox.start();
+    let mut client = sandbox.connect(60, 10);
+    let cwd = sandbox.cwd();
+    let kept = new_pane_at(
+        &mut client,
+        &cwd,
+        sh("echo kept; exec cat"),
+        Place::Split(Axis::Row),
+    );
+    sandbox.wait_for_history(kept);
+    client
+        .send(&ToDaemon::NewPane {
+            launch: sh("echo private; exec cat"),
+            cwd: cwd.clone(),
+            place: Place::Split(Axis::Row),
+            history: false,
+        })
+        .expect("ask for a pane");
+    let mut private = 0;
+    client.wait_until("the private pane", |c| {
+        private = c.panes.keys().copied().find(|p| *p != kept).unwrap_or(0);
+        private != 0
+    });
+    client.wait_for_text(private, "private");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !sandbox.history(private).exists(),
+        "a pane without history wrote some"
+    );
+
+    client
+        .send(&ToDaemon::ClosePane)
+        .expect("close the focused pane");
+    client.wait_until("the private pane closed", |c| {
+        !c.panes.contains_key(&private)
+    });
+    client
+        .send(&ToDaemon::FocusLeaf {
+            leaf: client.workspace.as_ref().unwrap().tabs[0].layout.leaves()[0].id,
+        })
+        .expect("focus the kept pane");
+    client.send(&ToDaemon::ClosePane).expect("close it");
+    client.wait_until("the kept pane closed", |c| !c.panes.contains_key(&kept));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while sandbox.history(kept).exists() {
+        assert!(Instant::now() < deadline, "the history outlived its pane");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn run_again_shows_the_old_run_above_a_divider() {
+    let mut sandbox = Sandbox::new("again");
+    sandbox.start();
+    let mut client = sandbox.connect(60, 12);
+    let cwd = sandbox.cwd();
+    let pane = new_pane_at(
+        &mut client,
+        &cwd,
+        sh("echo \"run $(cat count 2>/dev/null || echo 1)\"; echo 2 > count; exec cat"),
+        Place::Split(Axis::Row),
+    );
+    client.wait_for_text(pane, "run 1");
+    sandbox.wait_for_history(pane);
+    drop(client);
+    sandbox.kill();
+    sandbox.kill_holder(pane);
+    sandbox.start();
+
+    let mut client = sandbox.connect(60, 12);
+    client.wait_until("the lost pane", |c| c.panes.contains_key(&pane));
+    client
+        .send(&ToDaemon::RunAgain { pane })
+        .expect("run again");
+    client.wait_until("the new run", |c| {
+        !c.panes.contains_key(&pane) && c.panes.len() == 1
+    });
+    let again = *client.panes.keys().next().expect("the new pane");
+    client.wait_for_text(again, "run 2");
+    let text = client.text(again);
+    let old = text.find("run 1").expect("the old run is there");
+    let divider = text.find("ran again").expect("a divider");
+    assert!(
+        old < divider && divider < text.find("run 2").expect("the new run"),
+        "{text}"
+    );
 }

@@ -131,6 +131,9 @@ pub enum ToDaemon {
         launch: Launch,
         cwd: String,
         place: Place,
+        /// Whether the pane keeps a history on disk; config can still turn
+        /// history off for every pane.
+        history: bool,
     },
     /// Ends a pane's process. Its leaf stays and shows the exit.
     KillPane {
@@ -195,6 +198,8 @@ pub enum ToDaemon {
     Copy(CopyAction),
     /// Ends every legacy holder and forgets its socket.
     KillLegacy,
+    /// Deletes every pane's history. Running panes start a new one.
+    PurgeHistory,
     /// Ask the daemon to exit. Panes keep running.
     Shutdown,
 }
@@ -253,6 +258,7 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
         launch: Launch::Shell,
         cwd: cwd(),
         place,
+        history: true,
     };
     Some(match command {
         Command::SplitRight => new_pane(Place::Split(Axis::Row)),

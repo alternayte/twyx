@@ -74,6 +74,15 @@ impl Paths {
         self.runtime.join("panes")
     }
 
+    /// Where pane histories live, one directory each.
+    pub fn history(&self) -> PathBuf {
+        self.state.join("history")
+    }
+
+    pub fn pane_history(&self, pane: PaneId) -> PathBuf {
+        self.history().join(pane.stem())
+    }
+
     pub fn database(&self) -> PathBuf {
         self.state.join("twyx.db")
     }

@@ -66,7 +66,10 @@ impl History {
             records,
             gap: false,
             changed: true,
-            last_checkpoint: Instant::now(),
+            // The first checkpoint is due at once.
+            last_checkpoint: Instant::now()
+                .checked_sub(tuning::HISTORY_CHECKPOINT_INTERVAL)
+                .unwrap_or_else(Instant::now),
             logged: 0,
         })
     }

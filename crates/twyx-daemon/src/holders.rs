@@ -117,6 +117,10 @@ pub(crate) struct Start<'a> {
     pub cwd: &'a str,
     pub cols: u16,
     pub rows: u16,
+    /// Where the holder writes the pane's history, if it keeps one.
+    pub history: Option<PathBuf>,
+    /// A history to show above the new output.
+    pub after: Option<PathBuf>,
 }
 
 /// Starts a holder and connects to it once it listens.
@@ -129,8 +133,15 @@ pub(crate) fn start(
         bail!("a pane needs a command");
     }
     let scrollback_lines = twyx_holder::session::lines(tuning::PANE_SCROLLBACK_BYTES, start.cols);
-    Command::new(start.binary)
-        .arg("holder")
+    let mut command = Command::new(start.binary);
+    command.arg("holder");
+    if let Some(history) = &start.history {
+        command.arg("--history").arg(history);
+    }
+    if let Some(after) = &start.after {
+        command.arg("--after").arg(after);
+    }
+    command
         .arg("--pane")
         .arg(start.pane.to_string())
         .arg("--socket")

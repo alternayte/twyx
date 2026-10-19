@@ -46,6 +46,7 @@ impl Fixture {
             spawn,
             scrollback_lines: 100,
             exit_grace,
+            history: None,
         };
         let geometry = Geometry {
             cols: 40,
