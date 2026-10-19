@@ -56,7 +56,13 @@ impl Nvim {
         std::fs::write(&init, init_lua).expect("write init.lua");
         let server = dir.join("nvim.sock");
 
+        // Each Neovim gets its own state directory: Neovims that start together
+        // race to create a shared one, and the loser stops at a "Press ENTER"
+        // prompt about its log file.
         let argv = vec![
+            "env".to_owned(),
+            format!("XDG_STATE_HOME={}", dir.join("state").display()),
+            format!("NVIM_LOG_FILE={}", dir.join("nvim.log").display()),
             "nvim".to_owned(),
             "--clean".to_owned(),
             "-n".to_owned(),
@@ -69,11 +75,18 @@ impl Nvim {
         let nvim = Self { dir, server, pane };
         // Eight Neovims start at once, and a small CI runner is slow to
         // bring them all up.
-        nvim.wait_for_within(
-            "Neovim answers on its socket",
-            Duration::from_secs(30),
-            || nvim.try_eval("v:vim_did_enter").as_deref() == Some("1"),
-        );
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while nvim.try_eval("v:vim_did_enter").as_deref() != Some("1") {
+            assert!(
+                Instant::now() < deadline,
+                "Neovim never answered on its socket; exited: {}, socket file: {}\n{}\nscreen:\n{}",
+                nvim.exited(),
+                nvim.server.exists(),
+                processes(),
+                nvim.text().join("\n")
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
         nvim
     }
 
@@ -82,6 +95,8 @@ impl Nvim {
             return None;
         }
         let mut child = Command::new("nvim")
+            .env("XDG_STATE_HOME", self.dir.join("state"))
+            .env("NVIM_LOG_FILE", self.dir.join("nvim.log"))
             .arg("--server")
             .arg(&self.server)
             .arg("--remote-expr")
@@ -114,7 +129,12 @@ impl Nvim {
             if let Some(value) = self.try_eval(expr) {
                 return value;
             }
-            assert!(Instant::now() < deadline, "Neovim did not evaluate {expr}");
+            assert!(
+                Instant::now() < deadline,
+                "Neovim did not evaluate {expr}\n{}\nscreen:\n{}",
+                processes(),
+                self.text().join("\n")
+            );
         }
     }
 
@@ -140,11 +160,32 @@ impl Nvim {
             }
             assert!(
                 Instant::now() < deadline,
-                "{expr} is {last:?}, expected {expected:?}"
+                "{expr} is {last:?}, expected {expected:?}\n{}",
+                processes()
             );
             thread::sleep(Duration::from_millis(20));
         }
     }
+}
+
+/// Every Neovim process with its state and, on Linux, what it waits in.
+fn processes() -> String {
+    let format = if cfg!(target_os = "linux") {
+        "pid,ppid,stat,wchan:24,args"
+    } else {
+        "pid,ppid,stat,wchan,args"
+    };
+    Command::new("ps")
+        .args(["-eo", format])
+        .output()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|line| line.contains("nvim") || line.contains("PID"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
 }
 
 impl Drop for Nvim {
