@@ -13,5 +13,6 @@ mod recipes;
 mod setup;
 mod store;
 mod tabs;
+mod tasks;
 mod workspaces;
 mod worktrees;

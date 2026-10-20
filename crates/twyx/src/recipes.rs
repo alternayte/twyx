@@ -40,7 +40,7 @@ pub enum RecipeCommand {
 }
 
 /// The workspace of the current directory, which this opens.
-fn here(connection: &mut Connection) -> Result<u64> {
+pub(crate) fn here(connection: &mut Connection) -> Result<u64> {
     let here = std::env::current_dir().context("current directory")?;
     Ok(open_path(connection, &here, false)?.0)
 }

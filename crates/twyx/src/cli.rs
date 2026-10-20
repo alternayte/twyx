@@ -90,6 +90,11 @@ enum Command {
     /// List the inbox: the agent sessions and panes that need you, newest
     /// first.
     Inbox,
+    /// Start tasks: a worktree per agent, with the prompt.
+    Task {
+        #[command(subcommand)]
+        command: crate::tasks::TaskCommand,
+    },
     /// Install, show and remove agent integrations.
     Integration {
         #[command(subcommand)]
@@ -258,6 +263,7 @@ pub fn run() -> Result<()> {
         }
         Command::Integration { command } => crate::integrations::integration(command),
         Command::Inbox => inbox(),
+        Command::Task { command } => crate::tasks::task(command),
         Command::Doctor => twyx_tui::app::doctor(),
         Command::Specimen { paper } => twyx_tui::specimen::run(paper.map(|paper| match paper {
             Paper::Light => Variant::Light,

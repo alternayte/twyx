@@ -22,6 +22,8 @@ pub struct Config {
     /// `[worktrees] location`: where a new worktree goes, with `{parent}`,
     /// `{repo}` and `{branch}`.
     pub worktree_location: Option<String>,
+    /// `[worktrees] branch-prefix`: what a new task's branch starts with.
+    pub branch_prefix: Option<String>,
     /// `[agents] default`: the agent kind an agent pane starts.
     pub default_agent: Option<String>,
     /// `[notifications]`: what each kind of inbox item does.
@@ -78,6 +80,7 @@ impl Default for Config {
             theme: ThemeConfig::default(),
             history: true,
             worktree_location: None,
+            branch_prefix: None,
             default_agent: None,
             notifications: Notifications::default(),
         }
@@ -152,9 +155,10 @@ struct RawAgents {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct RawWorktrees {
     location: Option<Spanned<String>>,
+    branch_prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,6 +243,10 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         .history
         .and_then(|history| history.enabled)
         .unwrap_or(true);
+    let branch_prefix = raw
+        .worktrees
+        .as_ref()
+        .and_then(|worktrees| worktrees.branch_prefix.clone());
     let worktree_location = match raw.worktrees.and_then(|worktrees| worktrees.location) {
         Some(location) => {
             let text = location.get_ref();
@@ -306,6 +314,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
             theme,
             history,
             worktree_location,
+            branch_prefix,
             default_agent,
             notifications,
         });
@@ -354,6 +363,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         theme,
         history,
         worktree_location,
+        branch_prefix,
         default_agent,
         notifications,
     })

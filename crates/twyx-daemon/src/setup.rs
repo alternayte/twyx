@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
 
+use twyx_core::pane::PaneId;
 use twyx_core::setup::{self, Setup};
 use twyx_protocol::client::{FromDaemon, Launch, PaneState, SetupInfo, SetupReport};
 
@@ -267,8 +268,22 @@ impl Daemon {
         }
         match after {
             After::Added { client, then } => match (then, workspace) {
-                (Some((recipe, switch)), Some(workspace)) => {
+                (Some(Then::Recipe(recipe, switch)), Some(workspace)) => {
                     self.open_recipe(client, workspace, &recipe, switch);
+                }
+                (Some(Then::Task(task)), Some(workspace)) => {
+                    let setup = report.pane.map(PaneId::from_raw);
+                    if let Some(info) = self.worktree_info(worktree) {
+                        self.reply(
+                            client,
+                            FromDaemon::WorktreeAdded {
+                                worktree: info,
+                                workspace,
+                                setup: report,
+                            },
+                        );
+                    }
+                    self.task_ready(client, workspace, task, setup);
                 }
                 (_, workspace) => {
                     if let (Some(info), Some(workspace)) = (self.worktree_info(worktree), workspace)

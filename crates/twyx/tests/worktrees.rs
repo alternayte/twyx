@@ -568,3 +568,113 @@ fn a_new_worktree_gets_its_ignored_files_and_runs_setup_only_once_trusted() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[test]
+fn a_task_starts_each_agent_with_the_prompt_once_its_trusted_setup_ends() {
+    let mut sandbox = Sandbox::new("task");
+    let bin = sandbox.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let agent = bin.join("taskagent");
+    // It records the prompt it started with and when setup had run.
+    std::fs::write(
+        &agent,
+        "#!/bin/sh\n[ -e setup-ran ] && touch after-setup\nprintf '%s' \"$2\" > prompt-seen\nexec cat\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&agent, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let agents = sandbox.root.join("config/twyx/agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let agent = agent.to_string_lossy();
+    std::fs::write(
+        agents.join("taskagent.toml"),
+        format!(
+            "title = \"Task agent\"\nprocesses = [\"taskagent\"]\ncommand = [\"{agent}\"]\n\
+             launch_with_prompt = [\"{agent}\", \"--prompt\", \"{{prompt}}\"]\n"
+        ),
+    )
+    .unwrap();
+    sandbox.start();
+    let main = repo(&sandbox, "app");
+    std::fs::create_dir_all(main.join(".twyx")).unwrap();
+    std::fs::write(
+        main.join(".twyx/worktree.toml"),
+        "setup = [\"sleep 1\", \"touch setup-ran\"]\n",
+    )
+    .unwrap();
+    git(&main, &["add", "."]);
+    git(&main, &["commit", "--quiet", "-m", "setup"]);
+
+    let mut command = Client::command(&sandbox.socket());
+    let workspace = open(&mut command, &main);
+    let main_worktree = overview(&mut command).projects[0].worktrees[0].worktree;
+    command
+        .send(&ToDaemon::Setup {
+            worktree: main_worktree,
+        })
+        .unwrap();
+    let info = command
+        .expect("the setup file", |message| match message {
+            FromDaemon::SetupFile(info) => Some(info.clone()),
+            _ => None,
+        })
+        .unwrap();
+    command
+        .send(&ToDaemon::TrustSetup {
+            worktree: main_worktree,
+            hash: info.hash,
+        })
+        .unwrap();
+    command.expect("the trust", |message| match message {
+        FromDaemon::SetupTrusted { .. } => Some(()),
+        _ => None,
+    });
+
+    command
+        .send(&ToDaemon::NewTask {
+            workspace,
+            name: "Fix the Login".to_owned(),
+            start: None,
+            agents: vec![Some("taskagent".to_owned()), None],
+            prompt: Some("hi there".to_owned()),
+        })
+        .unwrap();
+    let mut started = Vec::new();
+    while started.len() < 2 {
+        let (branch, note) = command.expect("a started task", |message| match message {
+            FromDaemon::TaskStarted { branch, note, .. } => Some((branch.clone(), note.clone())),
+            _ => None,
+        });
+        started.push((branch, note));
+    }
+    started.sort();
+    assert_eq!(started[0], ("fix-the-login".to_owned(), None));
+    assert_eq!(started[1].0, "fix-the-login-2");
+    assert!(
+        started[1]
+            .1
+            .as_deref()
+            .is_some_and(|note| note.contains("clipboard")),
+        "a shell takes no prompt: {:?}",
+        started[1].1
+    );
+
+    let path = main.parent().unwrap().join("app.worktrees/fix-the-login");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.join("prompt-seen").exists() {
+        assert!(Instant::now() < deadline, "the agent did not start");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        std::fs::read_to_string(path.join("prompt-seen")).unwrap(),
+        "hi there"
+    );
+    assert!(
+        path.join("after-setup").exists(),
+        "the agent started before setup ended"
+    );
+    assert_eq!(
+        git(&path, &["branch", "--show-current"]).trim(),
+        "fix-the-login"
+    );
+}

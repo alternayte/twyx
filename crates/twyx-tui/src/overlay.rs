@@ -43,6 +43,10 @@ pub enum Purpose {
         all: Vec<u64>,
     },
     Integrations,
+    /// Start a task in this workspace's repository.
+    NewTask {
+        workspace: u64,
+    },
 }
 
 /// What one key in an overlay comes to.
@@ -69,6 +73,11 @@ pub enum Outcome {
     Inbox {
         item: u64,
         dismiss: bool,
+    },
+    /// A form's values, in field order.
+    Submitted {
+        purpose: Purpose,
+        values: Vec<String>,
     },
 }
 
@@ -98,6 +107,14 @@ pub enum Overlay {
     /// The inbox, newest first.
     Inbox {
         selected: usize,
+    },
+    /// Fields to fill: label and value. Tab and the arrows move, enter
+    /// submits, esc declines.
+    Form {
+        title: String,
+        fields: Vec<(String, String)>,
+        at: usize,
+        purpose: Purpose,
     },
     /// Lines to read and the keys that answer them; esc declines.
     Confirm {
@@ -237,6 +254,46 @@ impl Overlay {
                     _ => Outcome::Stay,
                 }
             }
+            Overlay::Form {
+                fields,
+                at,
+                purpose,
+                ..
+            } => match (chord.key, typed) {
+                (Key::Escape, _) => Outcome::Close,
+                (Key::Enter, _) => Outcome::Submitted {
+                    purpose: purpose.clone(),
+                    values: fields
+                        .iter()
+                        .map(|(_, value)| value.trim().to_owned())
+                        .collect(),
+                },
+                (Key::Tab, _) if chord.shift => {
+                    *at = (*at + fields.len() - 1) % fields.len().max(1);
+                    Outcome::Stay
+                }
+                (Key::Tab | Key::Down, _) => {
+                    *at = (*at + 1) % fields.len().max(1);
+                    Outcome::Stay
+                }
+                (Key::Up, _) => {
+                    *at = (*at + fields.len() - 1) % fields.len().max(1);
+                    Outcome::Stay
+                }
+                (Key::Backspace, _) => {
+                    if let Some((_, value)) = fields.get_mut(*at) {
+                        value.pop();
+                    }
+                    Outcome::Stay
+                }
+                (_, Some(ch)) => {
+                    if let Some((_, value)) = fields.get_mut(*at) {
+                        value.push(ch);
+                    }
+                    Outcome::Stay
+                }
+                _ => Outcome::Stay,
+            },
             Overlay::Rename { tab, name } => match (chord.key, typed) {
                 (Key::Escape, _) => Outcome::Close,
                 (Key::Enter, _) => Outcome::Rename {
@@ -267,6 +324,11 @@ impl Overlay {
             Overlay::Rename { name, .. } => name.push_str(&text),
             Overlay::Prompt { text: line, .. } => line.push_str(&text),
             Overlay::Search(needle) => needle.push_str(&text),
+            Overlay::Form { fields, at, .. } => {
+                if let Some((_, value)) = fields.get_mut(*at) {
+                    value.push_str(&text);
+                }
+            }
             Overlay::Confirm { .. } | Overlay::Inbox { .. } => {}
         }
     }
@@ -297,6 +359,38 @@ impl Overlay {
                     query,
                     entries: &entries[skip.min(entries.len())..],
                     selected: selected - skip.min(*selected),
+                }
+                .render(area, buf);
+            }
+            Overlay::Form {
+                title, fields, at, ..
+            } => {
+                let width = fields
+                    .iter()
+                    .map(|(label, _)| label.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                let mut lines = vec![
+                    "Each worktree starts from the ref with its agent and the prompt. Agents: kinds or shell, comma separated.".to_owned(),
+                ];
+                lines.extend(fields.iter().enumerate().map(|(number, (label, value))| {
+                    let (marker, cursor) = if number == *at {
+                        ("›", "▏")
+                    } else {
+                        (" ", "")
+                    };
+                    format!("{marker} {label:width$}  {value}{cursor}")
+                }));
+                let keys = vec![
+                    ("tab".to_owned(), "next".to_owned()),
+                    ("enter".to_owned(), "start".to_owned()),
+                    ("esc".to_owned(), "cancel".to_owned()),
+                ];
+                Dialog {
+                    pen: scene.pen,
+                    title,
+                    lines: &lines,
+                    keys: &keys,
                 }
                 .render(area, buf);
             }

@@ -5,6 +5,7 @@ mod cli;
 mod integrations;
 mod projects;
 mod recipes;
+mod tasks;
 
 fn main() {
     if let Err(error) = cli::run() {

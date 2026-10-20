@@ -42,6 +42,7 @@ Each pane keeps its screen and scrollback on disk, so they survive a crash, a po
 | Key | Values | Default |
 |---|---|---|
 | `location` | a path with `{parent}`, `{repo}` and `{branch}` | `{parent}/{repo}.worktrees/{branch}` |
+| `branch-prefix` | text that each new task's branch starts with, such as `me/` | none |
 
 The path starts with `/`, `~/` or `{parent}`, and must contain `{branch}`. `{parent}` is the directory that holds the main worktree. `{repo}` is the main worktree's directory name.
 

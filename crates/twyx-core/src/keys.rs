@@ -240,6 +240,8 @@ pub enum Command {
     Integrations,
     /// Show the inbox.
     Inbox,
+    /// Start a task: new worktrees with an agent and a prompt.
+    NewTask,
     Focus(Side),
     Resize(Side),
     Swap(Side),
@@ -300,6 +302,7 @@ impl Command {
             Command::Resume => "resume".to_owned(),
             Command::Integrations => "install-integrations".to_owned(),
             Command::Inbox => "inbox".to_owned(),
+            Command::NewTask => "new-task".to_owned(),
             Command::Focus(s) => format!("focus-{}", side(s)),
             Command::Resize(s) => format!("resize-{}", side(s)),
             Command::Swap(s) => format!("swap-{}", side(s)),
@@ -353,6 +356,7 @@ impl Command {
             Command::Resume => "resume".to_owned(),
             Command::Integrations => "integrations".to_owned(),
             Command::Inbox => "inbox".to_owned(),
+            Command::NewTask => "task".to_owned(),
             Command::Focus(_) => "focus".to_owned(),
             Command::Resize(_) => "resize".to_owned(),
             Command::Swap(_) => "move".to_owned(),
@@ -401,6 +405,7 @@ impl Command {
             Command::Resume,
             Command::Integrations,
             Command::Inbox,
+            Command::NewTask,
             Command::ToggleZoom,
             Command::ToggleFloating,
             Command::NextTab,
@@ -582,6 +587,7 @@ impl Default for Keymap {
         let workspace = vec![
             (Chord::plain(Key::Enter), C::SidebarOpen),
             key('n', C::NewWorktree),
+            key('t', C::NewTask),
             key('x', C::RemoveWorktree),
             key('u', C::SetupWorktree),
             key('s', C::Switcher),

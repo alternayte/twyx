@@ -165,6 +165,8 @@ pub struct Daemon {
     /// When each pane last notified, and when any did, for the rate limits.
     pub(crate) notified: BTreeMap<PaneId, std::time::Instant>,
     pub(crate) last_notice: Option<std::time::Instant>,
+    /// Tasks whose agent waits for a setup pane, by that pane.
+    pub(crate) tasks: BTreeMap<PaneId, crate::tasks::Waiting>,
 }
 
 /// Starts the daemon and serves it until the socket closes.
@@ -207,6 +209,7 @@ pub fn run(paths: Paths) -> Result<()> {
         inbox_changed: false,
         notified: BTreeMap::new(),
         last_notice: None,
+        tasks: BTreeMap::new(),
         legacy: Vec::new(),
         config: twyx_core::config::load(&config_file).unwrap_or_else(|error| {
             eprintln!("twyx daemon: {error}");
@@ -703,6 +706,23 @@ impl Daemon {
             ToDaemon::Inbox => self.reply(id, FromDaemon::Inbox(self.inbox_items())),
             ToDaemon::MarkUnread { item } => self.set_read(item, false),
             ToDaemon::Dismiss { item } => self.dismiss(item),
+            ToDaemon::NewTask {
+                workspace,
+                name,
+                start,
+                agents,
+                prompt,
+            } => {
+                let project = self
+                    .workspaces
+                    .get(&workspace)
+                    .and_then(|entry| entry.project)
+                    .filter(|project| self.projects.get(project).is_some_and(|p| p.git));
+                match project {
+                    Some(project) => self.new_task(id, project, &name, start, agents, prompt),
+                    None => self.refuse(id, "this workspace is not in a Git repository".to_owned()),
+                }
+            }
             ToDaemon::Resize { cols, rows } => {
                 if let Some(client) = self.clients.get_mut(&id) {
                     client.cols = cols;
@@ -1067,11 +1087,13 @@ impl Daemon {
         }
         let shell = entry.launch == Launch::Shell;
         let failed = !matches!(entry.state, PaneState::Exited { code: 0 });
+        let ended = entry.state.clone();
         // Process exit always ends the agent session.
         self.pane_ended(pane);
         if failed && !shell {
             self.raise(pane, twyx_core::inbox::Reason::Failed);
         }
+        self.setup_ended(pane, Some(&ended));
         if shell && let Some((tab, leaf)) = self.leaf_of(pane) {
             self.close_leaf(tab, leaf.id);
             return;

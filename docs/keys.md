@@ -190,6 +190,7 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 |---|---|
 | `enter` | `sidebar-open` |
 | `n` | `new-worktree` |
+| `t` | `new-task` |
 | `x` | `remove-worktree` |
 | `u` | `setup-worktree` |
 | `s` | `switcher` |

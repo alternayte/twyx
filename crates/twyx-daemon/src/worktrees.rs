@@ -147,9 +147,14 @@ pub(crate) enum Done {
     },
 }
 
-/// A recipe to open in a new worktree once it exists, and whether to
-/// switch to it.
-pub(crate) type Then = (Box<twyx_core::recipe::Recipe>, bool);
+/// What follows a new worktree's setup.
+#[derive(Debug)]
+pub(crate) enum Then {
+    /// Open a recipe, and switch to it or not.
+    Recipe(Box<twyx_core::recipe::Recipe>, bool),
+    /// Start a task's agent.
+    Task(crate::tasks::Task),
+}
 
 #[derive(Debug)]
 pub(crate) struct Findings {

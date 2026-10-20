@@ -233,7 +233,7 @@ impl Workspaces {
                     panes: if key == 'a' { all } else { vec![this] },
                 });
             }
-            Purpose::NewWorktree { .. } | Purpose::Integrations => {}
+            Purpose::NewWorktree { .. } | Purpose::Integrations | Purpose::NewTask { .. } => {}
         }
         effect
     }
@@ -244,6 +244,12 @@ impl Workspaces {
         match message {
             FromDaemon::Overview(overview) => self.overview = Some(overview.clone()),
             FromDaemon::Inbox(items) => self.inbox = items.clone(),
+            FromDaemon::TaskStarted { branch, note, .. } => {
+                self.message = Some(match note {
+                    Some(note) => format!("started {branch}; {note}"),
+                    None => format!("started {branch}"),
+                });
+            }
             FromDaemon::WorktreeAdded {
                 worktree,
                 workspace,

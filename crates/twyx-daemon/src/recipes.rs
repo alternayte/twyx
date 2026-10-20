@@ -17,6 +17,7 @@ use twyx_protocol::client::{
 };
 
 use crate::daemon::{Daemon, Pane, area_cells};
+use crate::worktrees::Then;
 
 /// Where repository recipes live, inside a workspace's directory.
 const REPOSITORY_DIR: &str = ".twyx/recipes";
@@ -213,7 +214,7 @@ impl Daemon {
 
     /// The recipe a name runs in a workspace, refused when it is a
     /// repository recipe whose content is not trusted (Invariant 13).
-    fn runnable(&self, workspace: u64, name: &str) -> Result<Recipe, String> {
+    pub(crate) fn runnable(&self, workspace: u64, name: &str) -> Result<Recipe, String> {
         let found = self
             .found_recipes(workspace)
             .into_iter()
@@ -318,7 +319,7 @@ impl Daemon {
                 project,
                 branch,
                 start,
-                Some((Box::new(recipe), switch)),
+                Some(Then::Recipe(Box::new(recipe), switch)),
             );
             return;
         }
@@ -333,7 +334,7 @@ impl Daemon {
         recipe: &Recipe,
         switch: bool,
     ) {
-        match self.recipe_tabs(workspace, recipe) {
+        match self.recipe_tabs(workspace, recipe, None) {
             Ok(tabs) => {
                 if let Some(entry) = self.workspaces.get_mut(&workspace) {
                     entry.active_tab = tabs.first().copied().or(entry.active_tab);
@@ -359,7 +360,15 @@ impl Daemon {
 
     /// Makes a recipe's tabs and starts their panes. A directory that does
     /// not exist stops the recipe before anything starts.
-    fn recipe_tabs(&mut self, workspace: u64, recipe: &Recipe) -> Result<Vec<u64>, String> {
+    /// A task's `agent` launches replace the default agent: the first agent
+    /// pane gets the one with the prompt.
+    pub(crate) fn recipe_tabs(
+        &mut self,
+        workspace: u64,
+        recipe: &Recipe,
+        agent: Option<&(Launch, Launch)>,
+    ) -> Result<Vec<u64>, String> {
+        let mut prompted = false;
         let Some(directory) = self
             .workspaces
             .get(&workspace)
@@ -407,7 +416,16 @@ impl Daemon {
                     rows: 24,
                     state: PaneState::Running,
                     screen: None,
-                    launch: self.recipe_launch(pane),
+                    launch: match agent {
+                        Some((first, rest)) if pane.agent && pane.command.is_none() => {
+                            if std::mem::replace(&mut prompted, true) {
+                                rest.clone()
+                            } else {
+                                first.clone()
+                            }
+                        }
+                        _ => self.recipe_launch(pane),
+                    },
                     spawn_worktree: self.worktree_at(&cwd),
                     cwd,
                     title: String::new(),

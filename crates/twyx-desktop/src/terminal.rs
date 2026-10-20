@@ -273,6 +273,7 @@ impl Terminal {
                         | FromDaemon::Overview(_)
                         | FromDaemon::Inbox(_)
                         | FromDaemon::Notify { .. }
+                        | FromDaemon::TaskStarted { .. }
                         | FromDaemon::WorktreeAdded { .. }
                         | FromDaemon::RemovalPlan(_)
                         | FromDaemon::WorktreeRemoved { .. }

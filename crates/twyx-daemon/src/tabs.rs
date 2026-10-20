@@ -254,6 +254,8 @@ impl Daemon {
     /// Forgets a pane and deletes its history (Invariant 22). A running one
     /// is killed, and its holder is kept until it reports the exit.
     pub(crate) fn end_pane(&mut self, pane: PaneId) {
+        // Closing a setup pane skips the rest of the setup.
+        self.setup_ended(pane, None);
         let _ = std::fs::remove_dir_all(self.paths.pane_history(pane));
         if let Some(entry) = self.panes.remove(&pane)
             && let Some(link) = entry.link
@@ -381,6 +383,7 @@ impl Daemon {
         if let Some(entry) = self.tab_mut(tab) {
             entry.layout.replace_pane(leaf.id, pane);
         }
+        self.setup_moved(old, pane);
         self.end_pane(old);
         self.set_focus(id, tab, leaf.id);
         self.apply_size(tab);

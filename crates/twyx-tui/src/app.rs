@@ -199,6 +199,7 @@ fn run(
     config_file: &std::path::Path,
 ) -> Result<()> {
     let mut keymap = config.keymap;
+    let default_agent = config.default_agent;
     let mut watch = Watch::new(config_file);
     // The last reload's error, until a good one replaces it.
     let mut notice: Option<String> = None;
@@ -350,6 +351,7 @@ fn run(
                 answer @ (FromDaemon::Refused { .. }
                 | FromDaemon::Overview(_)
                 | FromDaemon::Inbox(_)
+                | FromDaemon::TaskStarted { .. }
                 | FromDaemon::WorktreeAdded { .. }
                 | FromDaemon::RemovalPlan(_)
                 | FromDaemon::WorktreeRemoved { .. }
@@ -498,6 +500,34 @@ fn run(
                             apply!(workspaces.prompted(purpose, text));
                             None
                         }
+                        OverlayOutcome::Submitted {
+                            purpose: Purpose::NewTask { workspace },
+                            values,
+                        } => {
+                            overlay = None;
+                            let field = |at: usize| values.get(at).cloned().unwrap_or_default();
+                            let named: Vec<String> =
+                                field(2).split(',').map(str::to_owned).collect();
+                            let count = field(3).parse().unwrap_or(1);
+                            let agents = twyx_core::task::per_worktree(&named, count, None);
+                            workspaces.message = Some(format!(
+                                "starting {} task worktree{}",
+                                agents.len(),
+                                if agents.len() == 1 { "" } else { "s" }
+                            ));
+                            let _ = daemon.outgoing.send(ToDaemon::NewTask {
+                                workspace,
+                                name: field(0),
+                                start: Some(field(1)).filter(|start| !start.is_empty()),
+                                agents,
+                                prompt: Some(field(4)).filter(|prompt| !prompt.is_empty()),
+                            });
+                            None
+                        }
+                        OverlayOutcome::Submitted { .. } => {
+                            overlay = None;
+                            None
+                        }
                         OverlayOutcome::Inbox { item, dismiss } => {
                             let _ = daemon.outgoing.send(if dismiss {
                                 ToDaemon::Dismiss { item }
@@ -593,6 +623,30 @@ fn run(
                         ) {
                             Ok(offer) => overlay = Some(offer),
                             Err(why) => workspaces.message = Some(why),
+                        }
+                    }
+                    Some(Command::NewTask) => {
+                        keymap.reset();
+                        match &follow.workspace {
+                            Some(shown) if shown.worktree.is_some() => {
+                                let agent =
+                                    default_agent.clone().unwrap_or_else(|| "shell".to_owned());
+                                overlay = Some(Overlay::Form {
+                                    title: "new task".to_owned(),
+                                    fields: vec![
+                                        ("name".to_owned(), String::new()),
+                                        ("from".to_owned(), String::new()),
+                                        ("agents".to_owned(), agent),
+                                        ("count".to_owned(), "1".to_owned()),
+                                        ("prompt".to_owned(), String::new()),
+                                    ],
+                                    at: 4,
+                                    purpose: Purpose::NewTask {
+                                        workspace: shown.workspace,
+                                    },
+                                });
+                            }
+                            _ => workspaces.message = Some("not in a Git repository".to_owned()),
                         }
                     }
                     Some(Command::Inbox) => {

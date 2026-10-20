@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 4;
+pub const MINOR: u16 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -530,6 +530,17 @@ pub enum ToDaemon {
     Dismiss {
         item: u64,
     },
+    /// Starts a task in the project of `workspace`: one new worktree per
+    /// entry of `agents`, each with that agent kind (`None` for a shell)
+    /// and the prompt. An empty name gets one made from the prompt; empty
+    /// `agents` is one default agent. Since minor 5.
+    NewTask {
+        workspace: u64,
+        name: String,
+        start: Option<String>,
+        agents: Vec<Option<String>>,
+        prompt: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -620,6 +631,13 @@ pub enum FromDaemon {
     },
     /// The inbox, newest first. Since minor 3.
     Inbox(Vec<InboxItem>),
+    /// A task's agent started in its worktree's workspace. `note` says
+    /// what the user must do, such as paste a prompt. Since minor 5.
+    TaskStarted {
+        workspace: u64,
+        branch: String,
+        note: Option<String>,
+    },
     /// Show a notification for an inbox item: the daemon chose this client.
     /// The text is plain and short. Since minor 4.
     Notify {
@@ -671,6 +689,7 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
         | Command::Resume
         | Command::Integrations
         | Command::Inbox
+        | Command::NewTask
         | Command::ToggleSidebar
         | Command::Switcher
         | Command::SidebarUp
