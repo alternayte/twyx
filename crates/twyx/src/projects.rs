@@ -5,14 +5,18 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use twyx_core::paths::Paths;
+use twyx_protocol::api;
 use twyx_protocol::client::{
-    FromDaemon, Overview, ProjectInfo, RemovalPlan, SetupReport, ToDaemon, WorkspaceSummary,
-    WorktreeInfo,
+    Overview, ProjectInfo, RemovalPlan, SetupInfo, SetupReport, WorkspaceSummary, WorktreeInfo,
 };
-use twyx_protocol::connection::{self as client, Connection};
+use twyx_protocol::connection as client;
+
+/// An API v1 connection to the daemon.
+pub(crate) type Connection = api::Client;
 
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceCommand {
@@ -86,24 +90,22 @@ pub enum WorktreeCommand {
 }
 
 pub(crate) fn connect(paths: &Paths) -> Result<Connection> {
-    client::attach(paths, 80, 24, false, None, |_| false)
+    client::attach_api(paths)
 }
 
-/// Waits for the reply `pick` takes; a refusal is the error.
-pub(crate) fn wait<T>(
-    connection: &mut Connection,
-    mut pick: impl FnMut(FromDaemon) -> Option<T>,
-) -> Result<T> {
-    loop {
-        match connection.receive()? {
-            FromDaemon::Refused { reason } => bail!("{reason}"),
-            message => {
-                if let Some(value) = pick(message) {
-                    return Ok(value);
-                }
-            }
-        }
-    }
+/// Where `open` and `workspace.switch` show a workspace.
+#[derive(Debug, Deserialize)]
+struct Shown {
+    workspace: u64,
+    client: Option<u64>,
+}
+
+/// What `worktree.new` answers.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Added {
+    pub worktree: WorktreeInfo,
+    pub workspace: u64,
+    pub setup: SetupReport,
 }
 
 pub(crate) fn print_json(value: &impl Serialize) -> Result<()> {
@@ -124,22 +126,18 @@ pub(crate) fn open_path(
     path: &Path,
     switch: bool,
 ) -> Result<(u64, Option<u64>)> {
-    connection.send(&ToDaemon::Open {
-        path: absolute(path)?,
-        switch,
-    })?;
-    wait(connection, |message| match message {
-        FromDaemon::Opened { workspace, client } => Some((workspace, client)),
-        _ => None,
-    })
+    let shown: Shown = connection.call(
+        "open",
+        &api::Open {
+            path: absolute(path)?,
+            switch,
+        },
+    )?;
+    Ok((shown.workspace, shown.client))
 }
 
-fn overview(connection: &mut Connection, refresh: bool) -> Result<Overview> {
-    connection.send(&ToDaemon::Overview { refresh })?;
-    wait(connection, |message| match message {
-        FromDaemon::Overview(overview) => Some(overview),
-        _ => None,
-    })
+pub(crate) fn overview(connection: &mut Connection, refresh: bool) -> Result<Overview> {
+    connection.call("overview", &api::OverviewParams { refresh })
 }
 
 #[derive(Debug, Serialize)]
@@ -314,11 +312,9 @@ pub fn workspace(command: WorkspaceCommand) -> Result<()> {
             let overview = overview(&mut connection, false)?;
             let (workspace, client) = match find_workspace(&overview, &target)? {
                 Some(workspace) => {
-                    connection.send(&ToDaemon::SwitchWorkspace { workspace })?;
-                    wait(&mut connection, |message| match message {
-                        FromDaemon::Switched { workspace, client } => Some((workspace, client)),
-                        _ => None,
-                    })?
+                    let shown: Shown =
+                        connection.call("workspace.switch", &api::WorkspaceRef { workspace })?;
+                    (shown.workspace, shown.client)
                 }
                 None => match find_worktree(&overview, None, &target)? {
                     Some(worktree) => open_path(&mut connection, Path::new(&worktree.path), true)?,
@@ -329,7 +325,7 @@ pub fn workspace(command: WorkspaceCommand) -> Result<()> {
                 },
             };
             if json {
-                return print_json(&serde_json::json!({
+                return print_json(&json!({
                     "workspace": workspace,
                     "client": client,
                 }));
@@ -462,21 +458,20 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
             json,
         } => {
             let project = find_project(&mut connection, &mut overview, project.as_deref())?;
-            connection.send(&ToDaemon::NewWorktree {
-                project: project.project,
-                branch,
-                start: from,
-            })?;
-            let (worktree, workspace, setup) = wait(&mut connection, |message| match message {
-                FromDaemon::WorktreeAdded {
-                    worktree,
-                    workspace,
-                    setup,
-                } => Some((worktree, workspace, setup)),
-                _ => None,
-            })?;
+            let Added {
+                worktree,
+                workspace,
+                setup,
+            } = connection.call(
+                "worktree.new",
+                &api::NewWorktree {
+                    project: project.project,
+                    branch,
+                    start: from,
+                },
+            )?;
             if json {
-                return print_json(&serde_json::json!({
+                return print_json(&json!({
                     "worktree": worktree,
                     "workspace": workspace,
                     "setup": setup,
@@ -524,11 +519,10 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
             let target = find_worktree(&overview, project, &worktree)?
                 .with_context(|| format!("no worktree {worktree}; twyx ls lists them"))?
                 .worktree;
-            connection.send(&ToDaemon::PlanRemoval { worktree: target })?;
-            let plan = wait(&mut connection, |message| match message {
-                FromDaemon::RemovalPlan(plan) => Some(plan),
-                _ => None,
-            })?;
+            let plan: RemovalPlan = connection.call(
+                "worktree.plan_removal",
+                &api::WorktreeRef { worktree: target },
+            )?;
             if delete_branch && plan.branch.is_none() {
                 bail!("the worktree's HEAD is detached: no branch to delete");
             }
@@ -553,23 +547,24 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
                     )?);
             if !confirmed {
                 if json {
-                    return print_json(&serde_json::json!({ "plan": plan, "removed": false }));
+                    return print_json(&json!({ "plan": plan, "removed": false }));
                 }
                 println!("kept {}", plan.worktree.name);
                 return Ok(());
             }
-            connection.send(&ToDaemon::RemoveWorktree {
-                plan: plan.plan,
-                delete_branch,
-            })?;
-            let branch = wait(&mut connection, |message| match message {
-                FromDaemon::WorktreeRemoved { worktree, branch } if worktree == target => {
-                    Some(branch)
-                }
-                _ => None,
-            })?;
+            #[derive(Deserialize)]
+            struct Removed {
+                branch: Option<Result<String, String>>,
+            }
+            let Removed { branch } = connection.call(
+                "worktree.remove",
+                &api::RemoveWorktree {
+                    plan: plan.plan,
+                    delete_branch,
+                },
+            )?;
             if json {
-                return print_json(&serde_json::json!({
+                return print_json(&json!({
                     "plan": plan,
                     "removed": true,
                     "branch": branch,
@@ -613,11 +608,8 @@ fn print_setup(report: &SetupReport) {
 /// Shows a worktree's setup file, trusts it on a yes, and sets the
 /// worktree up.
 fn set_up(connection: &mut Connection, worktree: u64, yes: bool) -> Result<()> {
-    connection.send(&ToDaemon::Setup { worktree })?;
-    let info = wait(connection, |message| match message {
-        FromDaemon::SetupFile(info) => Some(info),
-        _ => None,
-    })?;
+    let info: Option<SetupInfo> =
+        connection.call("worktree.setup_file", &api::WorktreeRef { worktree })?;
     if let Some(info) = info.filter(|info| !info.trusted) {
         if let Some(error) = &info.error {
             bail!("{error}");
@@ -640,20 +632,16 @@ fn set_up(connection: &mut Connection, worktree: u64, yes: bool) -> Result<()> {
             println!("not trusted; nothing of it ran");
             return Ok(());
         }
-        connection.send(&ToDaemon::TrustSetup {
-            worktree,
-            hash: info.hash.clone(),
-        })?;
-        wait(connection, |message| match message {
-            FromDaemon::SetupTrusted { .. } => Some(()),
-            _ => None,
-        })?;
+        let () = connection.call(
+            "worktree.trust_setup",
+            &api::TrustFile {
+                worktree,
+                hash: info.hash.clone(),
+            },
+        )?;
     }
-    connection.send(&ToDaemon::RunSetup { worktree })?;
-    let report = wait(connection, |message| match message {
-        FromDaemon::SetupDone { report, .. } => Some(report),
-        _ => None,
-    })?;
+    let report: SetupReport =
+        connection.call("worktree.run_setup", &api::WorktreeRef { worktree })?;
     print_setup(&report);
     Ok(())
 }

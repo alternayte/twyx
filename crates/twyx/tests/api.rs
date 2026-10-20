@@ -145,3 +145,39 @@ fn the_api_speaks_json_lines_and_answers_each_method_in_order() {
         .unwrap_err();
     assert!(refused.to_string().contains("not running"), "{refused}");
 }
+
+#[test]
+fn twyx_pane_send_types_text_and_keys_into_a_pane() {
+    let mut sandbox = Sandbox::new("send");
+    sandbox.start();
+    let dir = sandbox.root.join("work");
+    std::fs::create_dir_all(&dir).unwrap();
+    let output = sandbox
+        .command(&[
+            "pane",
+            "new",
+            "--cwd",
+            dir.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "read line; echo \"got $line\" > got.txt",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let pane = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+    let status = sandbox
+        .command(&[
+            "pane", "send", &pane, "--text", "hi there", "--key", "enter",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::fs::read_to_string(dir.join("got.txt")).unwrap_or_default() != "got hi there\n" {
+        assert!(Instant::now() < deadline, "the pane did not read the line");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

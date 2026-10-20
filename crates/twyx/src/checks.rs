@@ -6,10 +6,10 @@ use clap::Subcommand;
 
 use twyx_core::check::{self, Outcome};
 use twyx_core::paths::Paths;
-use twyx_protocol::client::{CheckInfo, CheckRun, ChecksInfo, FromDaemon, ToDaemon};
-use twyx_protocol::connection::Connection;
+use twyx_protocol::api;
+use twyx_protocol::client::{CheckInfo, CheckRun, ChecksInfo};
 
-use crate::projects::{ask, connect, print_json, wait};
+use crate::projects::{Connection, ask, connect, print_json};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum CheckCommand {
@@ -43,11 +43,7 @@ pub(crate) enum CheckCommand {
 }
 
 fn checks(connection: &mut Connection, worktree: u64) -> Result<ChecksInfo> {
-    connection.send(&ToDaemon::Checks { worktree })?;
-    wait(connection, |message| match message {
-        FromDaemon::Checks(info) => Some(info),
-        _ => None,
-    })
+    connection.call("check.list", &api::WorktreeRef { worktree })
 }
 
 pub(crate) fn check(command: CheckCommand) -> Result<()> {
@@ -100,29 +96,33 @@ pub(crate) fn check(command: CheckCommand) -> Result<()> {
             if untrusted && !json {
                 trust(&mut connection, &info, false)?;
             }
-            connection.send(&ToDaemon::RunCheck {
-                worktree,
-                name: name.clone(),
-            })?;
-            let pane = wait(&mut connection, |message| match message {
-                FromDaemon::CheckStarted {
-                    worktree: started,
-                    name: started_name,
-                    pane,
-                } if started == worktree && started_name == name => Some(pane),
-                _ => None,
-            })?;
             if no_wait {
+                #[derive(serde::Deserialize)]
+                struct Started {
+                    pane: u64,
+                }
+                let Started { pane } = connection.call(
+                    "check.run",
+                    &api::CheckRef {
+                        worktree,
+                        name: name.clone(),
+                        wait: false,
+                    },
+                )?;
                 if json {
                     return print_json(&serde_json::json!({ "pane": pane }));
                 }
                 println!("check {name} runs in pane {pane}");
                 return Ok(());
             }
-            let run = wait(&mut connection, |message| match message {
-                FromDaemon::CheckEnded(run) if run.pane == Some(pane) => Some(run),
-                _ => None,
-            })?;
+            let run: CheckRun = connection.call(
+                "check.run",
+                &api::CheckRef {
+                    worktree,
+                    name: name.clone(),
+                    wait: true,
+                },
+            )?;
             if json {
                 print_json(&run)?;
             } else {
@@ -240,14 +240,13 @@ fn trust(connection: &mut Connection, info: &ChecksInfo, yes: bool) -> Result<()
     {
         bail!("{} is not trusted, so its checks do not run", file.path);
     }
-    connection.send(&ToDaemon::TrustChecks {
-        worktree: info.worktree,
-        hash: file.hash.clone(),
-    })?;
-    wait(connection, |message| match message {
-        FromDaemon::Checks(info) if info.file.as_ref().is_some_and(|file| file.trusted) => Some(()),
-        _ => None,
-    })?;
+    let _: ChecksInfo = connection.call(
+        "check.trust",
+        &api::TrustFile {
+            worktree: info.worktree,
+            hash: file.hash.clone(),
+        },
+    )?;
     println!("trusted {}", file.path);
     Ok(())
 }

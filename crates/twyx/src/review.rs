@@ -4,39 +4,58 @@
 use anyhow::{Result, bail};
 use clap::Subcommand;
 use twyx_core::paths::Paths;
-use twyx_protocol::client::{FromDaemon, IndexState, Reviewed, ShipReport, ToDaemon};
-use twyx_protocol::connection::Connection;
+use twyx_protocol::api;
+use twyx_protocol::client::{IndexState, ReviewInfo, Reviewed, ShipReport};
 
-use crate::projects::{connect, wait};
+use crate::projects::{Connection, connect, print_json};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ReviewCommand {
     /// Show the review in the client that last had input.
-    Open,
+    Open {
+        #[arg(long)]
+        json: bool,
+    },
     /// Show the base and each changed file's review state.
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     /// Stage files on the main index; every change without paths.
     Stage {
         paths: Vec<String>,
         /// Stage the files whose changes are all reviewed.
         #[arg(long, conflicts_with = "paths")]
         reviewed: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Unstage files; every change without paths.
-    Unstage { paths: Vec<String> },
+    Unstage {
+        paths: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Commit the staged changes. The hooks run in a pane you can watch.
     Commit {
         #[arg(short, long)]
         message: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Push the branch, and set its upstream on the first push.
-    Push,
+    Push {
+        #[arg(long)]
+        json: bool,
+    },
     /// Open a pull request for the branch with gh.
     Pr {
         #[arg(long)]
         title: String,
         #[arg(long, default_value = "")]
         body: String,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -45,37 +64,62 @@ pub(crate) fn review(command: ReviewCommand) -> Result<()> {
     let mut connection = connect(&paths)?;
     let worktree = crate::recipes::here_worktree(&mut connection)?;
     match command {
-        ReviewCommand::Open => {
-            connection.send(&ToDaemon::OpenReview {
-                worktree: Some(worktree),
-            })?;
+        ReviewCommand::Open { json } => {
+            let () = connection.call("review.open", &api::WorktreeRef { worktree })?;
+            if json {
+                return print_json(&serde_json::json!({ "worktree": worktree }));
+            }
             println!("review of worktree {worktree} shown");
             Ok(())
         }
-        ReviewCommand::Status => status(&mut connection, worktree),
-        ReviewCommand::Stage { paths, reviewed } => {
+        ReviewCommand::Status { json } => status(&mut connection, worktree, json),
+        ReviewCommand::Stage {
+            paths,
+            reviewed,
+            json,
+        } => {
             if reviewed {
-                connection.send(&ToDaemon::StageReviewed { worktree })?;
-                return report(&mut connection);
+                let shipped =
+                    connection.call("review.stage_reviewed", &api::WorktreeRef { worktree })?;
+                return report(&shipped, json);
             }
-            stage(&mut connection, worktree, paths, false)
+            stage(&mut connection, worktree, paths, false, json)
         }
-        ReviewCommand::Unstage { paths } => stage(&mut connection, worktree, paths, true),
-        ReviewCommand::Commit { message } => {
-            connection.send(&ToDaemon::Commit { worktree, message })?;
-            report(&mut connection)
+        ReviewCommand::Unstage { paths, json } => {
+            stage(&mut connection, worktree, paths, true, json)
         }
-        ReviewCommand::Push => {
-            connection.send(&ToDaemon::Push { worktree })?;
-            report(&mut connection)
+        ReviewCommand::Commit { message, json } => {
+            let shipped = connection.call(
+                "review.commit",
+                &api::Commit {
+                    worktree,
+                    message,
+                    wait: true,
+                },
+            )?;
+            report(&shipped, json)
         }
-        ReviewCommand::Pr { title, body } => {
-            connection.send(&ToDaemon::OpenPullRequest {
-                worktree,
-                title,
-                body,
-            })?;
-            report(&mut connection)
+        ReviewCommand::Push { json } => {
+            let shipped = connection.call(
+                "review.push",
+                &api::Push {
+                    worktree,
+                    wait: true,
+                },
+            )?;
+            report(&shipped, json)
+        }
+        ReviewCommand::Pr { title, body, json } => {
+            let shipped = connection.call(
+                "review.pull_request",
+                &api::PullRequest {
+                    worktree,
+                    title,
+                    body,
+                    wait: true,
+                },
+            )?;
+            report(&shipped, json)
         }
     }
 }
@@ -85,55 +129,60 @@ fn stage(
     worktree: u64,
     paths: Vec<String>,
     unstage: bool,
+    json: bool,
 ) -> Result<()> {
     let paths: Vec<Option<String>> = if paths.is_empty() {
         vec![None]
     } else {
         paths.into_iter().map(Some).collect()
     };
+    let mut reports: Vec<ShipReport> = Vec::new();
     for path in paths {
-        connection.send(&ToDaemon::Stage {
-            worktree,
-            path,
-            hunks: None,
-            unstage,
-        })?;
-        report(connection)?;
+        reports.push(connection.call(
+            "review.stage",
+            &api::Stage {
+                worktree,
+                path,
+                hunks: None,
+                unstage,
+            },
+        )?);
+    }
+    if json {
+        return print_json(&reports);
+    }
+    for shipped in &reports {
+        report(shipped, false)?;
     }
     Ok(())
 }
 
-/// Prints each report of one step until it ends; fails when the step did.
-fn report(connection: &mut Connection) -> Result<()> {
-    loop {
-        let report: ShipReport = wait(connection, |message| match message {
-            FromDaemon::Shipped(report) => Some(report),
-            _ => None,
-        })?;
-        if let (None, Some(pane)) = (&report.result, report.pane) {
+/// Prints what a step ran and printed; fails when the step did.
+fn report(report: &ShipReport, json: bool) -> Result<()> {
+    if json {
+        print_json(report)?;
+    } else {
+        if !report.command.is_empty() {
             println!("$ {}", report.command);
-            println!("runs in pane {pane}");
-            continue;
         }
-        if report.pane.is_none() && !report.command.is_empty() {
-            println!("$ {}", report.command);
+        if let Some(pane) = report.pane {
+            println!("ran in pane {pane}");
         }
         if !report.output.is_empty() {
             println!("{}", report.output);
         }
-        return match report.result {
-            Some(Err(error)) => bail!("{error}"),
-            _ => Ok(()),
-        };
+    }
+    match &report.result {
+        Some(Err(error)) => bail!("{error}"),
+        _ => Ok(()),
     }
 }
 
-fn status(connection: &mut Connection, worktree: u64) -> Result<()> {
-    connection.send(&ToDaemon::Review { worktree })?;
-    let review = wait(connection, |message| match message {
-        FromDaemon::Review(review) => Some(review),
-        _ => None,
-    })?;
+fn status(connection: &mut Connection, worktree: u64, json: bool) -> Result<()> {
+    let review: ReviewInfo = connection.call("review.status", &api::WorktreeRef { worktree })?;
+    if json {
+        return print_json(&review);
+    }
     if let Some(error) = review.error {
         bail!("{error}");
     }

@@ -4,9 +4,9 @@
 use anyhow::Result;
 use clap::Subcommand;
 use twyx_core::paths::Paths;
-use twyx_protocol::client::{FromDaemon, ToDaemon};
+use twyx_protocol::api;
 
-use crate::projects::{connect, wait};
+use crate::projects::{connect, print_json};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum TaskCommand {
@@ -30,6 +30,8 @@ pub(crate) enum TaskCommand {
         /// The first message for the agent.
         #[arg(long)]
         prompt: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -40,27 +42,31 @@ pub(crate) fn task(command: TaskCommand) -> Result<()> {
         agents,
         count,
         prompt,
+        json,
     } = command;
     let paths = Paths::discover()?;
     let default = twyx_core::config::load(&paths.config.join("config.toml"))?.default_agent;
     let agents = twyx_core::task::per_worktree(&agents, count, default);
     let mut connection = connect(&paths)?;
     let workspace = crate::recipes::here(&mut connection)?;
-    let total = agents.len();
-    connection.send(&ToDaemon::NewTask {
-        workspace,
-        name: name.unwrap_or_default(),
-        start,
-        agents,
-        prompt,
-    })?;
-    for _ in 0..total {
-        let (path, setup) = wait(&mut connection, |message| match message {
-            FromDaemon::WorktreeAdded {
-                worktree, setup, ..
-            } => Some((worktree.path.clone(), setup.clone())),
-            _ => None,
-        })?;
+    let added: Vec<serde_json::Value> = connection.call(
+        "task.new",
+        &api::NewTask {
+            workspace,
+            name: name.unwrap_or_default(),
+            start,
+            agents,
+            prompt,
+        },
+    )?;
+    if json {
+        return print_json(&added);
+    }
+    for added in added {
+        let crate::projects::Added {
+            worktree, setup, ..
+        } = serde_json::from_value(added)?;
+        let path = worktree.path;
         println!("created {path}");
         if setup.untrusted {
             println!("  its setup file is not trusted, so setup did not run: twyx worktree setup");

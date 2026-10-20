@@ -5,16 +5,20 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
-use twyx_core::layout::Axis;
+use serde::Deserialize;
+use serde_json::{Value, json};
 use twyx_core::pane::PaneId;
 use twyx_core::paths::Paths;
 use twyx_core::theme::Variant;
 use twyx_holder::engine::Geometry;
 use twyx_holder::pty::Spawn;
+use twyx_protocol::api;
 use twyx_protocol::client::{
-    AgentEvent, AgentInfo, FromDaemon, Launch, PaneState, Place, ToDaemon,
+    AgentEvent, AgentInfo, InboxItem, PaneInfo, PaneState, TabInfo, ToDaemon,
 };
 use twyx_protocol::connection as client;
+
+use crate::projects::{Connection, print_json};
 
 #[derive(Debug, Parser)]
 #[command(name = "twyx", version, about = "A developer workspace")]
@@ -34,6 +38,22 @@ enum Command {
     Pane {
         #[command(subcommand)]
         command: PaneCommand,
+    },
+    /// Work with the tabs of the current directory's workspace.
+    Tab {
+        #[command(subcommand)]
+        command: TabCommand,
+    },
+    /// Print the daemon's events as JSON lines until it stops.
+    Events {
+        /// An event kind to print: agent, pane, workspace, overview, inbox,
+        /// check or ship. Every kind when left out.
+        #[arg(long = "kind")]
+        kinds: Vec<String>,
+        /// The output is JSON lines already; this is accepted for
+        /// uniformity.
+        #[arg(long)]
+        json: bool,
     },
     /// Open the project a path is in and show its workspace.
     Open {
@@ -89,7 +109,10 @@ enum Command {
     },
     /// List the inbox: the agent sessions and panes that need you, newest
     /// first.
-    Inbox,
+    Inbox {
+        #[arg(long)]
+        json: bool,
+    },
     /// Review the changes of the current worktree since its base.
     Review {
         #[command(subcommand)]
@@ -190,7 +213,25 @@ enum Paper {
 #[derive(Debug, Subcommand)]
 enum HistoryCommand {
     /// Delete every pane's history. Running panes start a new one.
-    Purge,
+    Purge {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum TabCommand {
+    /// List the tabs.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a tab in the client that last had input.
+    Select {
+        tab: u64,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -198,13 +239,25 @@ enum DaemonCommand {
     /// Run the daemon in the foreground.
     Run,
     /// Start the daemon in the background.
-    Start,
+    Start {
+        #[arg(long)]
+        json: bool,
+    },
     /// Stop the daemon. Panes keep running.
-    Stop,
+    Stop {
+        #[arg(long)]
+        json: bool,
+    },
     /// Report whether the daemon runs, and any holders too old to adopt.
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     /// End the holders too old for this daemon to adopt, with their panes.
-    KillLegacy,
+    KillLegacy {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -221,15 +274,45 @@ enum PaneCommand {
         #[arg(long)]
         no_history: bool,
         /// The command and its arguments. The login shell when empty.
+        #[arg(long)]
+        json: bool,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         argv: Vec<String>,
     },
     /// List the panes.
-    List,
+    List {
+        #[arg(long)]
+        json: bool,
+    },
     /// Kill a pane's process.
     Kill {
         /// The pane to kill.
         pane: u64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a pane in the client that last had input.
+    Focus {
+        pane: u64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Type text and keys into a pane, through the same queue as a client's
+    /// keys.
+    Send {
+        pane: u64,
+        /// Text to type.
+        #[arg(long)]
+        text: Option<String>,
+        /// Send the text as one paste instead of typing it.
+        #[arg(long, requires = "text")]
+        paste: bool,
+        /// A key to press after the text, such as enter or ctrl-c. Repeat
+        /// it for more keys.
+        #[arg(long = "key")]
+        keys: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -251,14 +334,14 @@ pub fn run() -> Result<()> {
         Command::Worktree { command } => crate::projects::worktree(command),
         Command::Recipe { command } => crate::recipes::recipe(command),
         Command::History {
-            command: HistoryCommand::Purge,
+            command: HistoryCommand::Purge { json },
         } => {
             let paths = Paths::discover()?;
-            let mut connection = command_client(&paths)?;
-            connection.send(&ToDaemon::PurgeHistory)?;
-            println!("deleted all pane history");
-            Ok(())
+            let () = crate::projects::connect(&paths)?.call("history.purge", &Value::Null)?;
+            done(json, "deleted all pane history")
         }
+        Command::Tab { command } => tab(command),
+        Command::Events { kinds, json: _ } => events(kinds),
         Command::Notify {
             event,
             agent,
@@ -272,7 +355,7 @@ pub fn run() -> Result<()> {
             notify(event, agent, session)
         }
         Command::Integration { command } => crate::integrations::integration(command),
-        Command::Inbox => inbox(),
+        Command::Inbox { json } => inbox(json),
         Command::Task { command } => crate::tasks::task(command),
         Command::Review { command } => crate::review::review(command),
         Command::Check { command } => crate::checks::check(command),
@@ -315,45 +398,61 @@ fn daemon(command: DaemonCommand) -> Result<()> {
             let _ = rustix::process::setsid();
             twyx_daemon::daemon::run(paths)
         }
-        DaemonCommand::Start => {
-            let connection = client::attach(&paths, 80, 24, false, None, |_| false)?;
-            println!("daemon running, pid {}", connection.hello.pid);
+        DaemonCommand::Start { json } => {
+            let connection = client::attach_api(&paths)?;
+            let pid = connection.welcome.pid;
+            if json {
+                return print_json(&json!({ "pid": pid }));
+            }
+            println!("daemon running, pid {pid}");
             Ok(())
         }
-        DaemonCommand::Stop => {
-            if std::os::unix::net::UnixStream::connect(paths.socket()).is_err() {
-                println!("daemon stopped");
-                return Ok(());
-            }
-            match client::connect(&paths.socket(), 80, 24, false, None) {
-                Ok(mut connection) => connection.send(&ToDaemon::Shutdown)?,
-                // A daemon of another major still says who it is.
-                Err(error) => match error.downcast_ref::<client::Unsupported>() {
-                    Some(unsupported) => {
-                        if let Some(pid) = rustix::process::Pid::from_raw(unsupported.pid as i32) {
-                            rustix::process::kill_process(pid, rustix::process::Signal::TERM)
-                                .context("stop the daemon")?;
+        DaemonCommand::Stop { json } => {
+            if std::os::unix::net::UnixStream::connect(paths.socket()).is_ok() {
+                match client::connect(&paths.socket(), 80, 24, false, None) {
+                    Ok(mut connection) => connection.send(&ToDaemon::Shutdown)?,
+                    // A daemon of another major still says who it is.
+                    Err(error) => match error.downcast_ref::<client::Unsupported>() {
+                        Some(unsupported) => {
+                            if let Some(pid) =
+                                rustix::process::Pid::from_raw(unsupported.pid as i32)
+                            {
+                                rustix::process::kill_process(pid, rustix::process::Signal::TERM)
+                                    .context("stop the daemon")?;
+                            }
                         }
-                    }
-                    None => return Err(error),
-                },
+                        None => return Err(error),
+                    },
+                }
             }
-            Ok(())
+            done(json, "daemon stopped")
         }
-        DaemonCommand::KillLegacy => {
-            let mut connection = command_client(&paths)?;
-            let count = connection.hello.legacy.len();
-            connection.send(&ToDaemon::KillLegacy)?;
+        DaemonCommand::KillLegacy { json } => {
+            let mut connection = crate::projects::connect(&paths)?;
+            let count = status(&mut connection)?.legacy.len();
+            let () = connection.call("daemon.kill_legacy", &Value::Null)?;
+            if json {
+                return print_json(&json!({ "ended": count }));
+            }
             println!(
                 "ended {count} legacy holder{}",
                 if count == 1 { "" } else { "s" }
             );
             Ok(())
         }
-        DaemonCommand::Status => {
+        DaemonCommand::Status { json } => {
             match client::connect(&paths.socket(), 80, 24, false, None) {
                 Ok(connection) => {
                     let hello = &connection.hello;
+                    if json {
+                        return print_json(&json!({
+                            "running": true,
+                            "pid": hello.pid,
+                            "build": hello.build,
+                            "panes": hello.panes.len(),
+                            "legacy": hello.legacy,
+                        }));
+                    }
                     let plural = if hello.panes.len() == 1 { "" } else { "s" };
                     println!(
                         "running pid {} with {} pane{plural}",
@@ -377,71 +476,132 @@ fn daemon(command: DaemonCommand) -> Result<()> {
                         );
                     }
                 }
-                Err(error) => match error.downcast_ref::<client::Unsupported>() {
-                    Some(unsupported) => println!("running, {unsupported}"),
-                    None => println!("stopped"),
-                },
+                Err(error) => {
+                    let unsupported = error.downcast_ref::<client::Unsupported>();
+                    if json {
+                        return print_json(&json!({
+                            "running": unsupported.is_some(),
+                            "pid": unsupported.map(|unsupported| unsupported.pid),
+                        }));
+                    }
+                    match unsupported {
+                        Some(unsupported) => println!("running, {unsupported}"),
+                        None => println!("stopped"),
+                    }
+                }
             }
             Ok(())
         }
     }
 }
 
+/// What `daemon.status` answers.
+#[derive(Debug, Deserialize)]
+struct DaemonStatus {
+    legacy: Vec<twyx_protocol::client::LegacyHolder>,
+}
+
+fn status(connection: &mut Connection) -> Result<DaemonStatus> {
+    connection.call("daemon.status", &Value::Null)
+}
+
+/// The end of a command with nothing to report but that it ran.
+fn done(json: bool, text: &str) -> Result<()> {
+    if json {
+        return print_json(&Value::Null);
+    }
+    println!("{text}");
+    Ok(())
+}
+
+fn tab(command: TabCommand) -> Result<()> {
+    let paths = Paths::discover()?;
+    let mut connection = crate::projects::connect(&paths)?;
+    match command {
+        TabCommand::List { json } => {
+            let workspace = crate::recipes::here(&mut connection)?;
+            let tabs: Vec<TabInfo> =
+                connection.call("tab.list", &api::WorkspaceRef { workspace })?;
+            if json {
+                return print_json(&tabs);
+            }
+            for tab in &tabs {
+                let panes = tab.layout.panes().len();
+                let name = if tab.name.is_empty() { "-" } else { &tab.name };
+                println!(
+                    "{}  {name}  {panes} pane{}",
+                    tab.tab,
+                    if panes == 1 { "" } else { "s" }
+                );
+            }
+            Ok(())
+        }
+        TabCommand::Select { tab, json } => {
+            let () = connection.call("tab.select", &api::TabRef { tab })?;
+            done(json, &format!("tab {tab} shown"))
+        }
+    }
+}
+
+fn events(kinds: Vec<String>) -> Result<()> {
+    let paths = Paths::discover()?;
+    let mut connection = crate::projects::connect(&paths)?;
+    let () = connection.call("events.subscribe", &api::Subscribe { kinds })?;
+    loop {
+        let event = connection.event()?;
+        println!(
+            "{}",
+            serde_json::to_string(&event).context("write an event")?
+        );
+    }
+}
+
 fn pane(command: PaneCommand) -> Result<()> {
     let paths = Paths::discover()?;
+    let mut connection = crate::projects::connect(&paths)?;
     match command {
         PaneCommand::New {
             cwd,
             place,
             no_history,
+            json,
             argv,
         } => {
-            let mut connection = command_client(&paths)?;
-            let known: Vec<u64> = connection
-                .hello
-                .panes
-                .iter()
-                .map(|pane| pane.pane)
-                .collect();
-            let launch = if argv.is_empty() {
-                Launch::Shell
-            } else {
-                Launch::Command(argv)
-            };
             let cwd = match cwd {
                 Some(cwd) => cwd,
                 None => std::env::current_dir().context("current directory")?,
             };
-            connection.send(&ToDaemon::NewPane {
-                launch,
-                cwd: cwd.to_string_lossy().into_owned(),
-                place: match place {
-                    PanePlace::Right => Place::Split(Axis::Row),
-                    PanePlace::Down => Place::Split(Axis::Column),
-                    PanePlace::Stack => Place::Stack,
-                    PanePlace::Float => Place::Floating,
-                    PanePlace::Tab => Place::NewTab,
+            let info: PaneInfo = connection.call(
+                "pane.new",
+                &api::NewPane {
+                    argv,
+                    cwd: cwd.to_string_lossy().into_owned(),
+                    place: match place {
+                        PanePlace::Right => api::PanePlace::Right,
+                        PanePlace::Down => api::PanePlace::Down,
+                        PanePlace::Stack => api::PanePlace::Stack,
+                        PanePlace::Float => api::PanePlace::Float,
+                        PanePlace::Tab => api::PanePlace::Tab,
+                    },
+                    history: !no_history,
                 },
-                history: !no_history,
-            })?;
-            loop {
-                match connection.receive()? {
-                    FromDaemon::Pane(info) if !known.contains(&info.pane) => {
-                        println!("{}", info.pane);
-                        return Ok(());
-                    }
-                    FromDaemon::Refused { reason } => bail!("{reason}"),
-                    _ => {}
-                }
+            )?;
+            if json {
+                return print_json(&info);
             }
+            println!("{}", info.pane);
+            Ok(())
         }
-        PaneCommand::List => {
-            let connection = command_client(&paths)?;
-            if connection.hello.panes.is_empty() {
+        PaneCommand::List { json } => {
+            let panes: Vec<PaneInfo> = connection.call("pane.list", &Value::Null)?;
+            if json {
+                return print_json(&panes);
+            }
+            if panes.is_empty() {
                 println!("no panes");
                 return Ok(());
             }
-            for pane in connection.hello.panes {
+            for pane in panes {
                 println!(
                     "{} {}x{} {}{}",
                     pane.pane,
@@ -453,18 +613,33 @@ fn pane(command: PaneCommand) -> Result<()> {
             }
             Ok(())
         }
-        PaneCommand::Kill { pane } => {
-            let mut connection = command_client(&paths)?;
-            connection.send(&ToDaemon::KillPane { pane })?;
-            Ok(())
+        PaneCommand::Kill { pane, json } => {
+            let () = connection.call("pane.kill", &api::PaneRef { pane })?;
+            done(json, &format!("killed pane {pane}"))
+        }
+        PaneCommand::Focus { pane, json } => {
+            let () = connection.call("pane.focus", &api::PaneRef { pane })?;
+            done(json, &format!("pane {pane} shown"))
+        }
+        PaneCommand::Send {
+            pane,
+            text,
+            paste,
+            keys,
+            json,
+        } => {
+            let () = connection.call(
+                "pane.send",
+                &api::SendToPane {
+                    pane,
+                    text,
+                    paste,
+                    keys,
+                },
+            )?;
+            done(json, &format!("sent to pane {pane}"))
         }
     }
-}
-
-/// A CLI command's connection: this build's daemon, replacing one from
-/// another build only when no interactive client uses it.
-fn command_client(paths: &Paths) -> Result<client::Connection> {
-    client::attach(paths, 80, 24, false, None, |_| false)
 }
 
 /// Sends an integration's event to the daemon of the pane this runs in. It
@@ -492,23 +667,25 @@ fn notify(event: NotifyEvent, agent: Option<String>, session: Option<String>) ->
         NotifyEvent::Error => AgentEvent::Error,
         NotifyEvent::Session => AgentEvent::Session,
     };
-    let mut connection = client::connect(std::path::Path::new(&socket), 80, 24, false, None)?;
-    connection.send(&ToDaemon::Notify {
-        pane: pane.raw(),
-        agent,
-        event,
-        session,
-    })
+    let mut connection = api::Client::connect(std::path::Path::new(&socket))?;
+    connection.call(
+        "notify",
+        &api::Notify {
+            pane: pane.raw(),
+            agent,
+            event,
+            session,
+        },
+    )
 }
 
-fn inbox() -> Result<()> {
+fn inbox(json: bool) -> Result<()> {
     let paths = Paths::discover()?;
     let mut connection = crate::projects::connect(&paths)?;
-    connection.send(&ToDaemon::Inbox)?;
-    let items = crate::projects::wait(&mut connection, |message| match message {
-        FromDaemon::Inbox(items) => Some(items),
-        _ => None,
-    })?;
+    let items: Vec<InboxItem> = connection.call("inbox.list", &Value::Null)?;
+    if json {
+        return print_json(&items);
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
@@ -538,11 +715,11 @@ fn inbox() -> Result<()> {
 
 /// A string field of the JSON object on stdin.
 fn from_stdin(field: &str) -> Result<Option<String>> {
-    let value: serde_json::Value =
+    let value: Value =
         serde_json::from_reader(std::io::stdin().lock()).context("read JSON from stdin")?;
     Ok(value
         .get(field)
-        .and_then(serde_json::Value::as_str)
+        .and_then(Value::as_str)
         .filter(|reference| !reference.is_empty())
         .map(str::to_owned))
 }

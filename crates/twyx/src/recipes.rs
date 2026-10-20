@@ -3,11 +3,12 @@
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 
+use serde::Deserialize;
 use twyx_core::paths::Paths;
-use twyx_protocol::client::{FromDaemon, RecipeInfo, RecipeSource, ToDaemon};
-use twyx_protocol::connection::Connection;
+use twyx_protocol::api;
+use twyx_protocol::client::{RecipeInfo, RecipeSource};
 
-use crate::projects::{ask, connect, open_path, print_json, wait};
+use crate::projects::{Connection, ask, connect, open_path, print_json};
 
 #[derive(Debug, Subcommand)]
 pub enum RecipeCommand {
@@ -48,12 +49,7 @@ pub(crate) fn here(connection: &mut Connection) -> Result<u64> {
 /// The Git worktree of the current directory, which this opens.
 pub(crate) fn here_worktree(connection: &mut Connection) -> Result<u64> {
     let workspace = here(connection)?;
-    connection.send(&ToDaemon::Overview { refresh: false })?;
-    let overview = wait(connection, |message| match message {
-        FromDaemon::Overview(overview) => Some(overview),
-        _ => None,
-    })?;
-    overview
+    crate::projects::overview(connection, false)?
         .workspaces
         .iter()
         .find(|summary| summary.workspace == workspace)
@@ -62,11 +58,7 @@ pub(crate) fn here_worktree(connection: &mut Connection) -> Result<u64> {
 }
 
 fn recipes(connection: &mut Connection, workspace: u64) -> Result<Vec<RecipeInfo>> {
-    connection.send(&ToDaemon::Recipes { workspace })?;
-    wait(connection, |message| match message {
-        FromDaemon::Recipes(recipes) => Some(recipes),
-        _ => None,
-    })
+    connection.call("recipe.list", &api::WorkspaceRef { workspace })
 }
 
 pub fn recipe(command: RecipeCommand) -> Result<()> {
@@ -133,20 +125,25 @@ pub fn run(
     {
         trust(connection, workspace, name, false)?;
     }
-    connection.send(&ToDaemon::RunRecipe {
+    #[derive(Deserialize)]
+    struct Opened {
+        workspace: u64,
+        tabs: Vec<u64>,
+        client: Option<u64>,
+    }
+    let Opened {
         workspace,
-        name: name.to_owned(),
-        branch,
-        switch,
-    })?;
-    let (workspace, tabs, client) = wait(connection, |message| match message {
-        FromDaemon::RecipeOpened {
+        tabs,
+        client,
+    } = connection.call(
+        "recipe.run",
+        &api::RunRecipe {
             workspace,
-            tabs,
-            client,
-        } => Some((workspace, tabs, client)),
-        _ => None,
-    })?;
+            name: name.to_owned(),
+            branch,
+            switch,
+        },
+    )?;
     if json {
         return print_json(&serde_json::json!({
             "workspace": workspace,
@@ -216,15 +213,14 @@ fn trust(connection: &mut Connection, workspace: u64, name: &str, yes: bool) -> 
     {
         bail!("{name} is not trusted, so it did not run");
     }
-    connection.send(&ToDaemon::TrustRecipe {
-        workspace,
-        name: name.to_owned(),
-        hash: hash.clone(),
-    })?;
-    wait(connection, |message| match message {
-        FromDaemon::RecipeTrusted { .. } => Some(()),
-        _ => None,
-    })?;
+    let () = connection.call(
+        "recipe.trust",
+        &api::TrustRecipe {
+            workspace,
+            name: name.to_owned(),
+            hash: hash.clone(),
+        },
+    )?;
     println!("trusted {name}");
     Ok(())
 }

@@ -150,6 +150,31 @@ pub fn attach(
     connect(&paths.socket(), cols, rows, interactive, workspace)
 }
 
+/// An API v1 client of this build's daemon. A daemon from another build
+/// is replaced when no interactive client is attached, and kept otherwise.
+pub fn attach_api(paths: &twyx_core::paths::Paths) -> Result<crate::api::Client> {
+    ensure_daemon(paths)?;
+    let mut api = match crate::api::Client::connect(&paths.socket()) {
+        Ok(api) => api,
+        // A daemon from before API v1: replace it as a command client would.
+        Err(_) => {
+            drop(attach(paths, 80, 24, false, None, |_| false)?);
+            crate::api::Client::connect(&paths.socket()).context(
+                "the daemon is from another build without API v1; stop it with twyx daemon stop",
+            )?
+        }
+    };
+    if api.welcome.build == crate::BUILD_ID || api.welcome.clients > 0 {
+        return Ok(api);
+    }
+    let pid = api.welcome.pid;
+    // The daemon closes the connection as it stops.
+    let _ = api.call::<serde_json::Value>("daemon.stop", &serde_json::Value::Null);
+    stop(paths, pid)?;
+    ensure_daemon(paths)?;
+    crate::api::Client::connect(&paths.socket())
+}
+
 /// Waits for a daemon to go, and ends it if it does not go by itself.
 fn stop(paths: &twyx_core::paths::Paths, pid: u32) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(2);

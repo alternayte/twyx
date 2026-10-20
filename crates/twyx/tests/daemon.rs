@@ -4,7 +4,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::HashMap;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -508,6 +508,19 @@ fn old_daemon(sandbox: &Sandbox, clients: u32) -> std::sync::mpsc::Receiver<bool
             let Ok(stream) = stream else { continue };
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
             let mut writer = stream;
+            if reader
+                .fill_buf()
+                .ok()
+                .and_then(|bytes| bytes.first().copied())
+                == Some(b'{')
+            {
+                if old_api(&mut reader, &mut writer, clients, &socket) {
+                    let _ = told.send(true);
+                    return;
+                }
+                let _ = told.send(false);
+                continue;
+            }
             if !matches!(
                 wire::read::<ToDaemon>(&mut reader),
                 Ok(Some(ToDaemon::Hello(_)))
@@ -537,6 +550,36 @@ fn old_daemon(sandbox: &Sandbox, clients: u32) -> std::sync::mpsc::Receiver<bool
         }
     });
     stopped
+}
+
+/// The old daemon's side of API v1: `hello`, an empty `pane.list`, and
+/// `daemon.stop`, which it reports.
+fn old_api(
+    reader: &mut BufReader<std::os::unix::net::UnixStream>,
+    writer: &mut std::os::unix::net::UnixStream,
+    clients: u32,
+    socket: &Path,
+) -> bool {
+    use std::io::Write;
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+        let request: serde_json::Value = serde_json::from_str(&line).expect("a request");
+        let result = match request["method"].as_str() {
+            Some("hello") => serde_json::json!({
+                "version": 1, "minor": 0, "build": "an-older-build",
+                "pid": std::process::id(), "clients": clients,
+            }),
+            Some("daemon.stop") => {
+                // An old daemon that stops takes its socket with it.
+                let _ = std::fs::remove_file(socket);
+                return true;
+            }
+            _ => serde_json::json!([]),
+        };
+        let reply = serde_json::json!({ "id": request["id"], "result": result });
+        let _ = writeln!(writer, "{reply}");
+    }
+    false
 }
 
 #[test]
