@@ -102,7 +102,16 @@ impl Widget for Sidebar<'_> {
             } else {
                 right.saturating_sub(detail_width + 2 * SPACE.gap)
             };
-            let mut end = put(buf, x, y, label_limit, &row.label, style);
+            // A long label gives way to the mark.
+            let mark_width = if row.mark.is_some() { 2 } else { 0 };
+            let mut end = put(
+                buf,
+                x,
+                y,
+                label_limit.saturating_sub(mark_width),
+                &row.label,
+                style,
+            );
             if let Some(mark) = row.mark {
                 let tone = pen.fg(pen.theme.agent(mark));
                 end = put(

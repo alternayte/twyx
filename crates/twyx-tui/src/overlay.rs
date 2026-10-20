@@ -309,15 +309,15 @@ impl Overlay {
                     .iter()
                     .map(|item| {
                         let place = match (&item.project, &item.worktree) {
-                            (Some(project), Some(worktree)) => format!("{project} / {worktree}"),
-                            (Some(project), None) => project.clone(),
+                            (Some(project), Some(worktree)) => format!(" · {project} / {worktree}"),
+                            (Some(project), None) => format!(" · {project}"),
                             (None, _) => String::new(),
                         };
                         let mark = item.mark.map_or(' ', |mark| mark.glyph());
                         let state = item.mark.map_or(item.reason.name(), |mark| mark.word());
                         let unread = if item.read { ' ' } else { '•' };
                         (
-                            format!("{unread} {mark} {state} · {place} · {}", item.title),
+                            format!("{unread} {mark} {state}{place} · {}", item.title),
                             age(now.saturating_sub(item.created_ms)),
                         )
                     })
