@@ -72,7 +72,16 @@ const COUNT_PROMPT: &str =
 
 fn start(agent: &Agent) -> Pane {
     let dir = workdir(agent);
-    let mut pane = Pane::start(vec![agent.name.to_owned()], &dir, COLS, ROWS);
+    // Run from inside an agent session, Claude Code inherits that session's
+    // markers and leaves a typed prompt unsent; start each agent clean.
+    let mut argv = vec!["env".to_owned()];
+    for (name, _) in std::env::vars() {
+        if name.starts_with("CLAUDE") {
+            argv.extend(["-u".to_owned(), name]);
+        }
+    }
+    argv.push(agent.name.to_owned());
+    let mut pane = Pane::start(argv, &dir, COLS, ROWS);
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         pane.wait_until_still(Duration::from_secs(4), Duration::from_secs(60));
