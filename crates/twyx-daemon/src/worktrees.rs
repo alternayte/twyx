@@ -771,7 +771,15 @@ impl Daemon {
                 return;
             }
         };
+        // Two `git worktree add` at once in one repository can each read
+        // the other's half-written admin directory.
+        let lock = std::sync::Arc::clone(
+            self.add_locks
+                .entry(project)
+                .or_insert_with(|| std::sync::Arc::new(std::sync::Mutex::new(()))),
+        );
         self.job(move || {
+            let _one_at_a_time = lock.lock();
             let added = (|| {
                 git::check_branch_name(&main, &branch)?;
                 let start = match start {

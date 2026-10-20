@@ -3,6 +3,7 @@
 //! The holder and client protocols use one compact binary encoding. API v1
 //! uses JSON and is documented separately.
 
+pub mod api;
 pub mod client;
 pub mod connection;
 pub mod grid;

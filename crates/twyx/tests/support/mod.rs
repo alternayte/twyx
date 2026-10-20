@@ -283,7 +283,8 @@ impl Client {
             | FromDaemon::Checks(_)
             | FromDaemon::CheckStarted { .. }
             | FromDaemon::CheckEnded(_)
-            | FromDaemon::Shipped(_) => {}
+            | FromDaemon::Shipped(_)
+            | FromDaemon::Synced { .. } => {}
         }
     }
 

@@ -281,6 +281,7 @@ impl Terminal {
                         | FromDaemon::CheckStarted { .. }
                         | FromDaemon::CheckEnded(_)
                         | FromDaemon::Shipped(_)
+                        | FromDaemon::Synced { .. }
                         | FromDaemon::WorktreeAdded { .. }
                         | FromDaemon::RemovalPlan(_)
                         | FromDaemon::WorktreeRemoved { .. }

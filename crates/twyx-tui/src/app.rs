@@ -383,7 +383,8 @@ fn run(
                 | FromDaemon::Switched { .. }
                 | FromDaemon::Recipes(_)
                 | FromDaemon::RecipeOpened { .. }
-                | FromDaemon::RecipeTrusted { .. } => {}
+                | FromDaemon::RecipeTrusted { .. }
+                | FromDaemon::Synced { .. } => {}
                 answer @ (FromDaemon::Refused { .. }
                 | FromDaemon::Overview(_)
                 | FromDaemon::Inbox(_)

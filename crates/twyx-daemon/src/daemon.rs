@@ -7,7 +7,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufRead, BufReader, BufWriter};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -167,6 +167,8 @@ pub struct Daemon {
     pub(crate) last_notice: Option<std::time::Instant>,
     /// Tasks whose agent waits for a setup pane, by that pane.
     pub(crate) tasks: BTreeMap<PaneId, crate::tasks::Waiting>,
+    /// One worktree add at a time per project.
+    pub(crate) add_locks: BTreeMap<u64, std::sync::Arc<std::sync::Mutex<()>>>,
     /// One review job at a time per worktree.
     pub(crate) review_locks: BTreeMap<u64, std::sync::Arc<std::sync::Mutex<()>>>,
     /// Pastes a holder has yet to answer, by id.
@@ -225,6 +227,7 @@ pub fn run(paths: Paths) -> Result<()> {
         injections: BTreeMap::new(),
         next_injection: 0,
         check_runs: BTreeMap::new(),
+        add_locks: BTreeMap::new(),
         checks_starting: std::collections::BTreeSet::new(),
         ships: BTreeMap::new(),
         legacy: Vec::new(),
@@ -763,6 +766,53 @@ impl Daemon {
             ),
             ToDaemon::StageReviewed { worktree } => {
                 self.review(id, worktree, Some(crate::review::Change::StageReviewed));
+            }
+            ToDaemon::Sync { token } => self.reply(id, FromDaemon::Synced { token }),
+            ToDaemon::WorkspaceInfo { workspace } => {
+                if self.workspaces.contains_key(&workspace) {
+                    let info = self.workspace_info(workspace);
+                    self.reply(id, FromDaemon::Workspace(info));
+                } else {
+                    self.refuse(id, format!("no workspace {workspace}"));
+                }
+            }
+            ToDaemon::ShowTab { tab } => {
+                let Some((workspace, leaf)) = self.tab(tab).map(|entry| {
+                    (
+                        entry.workspace,
+                        entry
+                            .focus
+                            .or_else(|| entry.layout.leaves().first().map(|leaf| leaf.id)),
+                    )
+                }) else {
+                    self.refuse(id, format!("no tab {tab}"));
+                    return;
+                };
+                match leaf {
+                    Some(leaf) => self.show_leaf(id, workspace, leaf),
+                    None => self.refuse(id, format!("tab {tab} is empty")),
+                }
+            }
+            ToDaemon::SendToPane { pane, input } => {
+                let pane = PaneId::from_raw(pane);
+                let Some(link) = self
+                    .panes
+                    .get(&pane)
+                    .filter(|entry| entry.state == PaneState::Running)
+                    .and_then(|entry| entry.link.as_ref())
+                else {
+                    self.refuse(id, format!("pane {pane} is not running"));
+                    return;
+                };
+                let answers = input
+                    .iter()
+                    .any(|event| matches!(event, InputEvent::Key(_) | InputEvent::Paste(_)));
+                for event in input {
+                    link.send(ToHolder::Input(event));
+                }
+                if answers {
+                    self.user_input(pane);
+                }
             }
             ToDaemon::Commit { worktree, message } => self.commit(id, worktree, message),
             ToDaemon::Push { worktree } => self.push(id, worktree),
@@ -1429,6 +1479,19 @@ fn serve_client(stream: UnixStream, events: Sender<Event>) {
         return;
     };
     let mut reader = BufReader::new(reader_stream);
+    // A client protocol frame starts with the high byte of its length,
+    // which is zero for any message the daemon accepts; API v1 starts
+    // with a JSON object.
+    if reader
+        .fill_buf()
+        .ok()
+        .and_then(|bytes| bytes.first().copied())
+        == Some(b'{')
+    {
+        let client = CLIENTS.fetch_add(1, Ordering::Relaxed);
+        crate::api::serve(stream, reader, events, client);
+        return;
+    }
     let hello = match wire::read::<ToDaemon>(&mut reader) {
         Ok(Some(ToDaemon::Hello(hello))) => hello,
         _ => return,

@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 10;
+pub const MINOR: u16 = 11;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -709,6 +709,27 @@ pub enum ToDaemon {
         title: String,
         body: String,
     },
+    /// Answered with `Synced` once every request before it is handled, so a
+    /// request with no answer of its own can tell it was not refused.
+    /// Since minor 11.
+    Sync {
+        token: u64,
+    },
+    /// Input for one pane, through the same queue as a client's keys and
+    /// pastes. Since minor 11.
+    SendToPane {
+        pane: u64,
+        input: Vec<InputEvent>,
+    },
+    /// Sends `Workspace` for any workspace. Since minor 11.
+    WorkspaceInfo {
+        workspace: u64,
+    },
+    /// Shows a tab in the interactive client that last had input, or in
+    /// this one. Since minor 11.
+    ShowTab {
+        tab: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -838,6 +859,11 @@ pub enum FromDaemon {
     CheckEnded(CheckRun),
     /// A shipping step started in a pane, or ended. Since minor 10.
     Shipped(ShipReport),
+    /// Every request before the `Sync` with this token is handled.
+    /// Since minor 11.
+    Synced {
+        token: u64,
+    },
 }
 
 /// A worktree's checks: the user's, then the repository's.
