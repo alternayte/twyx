@@ -47,9 +47,13 @@ pub(crate) fn review(command: ReviewCommand) -> Result<()> {
             Reviewed::Yes => "reviewed",
             Reviewed::TooLarge => "too large to review",
         };
-        let hunks = file.diff.as_ref().map_or(String::new(), |diff| {
-            format!(", {} hunks left", diff.hunks.len())
-        });
+        let hunks = file
+            .diff
+            .as_ref()
+            .map_or(String::new(), |diff| match diff.hunks.len() {
+                1 => ", 1 hunk left".to_owned(),
+                count => format!(", {count} hunks left"),
+            });
         println!("  {}  {state}{hunks}", file.path);
     }
     Ok(())
