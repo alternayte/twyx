@@ -5,6 +5,7 @@ processes = ["claude"]
 command = ["claude"]
 launch_with_prompt = ["claude", "{prompt}"]
 resume = ["claude", "--resume", "{session}"]
+integration = "claude-code"
 
 [[screen]]
 name = "permission dialog"

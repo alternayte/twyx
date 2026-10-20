@@ -224,7 +224,12 @@ impl Workspaces {
                     .requests
                     .push(ToDaemon::TrustSetup { worktree, hash });
             }
-            Purpose::NewWorktree { .. } => {}
+            Purpose::Resume { this, all } => {
+                effect.requests.push(ToDaemon::Resume {
+                    panes: if key == 'a' { all } else { vec![this] },
+                });
+            }
+            Purpose::NewWorktree { .. } | Purpose::Integrations => {}
         }
         effect
     }

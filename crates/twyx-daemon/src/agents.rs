@@ -6,43 +6,97 @@
 //! strongest source with an observation decides the state, so a weaker source
 //! never overrides a stronger one. Nothing here runs on a timer: output
 //! silence leaves the state as it is.
+//!
+//! A key the user sends to the pane removes the integration's observation:
+//! the user answered or interrupted what it last reported, and an agent's
+//! hooks do not always say so. The screen and terminal decide until the
+//! integration reports again.
+//!
+//! Each session has a database row. The session that runs when its pane
+//! ends stays open there, with the agent's own session reference, so the
+//! pane can offer Resume after a host restart.
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use twyx_core::agent::{AgentState, Source};
 use twyx_core::pane::PaneId;
-use twyx_protocol::client::{AgentEvent, AgentInfo};
+use twyx_protocol::client::{AgentEvent, AgentInfo, PaneState};
 use twyx_protocol::holder::{AgentRules, PromptMark, ScreenMatch, ToHolder};
 
 use crate::daemon::Daemon;
+use crate::store::SavedAgent;
 
 /// What the daemon knows of a pane's foreground process and agent.
 #[derive(Debug, Default)]
 pub(crate) struct PaneAgent {
     foreground: Option<u32>,
     pub session: Option<Session>,
+    /// The session that ran when the pane ended; Resume continues it.
+    pub ended: Option<Session>,
+    /// For a resumed pane: the kind and reference its next session of that
+    /// kind continues.
+    resumed: Option<(String, String)>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Session {
     pub kind: String,
+    /// Its `agent_sessions` row, if the database took it.
+    row: Option<i64>,
     /// The process the agent runs as; the session ends when it is gone.
     pid: Option<u32>,
     observed: BTreeMap<Source, (AgentState, u64)>,
-    reference: Option<String>,
+    pub reference: Option<String>,
+}
+
+impl PaneAgent {
+    /// A new pane's agent state, when the pane resumes `kind`'s session
+    /// `reference`.
+    pub fn resuming(kind: String, reference: String) -> Self {
+        Self {
+            resumed: Some((kind, reference)),
+            ..Self::default()
+        }
+    }
 }
 
 impl Session {
     fn new(kind: String, pid: Option<u32>) -> Self {
         let mut session = Self {
             kind,
+            row: None,
             pid,
             observed: BTreeMap::new(),
             reference: None,
         };
         session.observe(Source::Process, AgentState::Unknown);
         session
+    }
+
+    /// A session as the last daemon wrote it.
+    pub fn saved(saved: SavedAgent) -> Self {
+        let mut session = Self::new(saved.kind, saved.pid);
+        session.row = Some(saved.row);
+        session.reference = saved.reference;
+        session
+            .observed
+            .insert(saved.source, (saved.state, saved.observed_ms));
+        session
+    }
+
+    /// The row to write, if the session has one.
+    pub fn to_saved(&self) -> Option<SavedAgent> {
+        let info = self.info();
+        Some(SavedAgent {
+            row: self.row?,
+            kind: self.kind.clone(),
+            reference: self.reference.clone(),
+            state: info.state,
+            source: info.source,
+            observed_ms: info.observed_ms,
+            pid: self.pid,
+        })
     }
 
     fn observe(&mut self, source: Source, state: AgentState) {
@@ -91,7 +145,7 @@ impl Daemon {
                 false
             }
             (_, Some(kind)) => {
-                entry.agent.session = Some(Session::new(kind, Some(pid)));
+                self.begin(pane, kind, Some(pid));
                 true
             }
             // The agent ran a program in the foreground, or it ended.
@@ -109,14 +163,107 @@ impl Daemon {
         self.broadcast_pane(pane);
     }
 
+    /// Starts a session in the pane, ending the one there. A resumed pane's
+    /// session continues the agent's session it resumed.
+    fn begin(&mut self, pane: PaneId, kind: String, pid: Option<u32>) {
+        let row = match self.store.start_agent(pane, &kind) {
+            Ok(row) => Some(row),
+            Err(error) => {
+                eprintln!("twyx daemon: {error:#}");
+                None
+            }
+        };
+        let Some(entry) = self.panes.get_mut(&pane) else {
+            return;
+        };
+        let old = entry.agent.session.take();
+        let mut session = Session::new(kind, pid);
+        session.row = row;
+        if let Some((resumed, reference)) = entry.agent.resumed.take() {
+            if resumed == session.kind {
+                session.reference = Some(reference);
+            } else {
+                entry.agent.resumed = Some((resumed, reference));
+            }
+        }
+        entry.agent.session = Some(session);
+        if let Some(row) = old.and_then(|old| old.row)
+            && let Err(error) = self.store.end_agent(row)
+        {
+            eprintln!("twyx daemon: {error:#}");
+        }
+    }
+
+    /// The pane ended: its session stays open for Resume.
+    pub(crate) fn pane_ended(&mut self, pane: PaneId) {
+        if let Some(entry) = self.panes.get_mut(&pane) {
+            entry.agent.ended = entry.agent.session.take();
+            entry.agent.foreground = None;
+        }
+    }
+
+    /// Brings back the sessions the last daemon wrote, once the holders that
+    /// outlived it are adopted. A running pane whose agent is gone ends its
+    /// session; an ended pane keeps it for Resume.
+    pub(crate) fn restore_agents(&mut self, saved: Vec<(PaneId, SavedAgent)>) {
+        for (pane, agent) in saved {
+            let Some(entry) = self.panes.get_mut(&pane) else {
+                continue;
+            };
+            let row = agent.row;
+            let live = agent.pid.is_some_and(alive);
+            let session = Session::saved(agent);
+            if entry.state != PaneState::Running {
+                entry.agent.ended = Some(session);
+            } else if live {
+                entry.agent.session = Some(session);
+                self.send_rules(pane);
+            } else if let Err(error) = self.store.end_agent(row) {
+                eprintln!("twyx daemon: {error:#}");
+            }
+        }
+    }
+
+    /// The user sent the pane a key.
+    pub(crate) fn user_input(&mut self, pane: PaneId) {
+        let reported = self
+            .panes
+            .get(&pane)
+            .and_then(|entry| entry.agent.session.as_ref())
+            .is_some_and(|session| session.observed.contains_key(&Source::Integration));
+        if reported {
+            self.observe(pane, Source::Integration, None);
+        }
+    }
+
+    /// The kind an ended pane can resume, with the argv that resumes it.
+    pub(crate) fn resume_argv(&self, pane: PaneId) -> Option<(String, String, Vec<String>)> {
+        let entry = self.panes.get(&pane)?;
+        if entry.state == PaneState::Running {
+            return None;
+        }
+        let session = entry.agent.ended.as_ref()?;
+        let reference = session.reference.clone()?;
+        let argv = self.agents.get(&session.kind)?.resume(&reference)?;
+        Some((session.kind.clone(), reference, argv))
+    }
+
     /// Ends the pane's agent session, if it has one.
     pub(crate) fn end_agent(&mut self, pane: PaneId) {
         let Some(entry) = self.panes.get_mut(&pane) else {
             return;
         };
-        if entry.agent.session.take().is_none() {
+        let Some(session) = entry.agent.session.take() else {
             return;
+        };
+        if let Some(row) = session.row
+            && let Err(error) = self.store.end_agent(row)
+        {
+            eprintln!("twyx daemon: {error:#}");
         }
+        let Some(entry) = self.panes.get(&pane) else {
+            return;
+        };
         if let Some(link) = &entry.link
             && link.reads_screens()
         {
@@ -213,8 +360,11 @@ impl Daemon {
             if self.agents.get(&kind).is_none() {
                 return Err(format!("{kind:?} is not an agent kind"));
             }
-            let entry = self.panes.get_mut(&pane).ok_or("the pane is gone")?;
-            entry.agent.session = Some(Session::new(kind, entry.agent.foreground));
+            let foreground = self
+                .panes
+                .get(&pane)
+                .and_then(|entry| entry.agent.foreground);
+            self.begin(pane, kind, foreground);
             self.send_rules(pane);
         }
         let Some(session) = self

@@ -208,7 +208,6 @@ impl Daemon {
         self.panes.insert(
             pane,
             Pane {
-                agent: crate::agents::PaneAgent::default(),
                 link: Some(link),
                 cols,
                 rows,
@@ -327,20 +326,40 @@ impl Daemon {
         let Some(entry) = self.panes.get(&old) else {
             return;
         };
-        if entry.state == PaneState::Running {
-            return;
-        }
         if argv(&entry.launch).is_none() {
             return;
         }
+        let launch = entry.launch.clone();
+        self.restart(id, old, launch, crate::agents::PaneAgent::default());
+    }
+
+    /// Runs an ended pane's agent kind's resume command, for the agent
+    /// session that ran when the pane ended, in the pane's leaf.
+    pub(crate) fn resume(&mut self, id: u64, old: PaneId) {
+        let Some((kind, reference, argv)) = self.resume_argv(old) else {
+            return;
+        };
+        let agent = crate::agents::PaneAgent::resuming(kind, reference);
+        self.restart(id, old, Launch::Command(argv), agent);
+    }
+
+    /// Starts `launch` in a new holder that takes an ended pane's place, its
+    /// directory, its size and its history.
+    fn restart(&mut self, id: u64, old: PaneId, launch: Launch, agent: crate::agents::PaneAgent) {
+        let Some(entry) = self.panes.get(&old) else {
+            return;
+        };
+        if entry.state == PaneState::Running {
+            return;
+        }
         let record = Pane {
-            agent: crate::agents::PaneAgent::default(),
+            agent,
             link: None,
             cols: entry.cols,
             rows: entry.rows,
             state: PaneState::Running,
             screen: None,
-            launch: entry.launch.clone(),
+            launch,
             cwd: entry.cwd.clone(),
             title: String::new(),
             history: entry.history,

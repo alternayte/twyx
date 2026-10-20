@@ -24,6 +24,7 @@ use twyx_protocol::client::{
     ToDaemon,
 };
 use twyx_protocol::holder::{ExitState, FromHolder, ToHolder};
+use twyx_protocol::input::{InputEvent, KeyKind};
 use twyx_protocol::wire;
 
 use crate::agents::Terminal;
@@ -200,8 +201,9 @@ pub fn run(paths: Paths) -> Result<()> {
             twyx_core::agent::AgentKinds::built_in()
         }),
     };
-    daemon.restore(saved);
+    let agents = daemon.restore(saved);
     daemon.adopt();
+    daemon.restore_agents(agents);
     daemon.reconcile();
     daemon.save();
     spawn_ticker(events.clone())?;
@@ -250,7 +252,9 @@ impl Daemon {
 
     /// Brings back the tabs, layouts and panes the last daemon wrote. A pane
     /// that was running shows as lost until its holder is adopted.
-    fn restore(&mut self, saved: Saved) {
+    /// Returns the agent sessions to bring back once holders are adopted.
+    fn restore(&mut self, saved: Saved) -> Vec<(PaneId, crate::store::SavedAgent)> {
+        let mut agents = Vec::new();
         self.restore_projects(saved.projects, saved.worktrees);
         for workspace in saved.workspaces {
             self.workspaces.insert(
@@ -279,7 +283,10 @@ impl Daemon {
                 },
             ));
         }
-        for pane in saved.panes {
+        for mut pane in saved.panes {
+            if let Some(agent) = pane.agent.take() {
+                agents.push((pane.id, agent));
+            }
             // Until a holder is adopted, the pane shows its history.
             let screen = history_screen(&self.paths.pane_history(pane.id), pane.cols, pane.rows);
             self.panes.insert(
@@ -304,6 +311,7 @@ impl Daemon {
                 },
             );
         }
+        agents
     }
 
     /// Takes over every holder that outlived a daemon. A holder with no
@@ -365,6 +373,7 @@ impl Daemon {
                 cols,
                 rows,
                 history: false,
+                agent: None,
             };
             if let Err(error) = self.store.new_pane(&row, Some(pane)) {
                 eprintln!("twyx daemon: {error:#}");
@@ -495,6 +504,12 @@ impl Daemon {
                     cols: pane.cols,
                     rows: pane.rows,
                     history: pane.history,
+                    agent: pane
+                        .agent
+                        .session
+                        .as_ref()
+                        .or(pane.agent.ended.as_ref())
+                        .and_then(crate::agents::Session::to_saved),
                 })
                 .collect(),
             next_leaf: self.next_leaf,
@@ -518,6 +533,7 @@ impl Daemon {
             cols: pane.cols,
             rows: pane.rows,
             history: pane.history,
+            agent: None,
         };
         self.store.new_pane(&row, None)
     }
@@ -684,12 +700,20 @@ impl Daemon {
                 if self.tab(tab).is_some_and(|tab| tab.lease != Some(id)) {
                     self.take_lease(tab, id);
                 }
+                let answers = match &event {
+                    InputEvent::Key(key) => key.kind != KeyKind::Release,
+                    InputEvent::Paste(_) => true,
+                    InputEvent::Mouse(_) | InputEvent::Focus(_) => false,
+                };
                 if let Some(pane) = self.focused_pane(id)
                     && let Some(entry) = self.panes.get(&pane)
                     && let Some(link) = &entry.link
                     && entry.state == PaneState::Running
                 {
                     link.send(ToHolder::Input(event));
+                    if answers {
+                        self.user_input(pane);
+                    }
                 }
             }
             ToDaemon::TakeLease => {
@@ -722,6 +746,11 @@ impl Daemon {
                 }
             }
             ToDaemon::RunAgain { pane } => self.run_again(id, PaneId::from_raw(pane)),
+            ToDaemon::Resume { panes } => {
+                for pane in panes {
+                    self.resume(id, PaneId::from_raw(pane));
+                }
+            }
             ToDaemon::Focus { side } => self.focus_side(id, side),
             ToDaemon::FocusLeaf { leaf } => self.focus_leaf(id, leaf),
             ToDaemon::ResizePane { side } => self.resize_pane(id, side),
@@ -990,15 +1019,14 @@ impl Daemon {
             return;
         };
         entry.state = state;
-        // Process exit always ends the agent session.
-        entry.agent.session = None;
         // The daemon has the exit status, so the holder may go.
         if let Some(link) = entry.link.take() {
             link.send(ToHolder::AckExit);
         }
-        if entry.launch == Launch::Shell
-            && let Some((tab, leaf)) = self.leaf_of(pane)
-        {
+        let shell = entry.launch == Launch::Shell;
+        // Process exit always ends the agent session.
+        self.pane_ended(pane);
+        if shell && let Some((tab, leaf)) = self.leaf_of(pane) {
             self.close_leaf(tab, leaf.id);
             return;
         }
@@ -1015,7 +1043,7 @@ impl Daemon {
         if entry.state == PaneState::Running {
             entry.state = PaneState::Lost;
             entry.link = None;
-            entry.agent.session = None;
+            self.pane_ended(pane);
             self.broadcast_pane(pane);
         }
     }
@@ -1147,6 +1175,7 @@ impl Daemon {
                 .session
                 .as_ref()
                 .map(crate::agents::Session::info),
+            resume: self.resume_argv(pane).map(|(kind, ..)| kind),
         }
     }
 

@@ -9,7 +9,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 1;
+pub const MINOR: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -62,6 +62,8 @@ pub struct PaneInfo {
     pub title: String,
     /// The agent session in the pane, if one runs. Since minor 1.
     pub agent: Option<AgentInfo>,
+    /// The agent kind an ended pane can resume. Since minor 2.
+    pub resume: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -488,6 +490,11 @@ pub enum ToDaemon {
         event: AgentEvent,
         session: Option<String>,
     },
+    /// Resumes the agent sessions of ended panes, each in a new holder in
+    /// its leaf. The client asked the user first. Since minor 2.
+    Resume {
+        panes: Vec<u64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -617,6 +624,8 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
         Command::CopyNext => ToDaemon::Copy(CopyAction::Next),
         Command::CopyPrevious => ToDaemon::Copy(CopyAction::Previous),
         Command::Detach
+        | Command::Resume
+        | Command::Integrations
         | Command::ToggleSidebar
         | Command::Switcher
         | Command::SidebarUp

@@ -234,6 +234,10 @@ pub enum Command {
     NewTab,
     ClosePane,
     RunAgain,
+    /// Resume an ended pane's agent session, after a confirmation.
+    Resume,
+    /// Offer the agent integrations again.
+    Integrations,
     Focus(Side),
     Resize(Side),
     Swap(Side),
@@ -291,6 +295,8 @@ impl Command {
             Command::NewTab => "new-tab".to_owned(),
             Command::ClosePane => "close-pane".to_owned(),
             Command::RunAgain => "run-again".to_owned(),
+            Command::Resume => "resume".to_owned(),
+            Command::Integrations => "install-integrations".to_owned(),
             Command::Focus(s) => format!("focus-{}", side(s)),
             Command::Resize(s) => format!("resize-{}", side(s)),
             Command::Swap(s) => format!("swap-{}", side(s)),
@@ -341,6 +347,8 @@ impl Command {
             Command::NewTab => "new".to_owned(),
             Command::ClosePane | Command::CloseTab => "close".to_owned(),
             Command::RunAgain => "run again".to_owned(),
+            Command::Resume => "resume".to_owned(),
+            Command::Integrations => "integrations".to_owned(),
             Command::Focus(_) => "focus".to_owned(),
             Command::Resize(_) => "resize".to_owned(),
             Command::Swap(_) => "move".to_owned(),
@@ -386,6 +394,8 @@ impl Command {
             Command::NewTab,
             Command::ClosePane,
             Command::RunAgain,
+            Command::Resume,
+            Command::Integrations,
             Command::ToggleZoom,
             Command::ToggleFloating,
             Command::NextTab,
@@ -507,6 +517,7 @@ impl Default for Keymap {
             key('z', C::ToggleZoom),
             key('x', C::ClosePane),
             key('a', C::RunAgain),
+            key('e', C::Resume),
         ];
         pane.extend(arrows(C::Focus));
 

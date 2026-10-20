@@ -456,10 +456,17 @@ impl Scene<'_> {
         let again = (info.launch != Launch::Unknown)
             .then(|| self.keys_for(Command::RunAgain))
             .flatten();
-        let words: Vec<(&str, &str)> = match &again {
-            Some(keys) => vec![("", state.as_str()), (keys.as_str(), "run again")],
-            None => vec![("", state.as_str())],
-        };
+        let resume = info
+            .resume
+            .as_ref()
+            .and_then(|kind| Some((self.keys_for(Command::Resume)?, format!("resume {kind}"))));
+        let mut words: Vec<(&str, &str)> = vec![("", state.as_str())];
+        if let Some(keys) = &again {
+            words.push((keys.as_str(), "run again"));
+        }
+        if let Some((keys, word)) = &resume {
+            words.push((keys.as_str(), word.as_str()));
+        }
         let outer = rect(placed.outer);
         let row = Rect::new(outer.x, outer.bottom().saturating_sub(1), outer.width, 1);
         if outer.height < 2 || !area.contains(row.as_position()) {
@@ -637,6 +644,7 @@ mod tests {
             cwd: "/home/n/project".to_owned(),
             title: String::new(),
             agent: None,
+            resume: None,
         }
     }
 

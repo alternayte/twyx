@@ -12,6 +12,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use twyx_core::agent::{AgentState, Source};
 use twyx_core::layout::{Layout, LeafId};
 use twyx_core::pane::PaneId;
 use twyx_protocol::client::{Launch, PaneState};
@@ -91,6 +92,20 @@ const MIGRATIONS: &[&str] = &[
         UNIQUE (project, path, content_hash)
     );
 ",
+    "
+    CREATE TABLE agent_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pane INTEGER NOT NULL REFERENCES panes(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        reference TEXT,
+        state TEXT NOT NULL,
+        source TEXT NOT NULL,
+        observed_at INTEGER NOT NULL,
+        pid INTEGER
+    );
+",
 ];
 
 #[derive(Debug)]
@@ -120,6 +135,22 @@ pub(crate) struct SavedPane {
     pub cols: u16,
     pub rows: u16,
     pub history: bool,
+    /// The agent session that ran in the pane when it was last written.
+    pub agent: Option<SavedAgent>,
+}
+
+/// One `agent_sessions` row. `ended_at` is set when the agent ends and its
+/// pane lives on; a session that ran when its pane ended keeps it empty, so
+/// it can be resumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SavedAgent {
+    pub row: i64,
+    pub kind: String,
+    pub reference: Option<String>,
+    pub state: AgentState,
+    pub source: Source,
+    pub observed_ms: u64,
+    pub pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,9 +358,47 @@ impl Store {
                     cols: row.get(9)?,
                     rows: row.get(10)?,
                     history: row.get(11)?,
+                    agent: None,
                 })
             },
         )?;
+        // A daemon that died between two sessions in one pane can leave an
+        // older one open; only the last one can still run.
+        self.db
+            .execute(
+                "UPDATE agent_sessions SET ended_at = unixepoch()
+                 WHERE ended_at IS NULL
+                   AND id NOT IN (SELECT max(id) FROM agent_sessions
+                                  WHERE ended_at IS NULL GROUP BY pane)",
+                [],
+            )
+            .context("end stale agent sessions")?;
+        let agents = self.rows(
+            "SELECT pane, id, kind, reference, state, source, observed_at, pid
+             FROM agent_sessions WHERE ended_at IS NULL",
+            |row| {
+                Ok((
+                    row.get::<_, u64>(0)?,
+                    SavedAgent {
+                        row: row.get(1)?,
+                        kind: row.get(2)?,
+                        reference: row.get(3)?,
+                        state: AgentState::from_name(&row.get::<_, String>(4)?)
+                            .unwrap_or(AgentState::Unknown),
+                        source: Source::from_name(&row.get::<_, String>(5)?)
+                            .unwrap_or(Source::Process),
+                        observed_ms: row.get(6)?,
+                        pid: row.get(7)?,
+                    },
+                ))
+            },
+        )?;
+        let mut panes = panes;
+        for (pane, agent) in agents {
+            if let Some(saved) = panes.iter_mut().find(|saved| saved.id.raw() == pane) {
+                saved.agent = Some(agent);
+            }
+        }
 
         let counter = |name: &str| {
             self.db
@@ -561,6 +630,29 @@ impl Store {
         Ok(PaneId::from_raw(self.db.last_insert_rowid() as u64))
     }
 
+    /// Starts an agent session row for a pane.
+    pub(crate) fn start_agent(&self, pane: PaneId, kind: &str) -> Result<i64> {
+        self.db
+            .execute(
+                "INSERT INTO agent_sessions (pane, kind, started_at, state, source, observed_at)
+                 VALUES (?1, ?2, unixepoch(), 'unknown', 'process', unixepoch() * 1000)",
+                params![pane.raw(), kind],
+            )
+            .context("start an agent session")?;
+        Ok(self.db.last_insert_rowid())
+    }
+
+    /// Ends an agent session whose pane lives on.
+    pub(crate) fn end_agent(&self, row: i64) -> Result<()> {
+        self.db
+            .execute(
+                "UPDATE agent_sessions SET ended_at = unixepoch() WHERE id = ?1",
+                params![row],
+            )
+            .context("end an agent session")?;
+        Ok(())
+    }
+
     /// Writes every workspace's tabs and panes: rows that are gone are
     /// deleted.
     pub(crate) fn save(&mut self, saved: &Saved) -> Result<()> {
@@ -640,6 +732,23 @@ impl Store {
                     ],
                 )
                 .context("save a pane")?;
+            if let Some(agent) = &pane.agent {
+                transaction
+                    .execute(
+                        "UPDATE agent_sessions SET reference = ?2, state = ?3, source = ?4,
+                             observed_at = ?5, pid = ?6
+                         WHERE id = ?1",
+                        params![
+                            agent.row,
+                            agent.reference,
+                            agent.state.name(),
+                            agent.source.name(),
+                            agent.observed_ms,
+                            agent.pid,
+                        ],
+                    )
+                    .context("save an agent session")?;
+            }
         }
 
         for (name, value) in [

@@ -3,6 +3,7 @@ processes = ["pi"]
 command = ["pi"]
 launch_with_prompt = ["pi", "{prompt}"]
 resume = ["pi", "--session", "{session}"]
+integration = "pi"
 
 [[screen]]
 name = "working border"

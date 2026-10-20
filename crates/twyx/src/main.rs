@@ -2,6 +2,7 @@
 //! processes.
 
 mod cli;
+mod integrations;
 mod projects;
 mod recipes;
 

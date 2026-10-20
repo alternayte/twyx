@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use toml::Spanned;
 
 use crate::config::ConfigError;
+use crate::integration::Integration;
 
 /// The rule files twyx ships, by kind name.
 const BUILT_IN: &[(&str, &str)] = &[
@@ -46,6 +47,19 @@ impl AgentState {
         }
     }
 
+    /// The state with this name, as `name` writes it.
+    pub fn from_name(name: &str) -> Option<Self> {
+        [
+            AgentState::None,
+            AgentState::Working,
+            AgentState::AwaitingApproval,
+            AgentState::AwaitingPrompt,
+            AgentState::Unknown,
+        ]
+        .into_iter()
+        .find(|state| state.name() == name)
+    }
+
     /// The states a screen rule can report.
     fn from_rule(name: &str) -> Option<Self> {
         [
@@ -72,6 +86,11 @@ pub enum Source {
 }
 
 impl Source {
+    /// The source with this name, as `name` writes it.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|source| source.name() == name)
+    }
+
     pub const ALL: [Source; 4] = [
         Source::Integration,
         Source::Screen,
@@ -142,6 +161,8 @@ pub struct AgentKind {
     resume: Option<Vec<String>>,
     /// In priority order: the first rule that matches decides.
     pub screen: Vec<ScreenRule>,
+    /// The hooks or plugin twyx can install into the agent's own config.
+    pub integration: Option<Integration>,
 }
 
 impl AgentKind {
@@ -257,6 +278,10 @@ impl AgentKinds {
         self.kinds.get(name)
     }
 
+    pub fn all(&self) -> impl Iterator<Item = &AgentKind> {
+        self.kinds.values()
+    }
+
     /// The kind whose `processes` name this process.
     pub fn by_process(&self, name: &str) -> Option<&AgentKind> {
         self.kinds
@@ -310,6 +335,7 @@ struct RawKind {
     command: Spanned<Vec<String>>,
     launch_with_prompt: Option<Spanned<Vec<String>>>,
     resume: Option<Spanned<Vec<String>>>,
+    integration: Option<Spanned<String>>,
     #[serde(default)]
     screen: Vec<Spanned<RawRule>>,
 }
@@ -355,6 +381,15 @@ fn parse(name: &str, file: &Path, text: &str) -> Result<AgentKind, ConfigError> 
     };
     let resume = match raw.resume {
         Some(argv) => Some(form(argv, SESSION, &fail)?),
+        None => None,
+    };
+    let integration = match raw.integration {
+        Some(installer) => Some(
+            installer
+                .get_ref()
+                .parse()
+                .map_err(|reason| fail(Some(installer.span()), reason))?,
+        ),
         None => None,
     };
     let mut screen = Vec::new();
@@ -404,6 +439,7 @@ fn parse(name: &str, file: &Path, text: &str) -> Result<AgentKind, ConfigError> 
         with_prompt,
         resume,
         screen,
+        integration,
     })
 }
 

@@ -16,6 +16,7 @@ portable-pty = "0.9"
 rustix = { version = "1", features = ["process"] }
 serde = "1"
 serde_json = "1"
+similar = "2"
 twyx-daemon = { workspace = true }
 twyx-core = { workspace = true }
 twyx-holder = { workspace = true }

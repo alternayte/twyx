@@ -35,7 +35,7 @@ use crate::compositor::{CHROME_ROWS, Scene, SidebarScene, tab_area};
 use crate::emitter::{Capabilities, Emitter};
 use crate::input;
 use crate::mouse::{Action, Mouse};
-use crate::overlay::{Choice, Outcome as OverlayOutcome, Overlay};
+use crate::overlay::{Choice, Outcome as OverlayOutcome, Overlay, Purpose};
 use crate::probe;
 use crate::workspace::{Effect, Workspaces};
 use twyx_protocol::connection as client;
@@ -215,7 +215,8 @@ fn run(
     known(&mut panes, &daemon.hello.panes);
     let mut dirty = true;
     let mut mouse = Mouse::default();
-    let mut overlay: Option<Overlay> = None;
+    // The first client to start offers the agent integrations.
+    let mut overlay: Option<Overlay> = crate::agents::first_run(paths);
     let mut workspaces = Workspaces::default();
     let _ = daemon.outgoing.send(ToDaemon::WatchOverview);
     // What the daemon was last told about this client's sidebar.
@@ -487,6 +488,14 @@ fn run(
                             apply!(workspaces.prompted(purpose, text));
                             None
                         }
+                        OverlayOutcome::Confirmed {
+                            purpose: Purpose::Integrations,
+                            ..
+                        } => {
+                            overlay = None;
+                            workspaces.message = Some(crate::agents::install(paths));
+                            None
+                        }
                         OverlayOutcome::Confirmed { purpose, key } => {
                             overlay = None;
                             apply!(workspaces.confirmed(purpose, key));
@@ -555,6 +564,25 @@ fn run(
                     Some(Command::Palette) => {
                         keymap.reset();
                         overlay = Some(Overlay::palette());
+                    }
+                    Some(Command::Resume) => {
+                        keymap.reset();
+                        let focused = follow.shown.and_then(|pane| panes.get(&pane));
+                        match crate::agents::resume_offer(
+                            focused,
+                            follow.workspace.as_ref(),
+                            &panes,
+                        ) {
+                            Ok(offer) => overlay = Some(offer),
+                            Err(why) => workspaces.message = Some(why),
+                        }
+                    }
+                    Some(Command::Integrations) => {
+                        keymap.reset();
+                        match crate::agents::integrations_offer(paths) {
+                            Ok(offer) => overlay = Some(offer),
+                            Err(why) => workspaces.message = Some(why),
+                        }
                     }
                     Some(Command::CopySearch) => {
                         overlay = Some(Overlay::Search(String::new()));

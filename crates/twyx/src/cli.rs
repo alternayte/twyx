@@ -82,6 +82,15 @@ enum Command {
         /// The agent's own reference to its session, for resume.
         #[arg(long)]
         session: Option<String>,
+        /// Read a JSON object from stdin and take the session reference from
+        /// this field, as a hook gets it.
+        #[arg(long, value_name = "FIELD", conflicts_with = "session")]
+        session_from_stdin: Option<String>,
+    },
+    /// Install, show and remove agent integrations.
+    Integration {
+        #[command(subcommand)]
+        command: crate::integrations::IntegrationCommand,
     },
     /// Print what the outer terminal supports.
     Doctor,
@@ -236,7 +245,15 @@ pub fn run() -> Result<()> {
             event,
             agent,
             session,
-        } => notify(event, agent, session),
+            session_from_stdin,
+        } => {
+            let session = match session_from_stdin {
+                Some(field) => from_stdin(&field)?,
+                None => session,
+            };
+            notify(event, agent, session)
+        }
+        Command::Integration { command } => crate::integrations::integration(command),
         Command::Doctor => twyx_tui::app::doctor(),
         Command::Specimen { paper } => twyx_tui::specimen::run(paper.map(|paper| match paper {
             Paper::Light => Variant::Light,
@@ -460,6 +477,17 @@ fn notify(event: NotifyEvent, agent: Option<String>, session: Option<String>) ->
         event,
         session,
     })
+}
+
+/// A string field of the JSON object on stdin.
+fn from_stdin(field: &str) -> Result<Option<String>> {
+    let value: serde_json::Value =
+        serde_json::from_reader(std::io::stdin().lock()).context("read JSON from stdin")?;
+    Ok(value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|reference| !reference.is_empty())
+        .map(str::to_owned))
 }
 
 fn agent(agent: Option<&AgentInfo>) -> String {

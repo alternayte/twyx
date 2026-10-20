@@ -27,9 +27,22 @@ pub enum Choice {
 /// What a prompt or a confirmation is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Purpose {
-    NewWorktree { project: u64 },
-    RemoveWorktree { plan: u64 },
-    TrustSetup { worktree: u64, hash: String },
+    NewWorktree {
+        project: u64,
+    },
+    RemoveWorktree {
+        plan: u64,
+    },
+    TrustSetup {
+        worktree: u64,
+        hash: String,
+    },
+    /// Resume the focused pane's agent session, or all of the workspace's.
+    Resume {
+        this: u64,
+        all: Vec<u64>,
+    },
+    Integrations,
 }
 
 /// What one key in an overlay comes to.

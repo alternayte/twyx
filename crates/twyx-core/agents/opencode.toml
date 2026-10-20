@@ -3,6 +3,7 @@ processes = ["opencode"]
 command = ["opencode"]
 launch_with_prompt = ["opencode", "--prompt", "{prompt}"]
 resume = ["opencode", "--session", "{session}"]
+integration = "opencode"
 
 [[screen]]
 name = "permission dialog"
