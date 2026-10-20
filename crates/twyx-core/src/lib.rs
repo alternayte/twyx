@@ -4,6 +4,7 @@
 //! AST, theme tokens, tuning values. No I/O beyond config parsing.
 
 pub mod agent;
+pub mod check;
 pub mod config;
 pub mod diff;
 pub mod inbox;

@@ -8,8 +8,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use sha2::{Digest, Sha256};
-
 use twyx_core::pane::PaneId;
 use twyx_core::setup::{self, Setup};
 use twyx_protocol::client::{FromDaemon, Launch, PaneState, SetupInfo, SetupReport};
@@ -36,10 +34,7 @@ struct Read {
 fn read(worktree: &Path) -> Option<Read> {
     let path = worktree.join(setup::FILE);
     let bytes = std::fs::read(&path).ok()?;
-    let hash = Sha256::digest(&bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let hash = crate::recipes::hash(&bytes);
     let setup = std::str::from_utf8(&bytes)
         .map_err(|_| format!("{}: not UTF-8", path.display()))
         .and_then(|text| setup::parse(&path, text).map_err(|error| error.to_string()));

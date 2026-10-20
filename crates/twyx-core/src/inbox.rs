@@ -13,6 +13,8 @@ pub enum Reason {
     TurnFinished,
     /// The pane exited with a non-zero code or a signal.
     Failed,
+    /// A check run ended, with any result.
+    CheckEnded,
 }
 
 impl Reason {
@@ -21,13 +23,19 @@ impl Reason {
             Reason::NeedsApproval => "needs-approval",
             Reason::TurnFinished => "turn-finished",
             Reason::Failed => "failed",
+            Reason::CheckEnded => "check-ended",
         }
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
-        [Reason::NeedsApproval, Reason::TurnFinished, Reason::Failed]
-            .into_iter()
-            .find(|reason| reason.name() == name)
+        [
+            Reason::NeedsApproval,
+            Reason::TurnFinished,
+            Reason::Failed,
+            Reason::CheckEnded,
+        ]
+        .into_iter()
+        .find(|reason| reason.name() == name)
     }
 }
 

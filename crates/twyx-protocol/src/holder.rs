@@ -10,7 +10,7 @@ use twyx_core::keys::CopyMotion;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 1;
-pub const MINOR: u16 = 3;
+pub const MINOR: u16 = 4;
 
 /// Sent by the daemon when it connects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +123,13 @@ pub enum ToHolder {
         id: u64,
         text: String,
     },
+    /// Kill the pane's whole process group with SIGKILL. Since minor 4.
+    KillGroup,
+    /// Ask for the last `lines` non-blank rows of the screen as text, for
+    /// `FromHolder::Tail`. Since minor 4.
+    Tail {
+        lines: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,4 +168,6 @@ pub enum FromHolder {
         id: u64,
         result: Result<(), String>,
     },
+    /// The rows a `Tail` asked for, one per line. Since minor 4.
+    Tail(String),
 }

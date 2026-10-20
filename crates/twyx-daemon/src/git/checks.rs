@@ -14,7 +14,10 @@ pub(crate) fn source_key(worktree: &Path) -> Result<String> {
     let git_dir = Path::new(git_dir.trim());
     let dir = git_dir.join("twyx");
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-    let copy = dir.join(format!("source.index.{}", std::process::id()));
+    // Each job thread takes its own copy.
+    let thread = format!("{:?}", std::thread::current().id());
+    let thread: String = thread.chars().filter(char::is_ascii_digit).collect();
+    let copy = dir.join(format!("source.index.{}.{thread}", std::process::id()));
     let main = git_dir.join("index");
     if main.exists() {
         std::fs::copy(&main, &copy).context("copy the index")?;

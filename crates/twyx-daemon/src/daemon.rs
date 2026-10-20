@@ -172,6 +172,10 @@ pub struct Daemon {
     /// Pastes a holder has yet to answer, by id.
     pub(crate) injections: BTreeMap<u64, crate::inject::Pending>,
     pub(crate) next_injection: u64,
+    /// Check runs without a result yet, by pane.
+    pub(crate) check_runs: BTreeMap<PaneId, crate::checks::Running>,
+    /// Checks whose source key is being taken before their pane starts.
+    pub(crate) checks_starting: std::collections::BTreeSet<(u64, String)>,
 }
 
 /// Starts the daemon and serves it until the socket closes.
@@ -218,6 +222,8 @@ pub fn run(paths: Paths) -> Result<()> {
         review_locks: BTreeMap::new(),
         injections: BTreeMap::new(),
         next_injection: 0,
+        check_runs: BTreeMap::new(),
+        checks_starting: std::collections::BTreeSet::new(),
         legacy: Vec::new(),
         config: twyx_core::config::load(&config_file).unwrap_or_else(|error| {
             eprintln!("twyx daemon: {error}");
@@ -231,6 +237,7 @@ pub fn run(paths: Paths) -> Result<()> {
     let agents = daemon.restore(saved);
     daemon.adopt();
     daemon.restore_agents(agents);
+    daemon.restore_checks();
     match daemon.store.inbox() {
         Ok(items) => {
             daemon.inbox = items
@@ -599,7 +606,10 @@ impl Daemon {
                 Event::Holder { pane, message } => self.holder_message(pane, message),
                 Event::HolderGone { pane } => self.holder_gone(pane),
                 Event::Git(done) => self.git_done(done),
-                Event::Tick => self.tick(),
+                Event::Tick => {
+                    self.tick();
+                    self.check_deadlines();
+                }
             }
             if persist {
                 self.save();
@@ -729,6 +739,11 @@ impl Daemon {
             ToDaemon::SendNotes { worktree, pane } => {
                 self.send_notes(id, worktree, PaneId::from_raw(pane));
             }
+            ToDaemon::Checks { worktree } => self.checks(id, worktree),
+            ToDaemon::RunCheck { worktree, name } => self.run_check(id, worktree, name),
+            ToDaemon::CancelCheck { worktree, name } => self.cancel_check(id, worktree, &name),
+            ToDaemon::TrustChecks { worktree, hash } => self.trust_checks(id, worktree, hash),
+            ToDaemon::ShowPane { pane } => self.show_pane(id, PaneId::from_raw(pane)),
             ToDaemon::MarkReviewed {
                 worktree,
                 path,
@@ -1100,6 +1115,7 @@ impl Daemon {
                 });
             }
             FromHolder::Injected { id, result } => self.injected(id, result),
+            FromHolder::Tail(tail) => self.check_tail(pane, tail),
             FromHolder::Unsupported { .. } | FromHolder::Pong => {}
         }
     }
@@ -1113,16 +1129,23 @@ impl Daemon {
             return;
         };
         entry.state = state;
-        // The daemon has the exit status, so the holder may go.
-        if let Some(link) = entry.link.take() {
-            link.send(ToHolder::AckExit);
-        }
+        let link = entry.link.take();
         let shell = entry.launch == Launch::Shell;
         let failed = !matches!(entry.state, PaneState::Exited { code: 0 });
         let ended = entry.state.clone();
+        let check = self.check_runs.contains_key(&pane);
+        let exit = match ended {
+            PaneState::Exited { code } => Some(code),
+            _ => None,
+        };
+        // The daemon has the exit status, so the holder may go; a check's
+        // holder first sends the output's tail.
+        if let Some(link) = self.check_exited(pane, exit, link) {
+            link.send(ToHolder::AckExit);
+        }
         // Process exit always ends the agent session.
         self.pane_ended(pane);
-        if failed && !shell {
+        if failed && !shell && !check {
             self.raise(pane, twyx_core::inbox::Reason::Failed);
         }
         self.setup_ended(pane, Some(&ended));
@@ -1144,6 +1167,7 @@ impl Daemon {
             entry.state = PaneState::Lost;
             entry.link = None;
             self.pane_ended(pane);
+            self.check_gone(pane);
             self.broadcast_pane(pane);
         }
     }

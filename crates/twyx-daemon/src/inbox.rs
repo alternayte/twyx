@@ -120,6 +120,7 @@ impl Daemon {
             Reason::NeedsApproval => "needs approval",
             Reason::TurnFinished => "is done",
             Reason::Failed => "failed",
+            Reason::CheckEnded => "",
         };
         let place = self
             .workspaces
@@ -127,7 +128,12 @@ impl Daemon {
             .map(|workspace| workspace.name.clone())
             .unwrap_or_default();
         let who = agent.unwrap_or_else(|| format!("pane {pane}"));
-        let body = plain(&format!("{who} {what} · {place}"), tuning::NOTIFY_TEXT_MAX);
+        let body = match reason {
+            // A check's pane title carries its name and result.
+            Reason::CheckEnded => format!("{} · {place}", entry.title),
+            _ => format!("{who} {what} · {place}"),
+        };
+        let body = plain(&body, tuning::NOTIFY_TEXT_MAX);
         self.post(
             &client.out,
             FromDaemon::Notify {

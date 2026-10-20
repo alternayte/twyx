@@ -4,6 +4,7 @@
 //! This crate is the only place that opens the database or runs Git.
 
 mod agents;
+mod checks;
 pub mod daemon;
 mod git;
 mod holders;

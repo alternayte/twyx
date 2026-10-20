@@ -159,6 +159,20 @@ pub(crate) enum Done {
         worktree: u64,
         note: Result<crate::store::SavedNote, String>,
     },
+    Checks {
+        client: u64,
+        info: twyx_protocol::client::ChecksInfo,
+    },
+    CheckKeyed {
+        client: u64,
+        worktree: u64,
+        check: twyx_core::check::Check,
+        key: Result<String, String>,
+    },
+    CheckEnded {
+        pane: PaneId,
+        key: Result<String, String>,
+    },
 }
 
 /// What follows a new worktree's setup.
@@ -381,6 +395,16 @@ impl Daemon {
                 worktree,
                 note,
             } => self.note_anchored(client, worktree, note),
+            Done::Checks { client, info } => {
+                self.reply(client, FromDaemon::Checks(info));
+            }
+            Done::CheckKeyed {
+                client,
+                worktree,
+                check,
+                key,
+            } => self.check_keyed(client, worktree, check, key),
+            Done::CheckEnded { pane, key } => self.end_check(pane, Some(key)),
         }
     }
 

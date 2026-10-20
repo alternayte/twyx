@@ -277,6 +277,9 @@ impl Terminal {
                         | FromDaemon::Review(_)
                         | FromDaemon::Delivered { .. }
                         | FromDaemon::Notes { .. }
+                        | FromDaemon::Checks(_)
+                        | FromDaemon::CheckStarted { .. }
+                        | FromDaemon::CheckEnded(_)
                         | FromDaemon::WorktreeAdded { .. }
                         | FromDaemon::RemovalPlan(_)
                         | FromDaemon::WorktreeRemoved { .. }

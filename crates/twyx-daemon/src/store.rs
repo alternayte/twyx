@@ -13,10 +13,11 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use twyx_core::agent::{AgentState, Source};
+use twyx_core::check::Outcome;
 use twyx_core::inbox::Reason;
 use twyx_core::layout::{Layout, LeafId};
 use twyx_core::pane::PaneId;
-use twyx_protocol::client::{Launch, NoteState, PaneState};
+use twyx_protocol::client::{CheckRun, Launch, NoteState, PaneState};
 
 /// Each entry moves the schema one version on. Never edit one; add another.
 const MIGRATIONS: &[&str] = &[
@@ -130,6 +131,24 @@ const MIGRATIONS: &[&str] = &[
         state TEXT NOT NULL,
         sent_at INTEGER
     );
+",
+    "
+    CREATE TABLE check_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        worktree INTEGER NOT NULL REFERENCES worktrees(id),
+        name TEXT NOT NULL,
+        command TEXT NOT NULL,
+        pane INTEGER REFERENCES panes(id) ON DELETE SET NULL,
+        key_before TEXT NOT NULL,
+        key_after TEXT,
+        exit INTEGER,
+        result TEXT,
+        output_tail TEXT NOT NULL DEFAULT '',
+        timeout_ms INTEGER,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER
+    );
+    CREATE INDEX check_runs_by_worktree ON check_runs (worktree, name);
 ",
 ];
 
@@ -747,6 +766,105 @@ impl Store {
     }
 
     /// The inbox items not dismissed, oldest first.
+    /// Records a check run as it starts.
+    pub(crate) fn start_check(&self, run: &CheckRun, timeout_ms: Option<u64>) -> Result<u64> {
+        self.db
+            .execute(
+                "INSERT INTO check_runs
+                     (worktree, name, command, pane, key_before, timeout_ms, started_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    run.worktree,
+                    run.name,
+                    run.command,
+                    run.pane,
+                    run.key_before,
+                    timeout_ms,
+                    run.started_ms
+                ],
+            )
+            .context("record a check run")?;
+        Ok(self.db.last_insert_rowid() as u64)
+    }
+
+    pub(crate) fn end_check(&self, id: u64, run: &CheckRun) -> Result<()> {
+        self.db
+            .execute(
+                "UPDATE check_runs SET key_after = ?2, exit = ?3, result = ?4,
+                     output_tail = ?5, ended_at = ?6
+                 WHERE id = ?1",
+                params![
+                    id,
+                    run.key_after,
+                    run.exit,
+                    run.outcome.map(Outcome::name),
+                    run.tail,
+                    run.ended_ms
+                ],
+            )
+            .context("record a check result")?;
+        Ok(())
+    }
+
+    /// The last run of each check of a worktree.
+    pub(crate) fn last_checks(&self, worktree: u64) -> Result<Vec<CheckRun>> {
+        Ok(self
+            .check_runs(
+                "WHERE id IN (SELECT MAX(id) FROM check_runs WHERE worktree = ?1 GROUP BY name)",
+                params![worktree],
+            )?
+            .into_iter()
+            .map(|(_, run, _)| run)
+            .collect())
+    }
+
+    /// Runs with no result yet, with their row and timeout.
+    pub(crate) fn running_checks(&self) -> Result<Vec<(u64, CheckRun, Option<u64>)>> {
+        self.check_runs("WHERE result IS NULL", params![])
+    }
+
+    fn check_runs(
+        &self,
+        filter: &str,
+        values: impl rusqlite::Params,
+    ) -> Result<Vec<(u64, CheckRun, Option<u64>)>> {
+        let sql = format!(
+            "SELECT id, worktree, name, command, pane, key_before, key_after, exit, result,
+                 output_tail, started_at, ended_at, timeout_ms
+             FROM check_runs {filter} ORDER BY id"
+        );
+        let mut statement = self
+            .db
+            .prepare(&sql)
+            .with_context(|| format!("read: {sql}"))?;
+        statement
+            .query_map(values, |row| {
+                Ok((
+                    row.get(0)?,
+                    CheckRun {
+                        worktree: row.get(1)?,
+                        name: row.get(2)?,
+                        command: row.get(3)?,
+                        pane: row.get(4)?,
+                        key_before: row.get(5)?,
+                        key_after: row.get(6)?,
+                        exit: row.get(7)?,
+                        outcome: row
+                            .get::<_, Option<String>>(8)?
+                            .and_then(|name| Outcome::from_name(&name)),
+                        tail: row.get(9)?,
+                        started_ms: row.get(10)?,
+                        ended_ms: row.get(11)?,
+                        stale: false,
+                    },
+                    row.get(12)?,
+                ))
+            })
+            .with_context(|| format!("read: {sql}"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .with_context(|| format!("read: {sql}"))
+    }
+
     pub(crate) fn inbox(&self) -> Result<Vec<SavedItem>> {
         self.rows(
             "SELECT id, pane, kind, created_at, read_at IS NOT NULL FROM inbox_items

@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 8;
+pub const MINOR: u16 = 9;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -625,6 +625,32 @@ pub enum ToDaemon {
         worktree: u64,
         pane: u64,
     },
+    /// Sends the worktree's `Checks`. Since minor 9.
+    Checks {
+        worktree: u64,
+    },
+    /// Starts a run of a check in the worktree, as a pane without a leaf.
+    /// Since minor 9.
+    RunCheck {
+        worktree: u64,
+        name: String,
+    },
+    /// Stops a running check; its result is `cancelled`. Since minor 9.
+    CancelCheck {
+        worktree: u64,
+        name: String,
+    },
+    /// Trusts the worktree's repository check file at the hash the user
+    /// saw, then sends the `Checks`. Since minor 9.
+    TrustChecks {
+        worktree: u64,
+        hash: String,
+    },
+    /// Shows a pane in a leaf: its own, or a new tab's for a pane without
+    /// one, such as a check run. Since minor 9.
+    ShowPane {
+        pane: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -742,6 +768,71 @@ pub enum FromDaemon {
         worktree: u64,
         notes: Vec<NoteInfo>,
     },
+    /// A worktree's checks and their last runs. Since minor 9.
+    Checks(ChecksInfo),
+    /// A check run started in `pane`. Since minor 9.
+    CheckStarted {
+        worktree: u64,
+        name: String,
+        pane: u64,
+    },
+    /// A check run ended; every client gets it. Since minor 9.
+    CheckEnded(CheckRun),
+}
+
+/// A worktree's checks: the user's, then the repository's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChecksInfo {
+    pub worktree: u64,
+    /// The worktree's source key now; `None` when Git could not make it.
+    pub key: Option<String>,
+    pub checks: Vec<CheckInfo>,
+    /// The repository check file, when the worktree has one.
+    pub file: Option<CheckFile>,
+    /// Why the source key could not be made.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckInfo {
+    pub check: twyx_core::check::Check,
+    /// From the repository check file, not the user's config.
+    pub repository: bool,
+    /// The last run, running or ended.
+    pub run: Option<CheckRun>,
+}
+
+/// The repository check file, for the trust prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckFile {
+    /// Relative to the worktree.
+    pub path: String,
+    /// The SHA-256 of the content shown here.
+    pub hash: String,
+    pub trusted: bool,
+    /// Why the file could not be read; its checks do not run.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckRun {
+    pub worktree: u64,
+    pub name: String,
+    pub command: String,
+    /// The run's pane, while twyx keeps it.
+    pub pane: Option<u64>,
+    /// `None` while it runs.
+    pub outcome: Option<twyx_core::check::Outcome>,
+    /// `None` for a signal, or while it runs.
+    pub exit: Option<u32>,
+    pub key_before: String,
+    pub key_after: Option<String>,
+    /// The last lines of its output.
+    pub tail: String,
+    pub started_ms: u64,
+    pub ended_ms: Option<u64>,
+    /// The worktree's source key moved on from the one it ran on.
+    pub stale: bool,
 }
 
 /// The request a keymap command makes of the daemon, for a client whose

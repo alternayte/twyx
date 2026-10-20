@@ -28,6 +28,8 @@ pub struct Config {
     pub default_agent: Option<String>,
     /// `[notifications]`: what each kind of inbox item does.
     pub notifications: Notifications,
+    /// `[[check]]`: the user's checks, for every worktree.
+    pub checks: Vec<crate::check::Check>,
 }
 
 /// What an inbox item of one kind does.
@@ -48,6 +50,7 @@ pub struct Notifications {
     pub needs_approval: Notice,
     pub turn_finished: Notice,
     pub failed: Notice,
+    pub check_ended: Notice,
     /// A sound file the desktop client plays in place of its own.
     pub sound: Option<String>,
 }
@@ -58,6 +61,7 @@ impl Default for Notifications {
             needs_approval: Notice::Sound,
             turn_finished: Notice::Notify,
             failed: Notice::Notify,
+            check_ended: Notice::Notify,
             sound: None,
         }
     }
@@ -69,6 +73,7 @@ impl Notifications {
             Reason::NeedsApproval => self.needs_approval,
             Reason::TurnFinished => self.turn_finished,
             Reason::Failed => self.failed,
+            Reason::CheckEnded => self.check_ended,
         }
     }
 }
@@ -83,6 +88,7 @@ impl Default for Config {
             branch_prefix: None,
             default_agent: None,
             notifications: Notifications::default(),
+            checks: Vec::new(),
         }
     }
 }
@@ -137,6 +143,8 @@ struct Raw {
     worktrees: Option<RawWorktrees>,
     agents: Option<RawAgents>,
     notifications: Option<RawNotifications>,
+    #[serde(default)]
+    check: Vec<crate::check::RawCheck>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,6 +153,7 @@ struct RawNotifications {
     needs_approval: Option<Spanned<String>>,
     turn_finished: Option<Spanned<String>>,
     failed: Option<Spanned<String>>,
+    check_ended: Option<Spanned<String>>,
     sound: Option<String>,
 }
 
@@ -304,9 +313,11 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
             )?,
             turn_finished: notice(raw_notifications.turn_finished, notifications.turn_finished)?,
             failed: notice(raw_notifications.failed, notifications.failed)?,
+            check_ended: notice(raw_notifications.check_ended, notifications.check_ended)?,
             sound: raw_notifications.sound,
         };
     }
+    let checks = crate::check::read(raw.check, fail)?;
     let mut keymap = Keymap::default();
     let Some(keys) = raw.keys else {
         return Ok(Config {
@@ -317,6 +328,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
             branch_prefix,
             default_agent,
             notifications,
+            checks,
         });
     };
     if let Some(prefix) = keys.prefix {
@@ -366,6 +378,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         branch_prefix,
         default_agent,
         notifications,
+        checks,
     })
 }
 

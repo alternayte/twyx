@@ -393,7 +393,10 @@ fn run(
                 | FromDaemon::WorktreeRemoved { .. }
                 | FromDaemon::SetupFile(_)
                 | FromDaemon::SetupTrusted { .. }
-                | FromDaemon::SetupDone { .. }) => apply!(workspaces.answer(&answer)),
+                | FromDaemon::SetupDone { .. }
+                | FromDaemon::Checks(_)
+                | FromDaemon::CheckStarted { .. }
+                | FromDaemon::CheckEnded(_)) => apply!(workspaces.answer(&answer)),
             }
         }
 

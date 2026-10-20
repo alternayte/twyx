@@ -9,8 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use twyx_core::check::Outcome;
 use twyx_protocol::client::{
-    FromDaemon, Overview, Place, RemovalPlan, ReviewInfo, Reviewed, SetupReport, ToDaemon,
+    CheckRun, ChecksInfo, FromDaemon, Overview, Place, RemovalPlan, ReviewInfo, Reviewed,
+    SetupReport, ToDaemon,
 };
 
 use support::{Client, Sandbox, new_pane_at, sh};
@@ -833,4 +835,174 @@ fn invariant_5_a_prompt_is_pasted_only_at_a_trusted_prompt_with_bracketed_paste_
         .is_empty(),
         "a pane with bracketed paste off got the text"
     );
+}
+
+fn run_check(client: &mut Client, worktree: u64, name: &str) -> CheckRun {
+    client
+        .send(&ToDaemon::RunCheck {
+            worktree,
+            name: name.to_owned(),
+        })
+        .unwrap();
+    client.expect("the check's end", |message| match message {
+        FromDaemon::CheckEnded(run) if run.name == name => Some(run.clone()),
+        _ => None,
+    })
+}
+
+fn checks(client: &mut Client, worktree: u64) -> ChecksInfo {
+    client.send(&ToDaemon::Checks { worktree }).unwrap();
+    client.expect("the checks", |message| match message {
+        FromDaemon::Checks(info) => Some(info.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn invariant_11_a_check_passes_or_fails_only_on_an_unchanged_source_key() {
+    let mut sandbox = Sandbox::new("checks");
+    std::fs::create_dir_all(sandbox.root.join("config/twyx")).unwrap();
+    std::fs::write(
+        sandbox.root.join("config/twyx/config.toml"),
+        r#"
+[[check]]
+name = "pass"
+command = "true"
+
+[[check]]
+name = "fail"
+command = "echo broken; exit 3"
+
+[[check]]
+name = "edits"
+command = "echo new > edited.txt"
+
+[[check]]
+name = "slow"
+command = "sleep 30 & echo $! > ../slow.pid; wait"
+timeout = 1
+
+[[check]]
+name = "wait"
+command = "sleep 30"
+"#,
+    )
+    .unwrap();
+    sandbox.start();
+    let main = repo(&sandbox, "app");
+    std::fs::write(main.join(".gitignore"), "target/\n").unwrap();
+    std::fs::create_dir_all(main.join(".twyx")).unwrap();
+    std::fs::write(
+        main.join(".twyx/checks.toml"),
+        "[[check]]\nname = \"repo\"\ncommand = \"touch target/ran\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(main.join("target")).unwrap();
+
+    let mut client = Client::command(&sandbox.socket());
+    open(&mut client, &main);
+    let worktree = overview(&mut client).projects[0].worktrees[0].worktree;
+
+    let pass = run_check(&mut client, worktree, "pass");
+    assert_eq!(pass.outcome, Some(Outcome::Pass));
+    assert_eq!(pass.key_after.as_ref(), Some(&pass.key_before));
+    let fail = run_check(&mut client, worktree, "fail");
+    assert_eq!((fail.outcome, fail.exit), (Some(Outcome::Fail), Some(3)));
+    assert!(fail.tail.contains("broken"), "{:?}", fail.tail);
+
+    let edits = run_check(&mut client, worktree, "edits");
+    assert_eq!(
+        edits.outcome,
+        Some(Outcome::Inconclusive),
+        "exit 0 on a changed source"
+    );
+    assert_ne!(edits.key_after.as_ref(), Some(&edits.key_before));
+
+    let started = Instant::now();
+    let slow = run_check(&mut client, worktree, "slow");
+    assert_eq!(slow.outcome, Some(Outcome::TimedOut));
+    assert!(started.elapsed() < Duration::from_secs(10));
+    let pid = std::fs::read_to_string(main.parent().unwrap().join("slow.pid")).unwrap();
+    let alive = Command::new("kill")
+        .args(["-0", pid.trim()])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(!alive, "the timeout killed the whole process group");
+
+    client
+        .send(&ToDaemon::RunCheck {
+            worktree,
+            name: "wait".to_owned(),
+        })
+        .unwrap();
+    client.expect("the start", |message| match message {
+        FromDaemon::CheckStarted { name, .. } if name == "wait" => Some(()),
+        _ => None,
+    });
+    client
+        .send(&ToDaemon::CancelCheck {
+            worktree,
+            name: "wait".to_owned(),
+        })
+        .unwrap();
+    let cancelled = client.expect("the cancel", |message| match message {
+        FromDaemon::CheckEnded(run) if run.name == "wait" => Some(run.clone()),
+        _ => None,
+    });
+    assert_eq!(cancelled.outcome, Some(Outcome::Cancelled));
+
+    // Invariant 13: the repository's check runs only once its file is trusted.
+    client
+        .send(&ToDaemon::RunCheck {
+            worktree,
+            name: "repo".to_owned(),
+        })
+        .unwrap();
+    let refused = client.expect("a refusal", |message| match message {
+        FromDaemon::Refused { reason } => Some(reason.clone()),
+        _ => None,
+    });
+    assert!(refused.contains("not trusted"), "{refused}");
+    let info = checks(&mut client, worktree);
+    let file = info.file.clone().unwrap();
+    assert!(!file.trusted);
+    assert!(
+        info.checks
+            .iter()
+            .any(|check| check.repository && check.check.name == "repo")
+    );
+    client
+        .send(&ToDaemon::TrustChecks {
+            worktree,
+            hash: file.hash,
+        })
+        .unwrap();
+    client.expect("the trusted checks", |message| match message {
+        FromDaemon::Checks(info) if info.file.as_ref().is_some_and(|file| file.trusted) => Some(()),
+        _ => None,
+    });
+    let repo_run = run_check(&mut client, worktree, "repo");
+    assert_eq!(
+        repo_run.outcome,
+        Some(Outcome::Pass),
+        "an ignored file is not source"
+    );
+
+    let info = checks(&mut client, worktree);
+    let shown = |info: &ChecksInfo, name: &str| {
+        info.checks
+            .iter()
+            .find(|check| check.check.name == name)
+            .and_then(|check| check.run.clone())
+            .unwrap()
+    };
+    assert!(!shown(&info, "repo").stale);
+    assert!(
+        shown(&info, "pass").stale,
+        "edits changed the source after pass ran"
+    );
+    std::fs::write(main.join("later.txt"), "later\n").unwrap();
+    assert!(shown(&checks(&mut client, worktree), "repo").stale);
 }

@@ -58,6 +58,8 @@ pub fn run(
     let pty = Pty::spawn(&config.spawn)?;
     let (master, child) = pty.split();
     let killer = crate::pty::killer(child.as_ref());
+    // The child leads its own session, so its pid is its process group.
+    let group = child.process_id();
 
     let input = InputQueue::start(master.writer()?)?;
     let engine = make_engine(Box::new(QueueWriter::new(input.clone())))?;
@@ -78,6 +80,7 @@ pub fn run(
         master: &master,
         input: &input,
         killer,
+        group,
         builder: FrameBuilder::new(config.spawn.cols, config.spawn.rows),
         scanner: Scanner::default(),
         watch: Watch::new(),
@@ -92,6 +95,7 @@ struct Core<'a> {
     master: &'a Master,
     input: &'a InputQueue,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    group: Option<u32>,
     builder: FrameBuilder,
     scanner: Scanner,
     watch: Watch,
@@ -295,12 +299,7 @@ impl Core<'_> {
         {
             return;
         }
-        let view = self.engine.view();
-        let rows: Vec<String> = view
-            .rows
-            .iter()
-            .map(|row| row.cells.iter().map(|cell| cell.text.as_str()).collect())
-            .collect();
+        let rows = screen_rows(&mut self.engine);
         let found = agent.read_screen(&rows).map(|rule| ScreenMatch {
             state: rule.state,
             rule: rule.name.clone(),
@@ -414,6 +413,30 @@ impl Core<'_> {
             ToHolder::Kill => {
                 let _ = self.killer.kill();
             }
+            ToHolder::KillGroup => match self
+                .group
+                .and_then(|pid| rustix::process::Pid::from_raw(i32::try_from(pid).ok()?))
+            {
+                Some(group) => {
+                    let _ =
+                        rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+                }
+                None => {
+                    let _ = self.killer.kill();
+                }
+            },
+            ToHolder::Tail { lines } => {
+                let rows = screen_rows(&mut self.engine);
+                let mut rows: Vec<&str> = rows
+                    .iter()
+                    .map(|row| row.trim_end())
+                    .rev()
+                    .skip_while(|row| row.is_empty())
+                    .take(usize::from(lines))
+                    .collect();
+                rows.reverse();
+                send(out, FromHolder::Tail(rows.join("\n")));
+            }
             ToHolder::Ping => send(out, FromHolder::Pong),
             ToHolder::Copy(action) => {
                 if let Some(text) = self.engine.copy(action) {
@@ -441,12 +464,7 @@ impl Core<'_> {
             return Err("the pane has bracketed paste off".to_owned());
         }
         if let Some(agent) = &self.watch.agent {
-            let view = self.engine.view();
-            let rows: Vec<String> = view
-                .rows
-                .iter()
-                .map(|row| row.cells.iter().map(|cell| cell.text.as_str()).collect())
-                .collect();
+            let rows = screen_rows(&mut self.engine);
             if let Some(rule) = agent
                 .read_screen(&rows)
                 .filter(|rule| rule.state == twyx_core::agent::AgentState::AwaitingApproval)
@@ -519,6 +537,15 @@ fn listen(path: &Path) -> Result<UnixListener> {
         }
     }
     UnixListener::bind(path).with_context(|| format!("bind {}", path.display()))
+}
+
+fn screen_rows(engine: &mut Engine) -> Vec<String> {
+    engine
+        .view()
+        .rows
+        .iter()
+        .map(|row| row.cells.iter().map(|cell| cell.text.as_str()).collect())
+        .collect()
 }
 
 fn spawn_reader(mut reader: Box<dyn Read + Send>, events: Sender<Event>) -> Result<()> {

@@ -224,6 +224,40 @@ impl Daemon {
         Ok(())
     }
 
+    /// Shows a pane to the client: its leaf, or for a pane without one, a
+    /// new tab in the pane's workspace.
+    pub(crate) fn show_pane(&mut self, client: u64, pane: PaneId) {
+        let Some((workspace, title)) = self
+            .panes
+            .get(&pane)
+            .map(|entry| (entry.workspace, entry.title.clone()))
+        else {
+            self.refuse(client, format!("no pane {pane}"));
+            return;
+        };
+        let leaf = match self.leaf_of(pane) {
+            Some((_, leaf)) => leaf.id,
+            None => {
+                let Some(tab) = self.add_tab(workspace, title) else {
+                    self.refuse(client, "could not record a new tab".to_owned());
+                    return;
+                };
+                let leaf = self.new_leaf(pane);
+                if let Some(entry) = self.tab_mut(tab) {
+                    entry.layout.split(None, leaf, Axis::Row);
+                    entry.focus = Some(leaf.id);
+                }
+                self.apply_size(tab);
+                leaf.id
+            }
+        };
+        if self.client_workspace(client) != workspace {
+            self.switch_for(client, workspace, true);
+        }
+        self.focus_leaf(client, leaf);
+        self.broadcast_workspace();
+    }
+
     /// Removes a leaf, ends its pane, and gives its focus to a neighbour.
     pub(crate) fn close_leaf(&mut self, tab: u64, leaf: LeafId) {
         let Some(entry) = self.tab_mut(tab) else {
@@ -259,7 +293,9 @@ impl Daemon {
         // Closing a setup pane skips the rest of the setup.
         self.setup_ended(pane, None);
         let _ = std::fs::remove_dir_all(self.paths.pane_history(pane));
-        if let Some(entry) = self.panes.remove(&pane)
+        let entry = self.panes.remove(&pane);
+        self.check_gone(pane);
+        if let Some(entry) = entry
             && let Some(link) = entry.link
         {
             if entry.state == PaneState::Running {

@@ -107,3 +107,6 @@ pub const REVIEW_FILE_MAX: u64 = 1024 * 1024;
 /// How often a shown review reads the worktree again, to catch edits that
 /// leave its Git state as it was.
 pub const REVIEW_REFRESH: Duration = Duration::from_secs(5);
+
+/// How many lines of a check run's output its result keeps.
+pub const CHECK_TAIL_LINES: u16 = 20;

@@ -106,6 +106,11 @@ impl HolderLink {
         self.minor >= 3
     }
 
+    /// Whether the holder kills a process group and reports screen tails.
+    pub(crate) fn has_groups(&self) -> bool {
+        self.minor >= 4
+    }
+
     pub(crate) fn send(&self, message: ToHolder) {
         let _ = self.out.send(message);
     }

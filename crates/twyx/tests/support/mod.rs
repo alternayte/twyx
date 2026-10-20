@@ -279,7 +279,10 @@ impl Client {
             | FromDaemon::RecipeTrusted { .. }
             | FromDaemon::SetupFile(_)
             | FromDaemon::SetupTrusted { .. }
-            | FromDaemon::SetupDone { .. } => {}
+            | FromDaemon::SetupDone { .. }
+            | FromDaemon::Checks(_)
+            | FromDaemon::CheckStarted { .. }
+            | FromDaemon::CheckEnded(_) => {}
         }
     }
 
