@@ -186,12 +186,26 @@ impl Widget for StatusBar<'_> {
             vec![(self.mode.to_uppercase(), pen.face(kind.mode))],
             vec![(self.worktree.to_owned(), pen.face(kind.label))],
             branch,
-            vec![(self.note.to_owned(), pen.face(kind.caption))],
         ]
         .into_iter()
         .filter(|field| width(field) > 0)
         .collect();
-        let left = fit(fields, &vec![(separator(), pen.rule())], room);
+        let between = vec![(separator(), pen.rule())];
+        let mut left = fit(fields, &between, room);
+        // A notice longer than the room is cut, not dropped: it may be the
+        // only word of a config error.
+        let free =
+            usize::from(room).saturating_sub(width(&left) as usize + width(&between) as usize);
+        if !self.note.is_empty() && free > 1 {
+            let note = if self.note.chars().count() > free {
+                let kept: String = self.note.chars().take(free - 1).collect();
+                format!("{kept}…")
+            } else {
+                self.note.to_owned()
+            };
+            left.extend(between);
+            left.push((note, pen.face(kind.caption)));
+        }
         let x = draw(buf, area.x + SPACE.pad, area.y, area.right(), &left);
 
         let roll_up: Vec<Field> = self

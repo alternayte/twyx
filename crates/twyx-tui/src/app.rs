@@ -46,7 +46,12 @@ use twyx_protocol::view::View;
 /// given and else the one a new client shows.
 pub fn attach(paths: &twyx_core::paths::Paths, workspace: Option<u64>) -> Result<()> {
     let config_file = paths.config.join("config.toml");
-    let config = twyx_core::config::load(&config_file)?;
+    // A bad config must not keep the user from their panes: the defaults
+    // apply, and the status bar shows the error until a reload fixes it.
+    let (config, config_error) = match twyx_core::config::load(&config_file) {
+        Ok(config) => (config, None),
+        Err(error) => (Config::default(), Some(error.to_string())),
+    };
     let (cols, rows) = clamp_size(terminal::size().context("read the terminal size")?);
     let (cols, rows) = (cols.max(2), rows.max(1 + CHROME_ROWS));
     let area = tab_area(cols, rows, false);
@@ -60,6 +65,7 @@ pub fn attach(paths: &twyx_core::paths::Paths, workspace: Option<u64>) -> Result
         &mut screen,
         config,
         &config_file,
+        config_error,
     );
     screen.stop();
     result
@@ -226,12 +232,13 @@ fn run(
     screen: &mut Screen,
     config: Config,
     config_file: &std::path::Path,
+    config_error: Option<String>,
 ) -> Result<()> {
     let mut keymap = config.keymap;
     let default_agent = config.default_agent;
     let mut watch = Watch::new(config_file);
     // The last reload's error, until a good one replaces it.
-    let mut notice: Option<String> = None;
+    let mut notice: Option<String> = config_error;
     let mut size = size;
     let mut daemon = connection.split();
     let mut follow = Follow::default();

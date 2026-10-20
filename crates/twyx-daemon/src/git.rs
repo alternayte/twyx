@@ -145,7 +145,7 @@ pub(crate) fn discover(path: &Path) -> Result<Found> {
     if !path.is_dir() {
         anyhow::bail!("{} is not a directory", path.display());
     }
-    let output = background(
+    let output = match background(
         &path,
         &[
             "rev-parse",
@@ -155,7 +155,14 @@ pub(crate) fn discover(path: &Path) -> Result<Found> {
         ],
     )
     .output()
-    .context("run git rev-parse; is Git installed?")?;
+    {
+        Ok(output) => output,
+        // Without Git, every path opens as a plain directory.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Found::Directory(path));
+        }
+        Err(error) => return Err(error).context("run git rev-parse"),
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         if stderr.contains("not a git repository") {

@@ -448,6 +448,13 @@ fn daemon(command: DaemonCommand) -> Result<()> {
             Ok(())
         }
         DaemonCommand::Status { json } => {
+            // A bad config falls back to the defaults; say so here.
+            let config = twyx_core::config::load(&paths.config.join("config.toml"))
+                .err()
+                .map(|error| error.to_string());
+            if let (false, Some(error)) = (json, &config) {
+                say!("config: {error}; the defaults apply");
+            }
             match client::connect(&paths.socket(), 80, 24, false, None) {
                 Ok(connection) => {
                     let hello = &connection.hello;
@@ -458,6 +465,7 @@ fn daemon(command: DaemonCommand) -> Result<()> {
                             "build": hello.build,
                             "panes": hello.panes.len(),
                             "legacy": hello.legacy,
+                            "config_error": config,
                         }));
                     }
                     let plural = if hello.panes.len() == 1 { "" } else { "s" };

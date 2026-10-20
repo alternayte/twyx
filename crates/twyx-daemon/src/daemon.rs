@@ -1264,6 +1264,10 @@ impl Daemon {
             self.pane_ended(pane);
             self.check_gone(pane);
             self.ship_gone(pane);
+            // A holder that went without an exit status crashed or was killed.
+            if self.panes.contains_key(&pane) {
+                self.raise(pane, twyx_core::inbox::Reason::Failed);
+            }
             self.broadcast_pane(pane);
         }
     }
