@@ -19,6 +19,12 @@ state = "awaiting-approval"
 all = ['Yes, I trust this folder', 'Enter to confirm']
 
 [[screen]]
+name = "question"
+state = "awaiting-approval"
+rows = 6
+all = ['Enter to select · ↑/↓ to navigate']
+
+[[screen]]
 name = "spinner"
 state = "working"
 above = '^❯'

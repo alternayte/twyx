@@ -1,0 +1,21 @@
+────────────────────────────────────────────────────────────────
+ ☐ Bad TTL
+
+ ACME_SESSION_TTL is set but is not a valid number of seconds
+ (for example "12h", "-5" or empty). What should login do?
+
+❯ 1. Use 12h default
+     Ignore the bad value and use 43200 seconds. The
+     misconfiguration stays silent.
+  2. Panic on read
+     Crash with a message that names the variable and the bad
+     value. The misconfiguration is visible at once.
+  3. Default + warn
+     Use 43200 seconds and print a warning to stderr.
+  4. Type something.
+────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+────────────────────────────────────────────────────────────────
