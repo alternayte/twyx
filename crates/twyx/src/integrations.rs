@@ -44,7 +44,7 @@ pub(crate) fn integration(command: IntegrationCommand) -> Result<()> {
                 let (kind, integration) = find(&kinds, name)?;
                 match integration.install(&at, &kind.name)? {
                     Some(change) => changes.push(change),
-                    None => println!("{name}: version {VERSION} is installed"),
+                    None => say!("{name}: version {VERSION} is installed"),
                 }
             }
             write(&changes, yes, "Install")
@@ -66,7 +66,7 @@ pub(crate) fn integration(command: IntegrationCommand) -> Result<()> {
                     Ok(None) => "not installed".to_owned(),
                     Err(error) => format!("{error:#}"),
                 };
-                println!("{}  {state}  ({})", kind.name, file.display());
+                say!("{}  {state}  ({})", kind.name, file.display());
             }
             Ok(())
         }
@@ -76,7 +76,7 @@ pub(crate) fn integration(command: IntegrationCommand) -> Result<()> {
                 let (_, integration) = find(&kinds, name)?;
                 match integration.remove(&at)? {
                     Some(change) => changes.push(change),
-                    None => println!("{name}: not installed"),
+                    None => say!("{name}: not installed"),
                 }
             }
             write(&changes, yes, "Write")
@@ -104,7 +104,7 @@ fn write(changes: &[Change], yes: bool, verb: &str) -> Result<()> {
         return Ok(());
     }
     for change in changes {
-        println!("{}: {}", change.path.display(), change.summary);
+        say!("{}: {}", change.path.display(), change.summary);
         let path = change.path.display().to_string();
         let before = change.before.as_deref().unwrap_or("");
         let after = change.after.as_deref().unwrap_or("");
@@ -137,7 +137,7 @@ fn write(changes: &[Change], yes: bool, verb: &str) -> Result<()> {
     }
     for change in changes {
         change.apply()?;
-        println!("wrote {}", change.path.display());
+        say!("wrote {}", change.path.display());
     }
     Ok(())
 }

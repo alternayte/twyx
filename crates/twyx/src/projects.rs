@@ -109,7 +109,7 @@ pub(crate) struct Added {
 }
 
 pub(crate) fn print_json(value: &impl Serialize) -> Result<()> {
-    println!(
+    say!(
         "{}",
         serde_json::to_string_pretty(value).context("write JSON")?
     );
@@ -171,8 +171,8 @@ pub fn open(path: &Path, no_switch: bool, json: bool) -> Result<()> {
         return twyx_tui::app::attach(&paths, Some(workspace));
     }
     match client {
-        Some(client) => println!("{} is open in client {client}", summary.name),
-        None => println!("{} is open: workspace {}", summary.name, summary.workspace),
+        Some(client) => say!("{} is open in client {client}", summary.name),
+        None => say!("{} is open: workspace {}", summary.name, summary.workspace),
     }
     Ok(())
 }
@@ -188,7 +188,7 @@ pub fn ls(json: bool) -> Result<()> {
     let home = std::env::var("HOME").unwrap_or_default();
     for project in &overview.projects {
         let kind = if project.git { "" } else { "  (directory)" };
-        println!("{}{kind}", project.name);
+        say!("{}{kind}", project.name);
         print_worktrees(&project.worktrees, &overview.workspaces, &home, "  ");
     }
     let loose: Vec<&WorkspaceSummary> = overview
@@ -197,9 +197,9 @@ pub fn ls(json: bool) -> Result<()> {
         .filter(|workspace| workspace.worktree.is_none())
         .collect();
     if !loose.is_empty() {
-        println!("workspaces");
+        say!("workspaces");
         for workspace in loose {
-            println!(
+            say!(
                 "  {}  {}  {}",
                 workspace.name,
                 tilde(&workspace.directory, &home),
@@ -265,13 +265,13 @@ fn print_worktrees(
             .and_then(|id| workspaces.iter().find(|summary| summary.workspace == id))
             .map(|summary| format!("  {}", counts(summary)))
             .unwrap_or_default();
-        println!(
+        say!(
             "{indent}{:width$}  {branch}  {}{workspace}",
             worktree.name,
             tilde(&worktree.path, home),
         );
         if let Some(error) = &worktree.error {
-            println!("{indent}  {error}");
+            say!("{indent}  {error}");
         }
     }
 }
@@ -299,7 +299,7 @@ pub fn workspace(command: WorkspaceCommand) -> Result<()> {
             }
             let home = std::env::var("HOME").unwrap_or_default();
             for workspace in &overview.workspaces {
-                println!(
+                say!(
                     "{}  {}  {}",
                     workspace.name,
                     tilde(&workspace.directory, &home),
@@ -331,8 +331,8 @@ pub fn workspace(command: WorkspaceCommand) -> Result<()> {
                 }));
             }
             match client {
-                Some(client) => println!("workspace {workspace} shows in client {client}"),
-                None => println!("no client is attached; twyx attaches to workspace {workspace}"),
+                Some(client) => say!("workspace {workspace} shows in client {client}"),
+                None => say!("no client is attached; twyx attaches to workspace {workspace}"),
             }
             Ok(())
         }
@@ -477,9 +477,10 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
                     "setup": setup,
                 }));
             }
-            println!(
+            say!(
                 "created {} at {}: workspace {workspace}",
-                worktree.name, worktree.path
+                worktree.name,
+                worktree.path
             );
             print_setup(&setup);
             if setup.untrusted && std::io::stdin().is_terminal() {
@@ -530,9 +531,9 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
                 print_plan(&plan);
                 if let (true, Some(branch)) = (delete_branch, &plan.branch) {
                     if plan.unmerged.is_empty() {
-                        println!("  The branch {branch} is deleted with git branch -d.");
+                        say!("  The branch {branch} is deleted with git branch -d.");
                     } else {
-                        println!(
+                        say!(
                             "  The branch {branch} is deleted with git branch -D, losing the {} commits not in the base above.",
                             plan.unmerged.len()
                         );
@@ -549,7 +550,7 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
                 if json {
                     return print_json(&json!({ "plan": plan, "removed": false }));
                 }
-                println!("kept {}", plan.worktree.name);
+                say!("kept {}", plan.worktree.name);
                 return Ok(());
             }
             #[derive(Deserialize)]
@@ -570,10 +571,10 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
                     "branch": branch,
                 }));
             }
-            println!("removed {}", plan.worktree.name);
+            say!("removed {}", plan.worktree.name);
             match branch {
-                Some(Ok(branch)) => println!("deleted the branch {branch}"),
-                Some(Err(error)) => println!("{error}"),
+                Some(Ok(branch)) => say!("deleted the branch {branch}"),
+                Some(Err(error)) => say!("{error}"),
                 None => {}
             }
             Ok(())
@@ -583,25 +584,25 @@ pub fn worktree(command: WorktreeCommand) -> Result<()> {
 
 fn print_setup(report: &SetupReport) {
     if !report.copied.is_empty() {
-        println!(
+        say!(
             "copied from the main worktree: {}",
             report.copied.join(", ")
         );
     }
     if !report.linked.is_empty() {
-        println!(
+        say!(
             "linked from the main worktree: {}",
             report.linked.join(", ")
         );
     }
     if let Some(pane) = report.pane {
-        println!("the setup commands run in pane {pane}");
+        say!("the setup commands run in pane {pane}");
     }
     if report.untrusted {
-        println!(".twyx/worktree.toml is not trusted, so its links and commands did not run");
+        say!(".twyx/worktree.toml is not trusted, so its links and commands did not run");
     }
     for error in &report.errors {
-        println!("setup: {error}");
+        say!("setup: {error}");
     }
 }
 
@@ -614,22 +615,22 @@ fn set_up(connection: &mut Connection, worktree: u64, yes: bool) -> Result<()> {
         if let Some(error) = &info.error {
             bail!("{error}");
         }
-        println!("{} in the worktree", info.path);
-        println!("  sha256 {}", info.hash);
+        say!("{} in the worktree", info.path);
+        say!("  sha256 {}", info.hash);
         for path in &info.shared {
-            println!("  links {path} from the main worktree");
+            say!("  links {path} from the main worktree");
         }
         for command in &info.commands {
-            println!("  runs {command}");
+            say!("  runs {command}");
         }
-        println!("Trust covers this file as it is now, not the scripts its commands run.");
+        say!("Trust covers this file as it is now, not the scripts its commands run.");
         if !yes
             && !ask(
                 "Trust it?",
                 "not trusted: run twyx worktree setup on a terminal, or pass --yes",
             )?
         {
-            println!("not trusted; nothing of it ran");
+            say!("not trusted; nothing of it ran");
             return Ok(());
         }
         let () = connection.call(
@@ -648,7 +649,7 @@ fn set_up(connection: &mut Connection, worktree: u64, yes: bool) -> Result<()> {
 
 fn print_plan(plan: &RemovalPlan) {
     let worktree = &plan.worktree;
-    println!(
+    say!(
         "Remove worktree {} ({}) at {}",
         worktree.name,
         branch_label(worktree),
@@ -659,23 +660,23 @@ fn print_plan(plan: &RemovalPlan) {
         && plan.unmerged.is_empty()
         && plan.panes.is_empty()
     {
-        println!("  It has no changes, no unpushed or unmerged commits and no live panes.");
+        say!("  It has no changes, no unpushed or unmerged commits and no live panes.");
         return;
     }
     if !plan.dirty.is_empty() {
-        println!("  Changes that are discarded:");
+        say!("  Changes that are discarded:");
         for (code, path) in &plan.dirty {
-            println!("    {code} {path}");
+            say!("    {code} {path}");
         }
     }
     if !plan.unpushed.is_empty() {
-        println!("  Commits on no remote:");
+        say!("  Commits on no remote:");
         for commit in &plan.unpushed {
-            println!("    {} {}", commit.oid, commit.subject);
+            say!("    {} {}", short(&commit.oid), commit.subject);
         }
         let more = (plan.unpushed_total as usize).saturating_sub(plan.unpushed.len());
         if more > 0 {
-            println!("    and {more} older");
+            say!("    and {more} older");
         }
     }
     if !plan.unmerged.is_empty() {
@@ -684,20 +685,20 @@ fn print_plan(plan: &RemovalPlan) {
             .as_deref()
             .map(|base| base.trim_start_matches("refs/heads/"))
             .unwrap_or("the base branch");
-        println!("  Commits not in {base}:");
+        say!("  Commits not in {base}:");
         for commit in &plan.unmerged {
-            println!("    {} {}", commit.oid, commit.subject);
+            say!("    {} {}", short(&commit.oid), commit.subject);
         }
     }
     if !plan.panes.is_empty() {
-        println!("  Live panes that are killed:");
+        say!("  Live panes that are killed:");
         for pane in &plan.panes {
             let title = if pane.title.is_empty() {
                 &pane.cwd
             } else {
                 &pane.title
             };
-            println!("    pane {}  {title}", pane.pane);
+            say!("    pane {}  {title}", pane.pane);
         }
     }
 }
@@ -716,4 +717,9 @@ pub(crate) fn ask(question: &str, without: &str) -> Result<bool> {
         .read_line(&mut answer)
         .context("read the answer")?;
     Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
+}
+
+/// A commit ID as Git shows it short.
+fn short(oid: &str) -> &str {
+    oid.get(..12).unwrap_or(oid)
 }

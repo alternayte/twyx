@@ -201,6 +201,25 @@ pub fn parse(file: &Path, text: &str) -> Result<Recipe, ConfigError> {
             Some(RawCommand::Argv(argv)) => Some(Command::Argv(argv)),
             None => None,
         };
+        let words: Vec<&String> = match &command {
+            Some(Command::Line(line)) => vec![line],
+            Some(Command::Argv(argv)) => argv.iter().collect(),
+            None => Vec::new(),
+        };
+        let hidden = words.into_iter().any(|word| crate::text::hides(word))
+            || raw_pane.dir.as_deref().is_some_and(crate::text::hides)
+            || raw_pane
+                .env
+                .iter()
+                .any(|(name, value)| crate::text::hides(name) || crate::text::hides(value));
+        if hidden {
+            return Err(fail(
+                Some(span),
+                format!(
+                    "pane {pane_name} has a control character in its command, dir or env; it could hide what runs"
+                ),
+            ));
+        }
         if raw_pane.agent && command.is_some() {
             return Err(fail(
                 Some(span),

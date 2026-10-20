@@ -1132,7 +1132,7 @@ fn staging_follows_review_hunks_and_commit_and_push_run_in_panes() {
     );
     client.send(&ToDaemon::Push { worktree }).unwrap();
     let running = shipped(&mut client, false);
-    assert_eq!(running.command, "git push --set-upstream origin main");
+    assert_eq!(running.command, "git push --set-upstream -- origin main");
     assert_eq!(shipped(&mut client, true).result, Some(Ok(())));
     assert_eq!(
         git(&main, &["rev-parse", "--abbrev-ref", "@{upstream}"]),

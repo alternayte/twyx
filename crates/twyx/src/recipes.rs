@@ -84,10 +84,10 @@ pub fn recipe(command: RecipeCommand) -> Result<()> {
                 } else {
                     ""
                 };
-                println!("{}  ({source}{shadowed})", recipe.name);
+                say!("{}  ({source}{shadowed})", recipe.name);
                 match &recipe.error {
-                    Some(error) => println!("  {error}"),
-                    None if !recipe.description.is_empty() => println!("  {}", recipe.description),
+                    Some(error) => say!("  {error}"),
+                    None if !recipe.description.is_empty() => say!("  {}", recipe.description),
                     None => {}
                 }
             }
@@ -153,11 +153,11 @@ pub fn run(
     }
     let plural = if tabs.len() == 1 { "" } else { "s" };
     match client {
-        Some(client) => println!(
+        Some(client) => say!(
             "{name} opened {} tab{plural} in workspace {workspace}, shown in client {client}",
             tabs.len()
         ),
-        None => println!(
+        None => say!(
             "{name} opened {} tab{plural} in workspace {workspace}",
             tabs.len()
         ),
@@ -178,12 +178,12 @@ fn trust(connection: &mut Connection, workspace: u64, name: &str, yes: bool) -> 
     if let Some(error) = &recipe.error {
         bail!("{error}");
     }
-    println!("Recipe {name} in {path}");
-    println!("  sha256 {hash}");
+    say!("Recipe {name} in {path}");
+    say!("  sha256 {hash}");
     if recipe.new_worktree {
-        println!("  It opens in a new worktree.");
+        say!("  It opens in a new worktree.");
     }
-    println!("  It runs:");
+    say!("  It runs:");
     let width = recipe
         .panes
         .iter()
@@ -196,15 +196,15 @@ fn trust(connection: &mut Connection, workspace: u64, name: &str, yes: bool) -> 
             (None, true) => "the default agent, else your shell".to_owned(),
             (None, false) => "your shell".to_owned(),
         };
-        println!("    {:width$}  {what}", pane.name);
+        say!("    {:width$}  {what}", pane.name);
         if let Some(dir) = &pane.dir {
-            println!("    {:width$}  in {dir}", "");
+            say!("    {:width$}  in {dir}", "");
         }
         for (key, value) in &pane.env {
-            println!("    {:width$}  with {key}={value}", "");
+            say!("    {:width$}  with {key}={value}", "");
         }
     }
-    println!("Trust covers this file as it is now, not the scripts its commands run.");
+    say!("Trust covers this file as it is now, not the scripts its commands run.");
     if !yes
         && !ask(
             "Trust it?",
@@ -221,6 +221,6 @@ fn trust(connection: &mut Connection, workspace: u64, name: &str, yes: bool) -> 
             hash: hash.clone(),
         },
     )?;
-    println!("trusted {name}");
+    say!("trusted {name}");
     Ok(())
 }

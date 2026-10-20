@@ -88,6 +88,12 @@ pub fn parse(file: &Path, text: &str) -> Result<Setup, ConfigError> {
                 "a setup command is empty".to_owned(),
             ));
         }
+        if crate::text::hides(command.get_ref()) {
+            return Err(fail(
+                Some(command.span()),
+                "a setup command has a control character; it could hide what runs".to_owned(),
+            ));
+        }
         commands.push(command.into_inner());
     }
     Ok(Setup { shared, commands })

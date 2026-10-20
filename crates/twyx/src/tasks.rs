@@ -67,14 +67,14 @@ pub(crate) fn task(command: TaskCommand) -> Result<()> {
             worktree, setup, ..
         } = serde_json::from_value(added)?;
         let path = worktree.path;
-        println!("created {path}");
+        say!("created {path}");
         if setup.untrusted {
-            println!("  its setup file is not trusted, so setup did not run: twyx worktree setup");
+            say!("  its setup file is not trusted, so setup did not run: twyx worktree setup");
         } else if setup.pane.is_some() {
-            println!("  the agent starts when setup ends with exit 0");
+            say!("  the agent starts when setup ends with exit 0");
         }
         for error in &setup.errors {
-            println!("  setup: {error}");
+            say!("  setup: {error}");
         }
     }
     Ok(())

@@ -19,5 +19,6 @@ pub mod recipe;
 pub mod setup;
 pub mod specimen;
 pub mod task;
+pub mod text;
 pub mod theme;
 pub mod tuning;

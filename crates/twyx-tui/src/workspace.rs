@@ -493,7 +493,11 @@ fn removal(plan: &RemovalPlan) -> Overlay {
         .map(|base| base.trim_start_matches("refs/heads/"))
         .unwrap_or("the base branch");
     for commit in &plan.unmerged {
-        lines.push(format!("not in {base}: {} {}", commit.oid, commit.subject));
+        lines.push(format!(
+            "not in {base}: {} {}",
+            commit.oid.get(..12).unwrap_or(&commit.oid),
+            commit.subject
+        ));
     }
     for pane in &plan.panes {
         let panes = HashMap::from([(pane.pane, pane.clone())]);

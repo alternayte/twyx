@@ -71,6 +71,8 @@ fn background(dir: &Path, args: &[&str]) -> Command {
         "-c",
         "core.fsmonitor=false",
         "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
         "core.pager=cat",
         "-c",
         "color.ui=false",
@@ -372,7 +374,7 @@ pub(crate) fn unmerged(dir: &Path, base: &str, head: &str) -> Result<Vec<Commit>
 }
 
 fn log(dir: &Path, revisions: &[&str]) -> Result<Vec<Commit>> {
-    let mut args = vec!["log", "--format=%h %s"];
+    let mut args = vec!["log", "--format=%H %s"];
     args.extend_from_slice(revisions);
     args.push("--");
     let out = run(background(dir, &args))?;

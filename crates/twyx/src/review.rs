@@ -69,7 +69,7 @@ pub(crate) fn review(command: ReviewCommand) -> Result<()> {
             if json {
                 return print_json(&serde_json::json!({ "worktree": worktree }));
             }
-            println!("review of worktree {worktree} shown");
+            say!("review of worktree {worktree} shown");
             Ok(())
         }
         ReviewCommand::Status { json } => status(&mut connection, worktree, json),
@@ -163,13 +163,13 @@ fn report(report: &ShipReport, json: bool) -> Result<()> {
         print_json(report)?;
     } else {
         if !report.command.is_empty() {
-            println!("$ {}", report.command);
+            say!("$ {}", report.command);
         }
         if let Some(pane) = report.pane {
-            println!("ran in pane {pane}");
+            say!("ran in pane {pane}");
         }
         if !report.output.is_empty() {
-            println!("{}", report.output);
+            say!("{}", report.output);
         }
     }
     match &report.result {
@@ -187,7 +187,7 @@ fn status(connection: &mut Connection, worktree: u64, json: bool) -> Result<()> 
         bail!("{error}");
     }
     let base: String = review.base.chars().take(12).collect();
-    println!("base {base} (merge-base with {})", review.base_ref);
+    say!("base {base} (merge-base with {})", review.base_ref);
     for file in &review.files {
         let state = match file.reviewed {
             Reviewed::No => "unreviewed",
@@ -208,7 +208,7 @@ fn status(connection: &mut Connection, worktree: u64, json: bool) -> Result<()> 
             IndexState::Staged => "staged",
             IndexState::Partly => "partly staged",
         };
-        println!("  {}  {state}{hunks}; {index}", file.path);
+        say!("  {}  {state}{hunks}; {index}", file.path);
     }
     Ok(())
 }

@@ -410,7 +410,7 @@ fn daemon(command: DaemonCommand) -> Result<()> {
             if json {
                 return print_json(&json!({ "pid": pid }));
             }
-            println!("daemon running, pid {pid}");
+            say!("daemon running, pid {pid}");
             Ok(())
         }
         DaemonCommand::Stop { json } => {
@@ -440,7 +440,7 @@ fn daemon(command: DaemonCommand) -> Result<()> {
             if json {
                 return print_json(&json!({ "ended": count }));
             }
-            println!(
+            say!(
                 "ended {count} legacy holder{}",
                 if count == 1 { "" } else { "s" }
             );
@@ -460,7 +460,7 @@ fn daemon(command: DaemonCommand) -> Result<()> {
                         }));
                     }
                     let plural = if hello.panes.len() == 1 { "" } else { "s" };
-                    println!(
+                    say!(
                         "running pid {} with {} pane{plural}",
                         hello.pid,
                         hello.panes.len()
@@ -469,13 +469,14 @@ fn daemon(command: DaemonCommand) -> Result<()> {
                         let pid = holder
                             .pid
                             .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string());
-                        println!(
+                        say!(
                             "legacy holder {} speaks protocol {}, pid {pid}; twyx daemon kill-legacy ends it",
-                            holder.socket, holder.major
+                            holder.socket,
+                            holder.major
                         );
                     }
                     if hello.build != twyx_protocol::BUILD_ID {
-                        println!(
+                        say!(
                             "build {}, not this build {}",
                             hello.build,
                             twyx_protocol::BUILD_ID
@@ -491,8 +492,8 @@ fn daemon(command: DaemonCommand) -> Result<()> {
                         }));
                     }
                     match unsupported {
-                        Some(unsupported) => println!("running, {unsupported}"),
-                        None => println!("stopped"),
+                        Some(unsupported) => say!("running, {unsupported}"),
+                        None => say!("stopped"),
                     }
                 }
             }
@@ -516,7 +517,7 @@ fn done(json: bool, text: &str) -> Result<()> {
     if json {
         return print_json(&Value::Null);
     }
-    println!("{text}");
+    say!("{text}");
     Ok(())
 }
 
@@ -534,7 +535,7 @@ fn tab(command: TabCommand) -> Result<()> {
             for tab in &tabs {
                 let panes = tab.layout.panes().len();
                 let name = if tab.name.is_empty() { "-" } else { &tab.name };
-                println!(
+                say!(
                     "{}  {name}  {panes} pane{}",
                     tab.tab,
                     if panes == 1 { "" } else { "s" }
@@ -555,7 +556,7 @@ fn events(kinds: Vec<String>) -> Result<()> {
     let () = connection.call("events.subscribe", &api::Subscribe { kinds })?;
     loop {
         let event = connection.event()?;
-        println!(
+        say!(
             "{}",
             serde_json::to_string(&event).context("write an event")?
         );
@@ -595,7 +596,7 @@ fn pane(command: PaneCommand) -> Result<()> {
             if json {
                 return print_json(&info);
             }
-            println!("{}", info.pane);
+            say!("{}", info.pane);
             Ok(())
         }
         PaneCommand::List { json } => {
@@ -604,11 +605,11 @@ fn pane(command: PaneCommand) -> Result<()> {
                 return print_json(&panes);
             }
             if panes.is_empty() {
-                println!("no panes");
+                say!("no panes");
                 return Ok(());
             }
             for pane in panes {
-                println!(
+                say!(
                     "{} {}x{} {}{}",
                     pane.pane,
                     pane.cols,
@@ -705,7 +706,7 @@ fn inbox(json: bool) -> Result<()> {
             Some((state, source)) => format!("{} ({})", state.name(), source.name()),
             None => "-".to_owned(),
         };
-        println!(
+        say!(
             "{}  {}  {}  {place}  pane {}  {}  {}s ago{}",
             item.item,
             item.mark.map_or(item.reason.name(), |mark| mark.word()),

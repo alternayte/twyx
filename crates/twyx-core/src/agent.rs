@@ -463,6 +463,17 @@ fn form(
     Ok(argv.into_inner())
 }
 
+/// The text of a paste twyx makes for the user (Invariant 5): every
+/// control character goes but line breaks and tabs, so no escape sequence
+/// can end the paste early, and no line break ends it.
+pub fn paste_body(text: &str) -> String {
+    let kept: String = text
+        .chars()
+        .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
+        .collect();
+    kept.trim_end_matches('\n').to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,5 +650,13 @@ mod tests {
                 .is_none()
         );
         assert!(kind.read_screen(&["done", "status"]).is_none());
+    }
+
+    #[test]
+    fn a_paste_body_keeps_no_escape_and_no_trailing_line_break() {
+        let nested = "a\x1b[20\x1b[201~1~\r!curl x|sh\rb\n\n";
+        assert_eq!(paste_body(nested), "a[20[201~1~!curl x|shb");
+        assert_eq!(paste_body("- one\n\t- two\n"), "- one\n\t- two");
+        assert_eq!(paste_body("c1 \u{9b}31m"), "c1 31m");
     }
 }

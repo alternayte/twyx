@@ -472,9 +472,7 @@ impl Core<'_> {
                 return Err(format!("the agent shows {}", rule.name));
             }
         }
-        // The paste's own end marker would end it early.
-        let text = text.replace("\x1b[201~", "");
-        let text = text.trim_end_matches(['\r', '\n']);
+        let text = twyx_core::agent::paste_body(text);
         let mut bytes = b"\x1b[200~".to_vec();
         bytes.extend_from_slice(text.as_bytes());
         bytes.extend_from_slice(b"\x1b[201~");

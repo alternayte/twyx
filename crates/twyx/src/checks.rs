@@ -57,13 +57,13 @@ pub(crate) fn check(command: CheckCommand) -> Result<()> {
                 return print_json(&info);
             }
             if let Some(file) = info.file.as_ref().filter(|file| !file.trusted) {
-                println!("{} is not trusted: twyx check trust shows it", file.path);
+                say!("{} is not trusted: twyx check trust shows it", file.path);
             }
             if let Some(error) = info.file.as_ref().and_then(|file| file.error.as_ref()) {
-                println!("{error}");
+                say!("{error}");
             }
             if info.checks.is_empty() {
-                println!("no checks: add [[check]] to config.toml or {}", check::FILE);
+                say!("no checks: add [[check]] to config.toml or {}", check::FILE);
             }
             let width = name_width(&info.checks);
             for entry in &info.checks {
@@ -75,9 +75,10 @@ pub(crate) fn check(command: CheckCommand) -> Result<()> {
                 let timeout = entry.check.timeout.map_or(String::new(), |timeout| {
                     format!(", timeout {}s", timeout.as_secs())
                 });
-                println!(
+                say!(
                     "{:width$}  {}  ({from}{timeout})",
-                    entry.check.name, entry.check.command
+                    entry.check.name,
+                    entry.check.command
                 );
             }
             Ok(())
@@ -112,7 +113,7 @@ pub(crate) fn check(command: CheckCommand) -> Result<()> {
                 if json {
                     return print_json(&serde_json::json!({ "pane": pane }));
                 }
-                println!("check {name} runs in pane {pane}");
+                say!("check {name} runs in pane {pane}");
                 return Ok(());
             }
             let run: CheckRun = connection.call(
@@ -152,14 +153,14 @@ pub(crate) fn check(command: CheckCommand) -> Result<()> {
                 return print_json(&entries);
             }
             if let Some(error) = &info.error {
-                println!("no source key, so no result shows as stale: {error}");
+                say!("no source key, so no result shows as stale: {error}");
             }
             let width = name_width(&info.checks);
             for entry in entries {
                 match &entry.run {
                     Some(run) if name.is_some() => print_run(run, true),
-                    Some(run) => println!("{:width$}  {}", entry.check.name, summary(run)),
-                    None => println!("{:width$}  never run", entry.check.name),
+                    Some(run) => say!("{:width$}  {}", entry.check.name, summary(run)),
+                    None => say!("{:width$}  never run", entry.check.name),
                 }
             }
             Ok(())
@@ -194,15 +195,15 @@ fn summary(run: &CheckRun) -> String {
 }
 
 fn print_run(run: &CheckRun, output: bool) {
-    println!("check {}: {}", run.name, summary(run));
-    println!("  {}", run.command);
+    say!("check {}: {}", run.name, summary(run));
+    say!("  {}", run.command);
     if output && !run.tail.is_empty() {
         for line in run.tail.lines() {
-            println!("  | {line}");
+            say!("  | {line}");
         }
     }
     if run.outcome.is_some() {
-        println!("{}", check::EVIDENCE);
+        say!("{}", check::EVIDENCE);
     }
 }
 
@@ -215,9 +216,9 @@ fn trust(connection: &mut Connection, info: &ChecksInfo, yes: bool) -> Result<()
     if let Some(error) = &file.error {
         bail!("{error}");
     }
-    println!("Checks in {}", file.path);
-    println!("  sha256 {}", file.hash);
-    println!("  They run, each with /bin/sh -c in the worktree:");
+    say!("Checks in {}", file.path);
+    say!("  sha256 {}", file.hash);
+    say!("  They run, each with /bin/sh -c in the worktree:");
     let repository: Vec<&CheckInfo> = info
         .checks
         .iter()
@@ -229,9 +230,9 @@ fn trust(connection: &mut Connection, info: &ChecksInfo, yes: bool) -> Result<()
         .max()
         .unwrap_or(0);
     for entry in repository {
-        println!("    {:width$}  {}", entry.check.name, entry.check.command);
+        say!("    {:width$}  {}", entry.check.name, entry.check.command);
     }
-    println!("Trust covers this file as it is now, not the scripts its commands run.");
+    say!("Trust covers this file as it is now, not the scripts its commands run.");
     if !yes
         && !ask(
             "Trust it?",
@@ -247,6 +248,6 @@ fn trust(connection: &mut Connection, info: &ChecksInfo, yes: bool) -> Result<()
             hash: file.hash.clone(),
         },
     )?;
-    println!("trusted {}", file.path);
+    say!("trusted {}", file.path);
     Ok(())
 }

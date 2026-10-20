@@ -71,7 +71,14 @@ fn shown(mut command: std::process::Command, input: Option<&str>) -> Result<Show
 }
 
 fn zero_diff(worktree: &Path, cached: bool, path: &str) -> Result<Option<FileDiff>> {
-    let mut args = vec!["diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames"];
+    let mut args = vec![
+        "diff",
+        "-U0",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+    ];
     if cached {
         args.push("--cached");
     }
@@ -207,7 +214,7 @@ pub(crate) fn push_argv(worktree: &Path) -> Result<Vec<String>> {
             ),
         });
     };
-    Ok(["git", "push", "--set-upstream", &remote, &branch]
+    Ok(["git", "push", "--set-upstream", "--", &remote, &branch]
         .map(str::to_owned)
         .to_vec())
 }
