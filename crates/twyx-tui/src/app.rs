@@ -272,6 +272,7 @@ fn run(
                 overview: workspaces.overview.as_ref(),
                 inbox: &workspaces.inbox,
                 reviews: &reviews,
+                checks: workspaces.checks.as_ref(),
                 sidebar: (workspaces.docked || keymap.mode() == Mode::Workspace).then_some(
                     SidebarScene {
                         rows: &workspaces.rows,
@@ -571,6 +572,53 @@ fn run(
                             overlay = None;
                             None
                         }
+                        OverlayOutcome::Check {
+                            worktree,
+                            name,
+                            key,
+                        } => {
+                            let run = workspaces
+                                .checks
+                                .as_ref()
+                                .filter(|info| info.worktree == worktree)
+                                .and_then(|info| {
+                                    info.checks.iter().find(|entry| entry.check.name == name)
+                                })
+                                .and_then(|entry| entry.run.as_ref());
+                            match key {
+                                'r' => {
+                                    let _ =
+                                        daemon.outgoing.send(ToDaemon::RunCheck { worktree, name });
+                                }
+                                'x' => {
+                                    let _ = daemon
+                                        .outgoing
+                                        .send(ToDaemon::CancelCheck { worktree, name });
+                                }
+                                'o' => match run.and_then(|run| run.pane) {
+                                    Some(pane) => {
+                                        overlay = None;
+                                        let _ = daemon.outgoing.send(ToDaemon::ShowPane { pane });
+                                    }
+                                    None => {
+                                        workspaces.message =
+                                            Some(format!("check {name} has no output to show"));
+                                    }
+                                },
+                                _ => match workspaces
+                                    .checks
+                                    .as_ref()
+                                    .and_then(crate::workspace::trust_checks)
+                                {
+                                    Some(prompt) => overlay = Some(prompt),
+                                    None => {
+                                        workspaces.message =
+                                            Some("no untrusted repository checks".to_owned());
+                                    }
+                                },
+                            }
+                            None
+                        }
                         OverlayOutcome::Inbox { item, dismiss } => {
                             let _ = daemon.outgoing.send(if dismiss {
                                 ToDaemon::Dismiss { item }
@@ -602,6 +650,10 @@ fn run(
                                 }
                                 Choice::Leaf(leaf) => {
                                     let _ = daemon.outgoing.send(ToDaemon::FocusLeaf { leaf });
+                                    None
+                                }
+                                Choice::Pane(pane) => {
+                                    let _ = daemon.outgoing.send(ToDaemon::ShowPane { pane });
                                     None
                                 }
                                 Choice::Go(target) => {
@@ -725,6 +777,24 @@ fn run(
                                 });
                             }
                             _ => workspaces.message = Some("not in a Git repository".to_owned()),
+                        }
+                    }
+                    Some(Command::Checks) => {
+                        keymap.reset();
+                        match follow
+                            .workspace
+                            .as_ref()
+                            .and_then(|shown| shown.worktree.as_ref())
+                            .map(|worktree| worktree.worktree)
+                        {
+                            Some(worktree) => {
+                                let _ = daemon.outgoing.send(ToDaemon::Checks { worktree });
+                                overlay = Some(Overlay::Checks {
+                                    worktree,
+                                    selected: 0,
+                                });
+                            }
+                            None => workspaces.message = Some("not in a Git worktree".to_owned()),
                         }
                     }
                     Some(Command::Inbox) => {

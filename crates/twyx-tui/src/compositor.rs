@@ -62,6 +62,8 @@ pub struct Scene<'a> {
     pub inbox: &'a [InboxItem],
     /// The reviews that review leaves show.
     pub reviews: &'a Reviews,
+    /// The checks of the worktree the checks overlay last asked for.
+    pub checks: Option<&'a twyx_protocol::client::ChecksInfo>,
     pub sidebar: Option<SidebarScene<'a>>,
 }
 
@@ -108,7 +110,7 @@ pub fn tab_area(cols: u16, rows: u16, docked: bool) -> (u16, u16) {
     )
 }
 
-impl Scene<'_> {
+impl<'a> Scene<'a> {
     fn tab_info(&self) -> Option<&TabInfo> {
         self.workspace?
             .tabs
@@ -214,6 +216,13 @@ impl Scene<'_> {
     }
 
     /// The leaf that shows a pane, in any workspace.
+    /// The checks of `worktree`, once the daemon sent them.
+    pub fn checks_of(&self, worktree: u64) -> &'a [twyx_protocol::client::CheckInfo] {
+        self.checks
+            .filter(|info| info.worktree == worktree)
+            .map_or(&[], |info| info.checks.as_slice())
+    }
+
     pub fn leaf_of(&self, pane: u64) -> Option<LeafId> {
         self.overview?
             .workspaces
@@ -788,6 +797,7 @@ mod tests {
             overview: None,
             inbox: &[],
             reviews: &Reviews::default(),
+            checks: None,
             sidebar: None,
         }
         .compose();

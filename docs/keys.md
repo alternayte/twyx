@@ -54,6 +54,7 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 | `b` | `toggle-sidebar` |
 | `i` | `inbox` |
 | `v` | `review` |
+| `e` | `checks` |
 | `h` | `focus-left` |
 | `left` | `focus-left` |
 | `j` | `focus-down` |

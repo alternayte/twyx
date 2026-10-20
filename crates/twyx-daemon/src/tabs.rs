@@ -227,18 +227,15 @@ impl Daemon {
     /// Shows a pane to the client: its leaf, or for a pane without one, a
     /// new tab in the pane's workspace.
     pub(crate) fn show_pane(&mut self, client: u64, pane: PaneId) {
-        let Some((workspace, title)) = self
-            .panes
-            .get(&pane)
-            .map(|entry| (entry.workspace, entry.title.clone()))
-        else {
+        let Some(workspace) = self.panes.get(&pane).map(|entry| entry.workspace) else {
             self.refuse(client, format!("no pane {pane}"));
             return;
         };
         let leaf = match self.leaf_of(pane) {
             Some((_, leaf)) => leaf.id,
             None => {
-                let Some(tab) = self.add_tab(workspace, title) else {
+                // An unnamed tab shows its pane's title.
+                let Some(tab) = self.add_tab(workspace, String::new()) else {
                     self.refuse(client, "could not record a new tab".to_owned());
                     return;
                 };
@@ -363,6 +360,11 @@ impl Daemon {
     /// Starts an ended pane's command in a new holder, in the same leaf and
     /// at the same size.
     pub(crate) fn run_again(&mut self, id: u64, old: PaneId) {
+        // A check's pane runs the check again, with new source keys.
+        if let Ok(Some((worktree, name))) = self.store.check_of_pane(old) {
+            self.run_check(id, worktree, name);
+            return;
+        }
         let Some(entry) = self.panes.get(&old) else {
             return;
         };

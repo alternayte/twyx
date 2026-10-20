@@ -878,6 +878,7 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
         | Command::Resume
         | Command::Integrations
         | Command::Inbox
+        | Command::Checks
         | Command::NewTask
         | Command::ToggleSidebar
         | Command::Switcher

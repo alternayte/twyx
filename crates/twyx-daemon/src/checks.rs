@@ -125,7 +125,8 @@ impl Daemon {
                 .into_iter()
                 .map(|mut info| {
                     if let (Some(run), Some(key)) = (&mut info.run, &key) {
-                        run.stale = run.outcome.is_some()
+                        // Only a pass or a fail says something about a source.
+                        run.stale = matches!(run.outcome, Some(Outcome::Pass | Outcome::Fail))
                             && run.key_after.as_ref().unwrap_or(&run.key_before) != key;
                     }
                     info
@@ -250,7 +251,7 @@ impl Daemon {
         else {
             return;
         };
-        // The last run's pane goes unless the user shows it.
+        // The last run's pane goes; a leaf that showed it shows this run.
         let last = self
             .store
             .last_checks(worktree)
@@ -259,8 +260,9 @@ impl Daemon {
             .find(|run| run.name == check.name)
             .and_then(|run| run.pane)
             .map(PaneId::from_raw);
+        let shown = last.and_then(|last| self.leaf_of(last));
         if let Some(last) = last
-            && self.leaf_of(last).is_none()
+            && shown.is_none()
             && self.panes.contains_key(&last)
         {
             self.end_pane(last);
@@ -324,6 +326,14 @@ impl Daemon {
             let _ = self.store.end_check(row, &run);
             self.refuse(client, format!("{error:#}"));
             return;
+        }
+        if let (Some(last), Some((tab, leaf))) = (last, shown) {
+            if let Some(entry) = self.tab_mut(tab) {
+                entry.layout.replace_pane(leaf.id, pane);
+            }
+            self.end_pane(last);
+            self.apply_size(tab);
+            self.broadcast_workspace();
         }
         self.check_runs.insert(
             pane,

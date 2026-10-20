@@ -20,6 +20,8 @@ pub enum Choice {
     Command(Command),
     Tab(u64),
     Leaf(LeafId),
+    /// Show a pane: its leaf, or a new tab for a pane without one.
+    Pane(u64),
     /// Show a workspace, or open a worktree that has none.
     Go(Target),
 }
@@ -53,6 +55,11 @@ pub enum Purpose {
         path: String,
         lines: (u32, u32),
     },
+    /// Trust a worktree's repository check file at this hash.
+    TrustChecks {
+        worktree: u64,
+        hash: String,
+    },
     /// Send a worktree's open notes to one of these agent panes, by digit.
     SendNotes {
         worktree: u64,
@@ -84,6 +91,13 @@ pub enum Outcome {
     Inbox {
         item: u64,
         dismiss: bool,
+    },
+    /// A key on a check: `r` runs it, `o` shows its last run, `x` cancels
+    /// it, `t` asks to trust the repository check file.
+    Check {
+        worktree: u64,
+        name: String,
+        key: char,
     },
     /// A form's values, in field order.
     Submitted {
@@ -117,6 +131,11 @@ pub enum Overlay {
     },
     /// The inbox, newest first.
     Inbox {
+        selected: usize,
+    },
+    /// A worktree's checks with their last results.
+    Checks {
+        worktree: u64,
         selected: usize,
     },
     /// Fields to fill: label and value. Tab and the arrows move, enter
@@ -253,13 +272,47 @@ impl Overlay {
                         *selected = (*selected + 1).min(items.len().saturating_sub(1));
                         Outcome::Stay
                     }
-                    (Key::Enter, _) => item
-                        .and_then(|item| scene.leaf_of(item.pane))
-                        .map_or(Outcome::Stay, |leaf| Outcome::Choose(Choice::Leaf(leaf))),
+                    (Key::Enter, _) => item.map_or(Outcome::Stay, |item| {
+                        Outcome::Choose(match scene.leaf_of(item.pane) {
+                            Some(leaf) => Choice::Leaf(leaf),
+                            None => Choice::Pane(item.pane),
+                        })
+                    }),
                     (_, Some(key @ ('u' | 'x'))) => {
                         item.map_or(Outcome::Stay, |item| Outcome::Inbox {
                             item: item.item,
                             dismiss: key == 'x',
+                        })
+                    }
+                    _ => Outcome::Stay,
+                }
+            }
+            Overlay::Checks { worktree, selected } => {
+                let checks = scene.checks_of(*worktree);
+                *selected = (*selected).min(checks.len().saturating_sub(1));
+                let name = checks.get(*selected).map(|entry| entry.check.name.clone());
+                match (chord.key, typed) {
+                    (Key::Escape, _) => Outcome::Close,
+                    (Key::Up, _) | (_, Some('k')) => {
+                        *selected = selected.saturating_sub(1);
+                        Outcome::Stay
+                    }
+                    (Key::Down, _) | (_, Some('j')) => {
+                        *selected = (*selected + 1).min(checks.len().saturating_sub(1));
+                        Outcome::Stay
+                    }
+                    (Key::Enter, _) | (_, Some('r')) => {
+                        name.map_or(Outcome::Stay, |name| Outcome::Check {
+                            worktree: *worktree,
+                            name,
+                            key: 'r',
+                        })
+                    }
+                    (_, Some(key @ ('o' | 'x' | 't'))) => {
+                        name.map_or(Outcome::Stay, |name| Outcome::Check {
+                            worktree: *worktree,
+                            name,
+                            key,
                         })
                     }
                     _ => Outcome::Stay,
@@ -340,7 +393,7 @@ impl Overlay {
                     value.push_str(&text);
                 }
             }
-            Overlay::Confirm { .. } | Overlay::Inbox { .. } => {}
+            Overlay::Confirm { .. } | Overlay::Inbox { .. } | Overlay::Checks { .. } => {}
         }
     }
 
@@ -442,6 +495,65 @@ impl Overlay {
                     pen: scene.pen,
                     title: "inbox",
                     query: "enter jump  u unread  x dismiss",
+                    entries: &entries[skip.min(entries.len())..],
+                    selected: selected - skip.min(selected),
+                }
+                .render(area, buf);
+            }
+            Overlay::Checks { worktree, selected } => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_millis() as u64);
+                let checks = scene.checks_of(*worktree);
+                let width = checks
+                    .iter()
+                    .map(|entry| entry.check.name.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                let lines: Vec<(String, String)> = checks
+                    .iter()
+                    .map(|entry| {
+                        let (result, when) = match &entry.run {
+                            None => ("never run".to_owned(), String::new()),
+                            Some(run) => match run.outcome {
+                                None => ("running".to_owned(), String::new()),
+                                Some(outcome) => (
+                                    twyx_core::check::label(outcome, run.stale),
+                                    age(now.saturating_sub(run.ended_ms.unwrap_or(now))),
+                                ),
+                            },
+                        };
+                        let name = &entry.check.name;
+                        (
+                            format!("{name:width$}  {result} · {}", entry.check.command),
+                            when,
+                        )
+                    })
+                    .collect();
+                let entries: Vec<Entry<'_>> = lines
+                    .iter()
+                    .map(|(text, kind)| Entry {
+                        text,
+                        kind,
+                        matched: &[],
+                    })
+                    .collect();
+                let room = usize::from(area.height.saturating_sub(6)).max(1);
+                let selected = (*selected).min(entries.len().saturating_sub(1));
+                let skip = selected.saturating_sub(room - 1);
+                let untrusted = scene
+                    .checks
+                    .and_then(|info| info.file.as_ref())
+                    .is_some_and(|file| !file.trusted);
+                let query = if untrusted {
+                    "enter run  o output  x cancel  t trust the repository's checks"
+                } else {
+                    "enter run  o output  x cancel"
+                };
+                Palette {
+                    pen: scene.pen,
+                    title: "checks",
+                    query,
                     entries: &entries[skip.min(entries.len())..],
                     selected: selected - skip.min(selected),
                 }

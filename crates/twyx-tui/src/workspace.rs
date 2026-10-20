@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use twyx_core::keys::Command;
 use twyx_core::layout::LeafId;
 use twyx_protocol::client::{
-    FromDaemon, InboxItem, Overview, PaneInfo, RemovalPlan, ToDaemon, WorkspaceInfo,
+    ChecksInfo, FromDaemon, InboxItem, Overview, PaneInfo, RemovalPlan, ToDaemon, WorkspaceInfo,
 };
 use twyx_protocol::sidebar::{self, Kind, Row, Target};
 
@@ -41,6 +41,8 @@ pub struct Workspaces {
     switch_to_new: bool,
     /// The worktree this client asked to set up.
     setup_for: Option<u64>,
+    /// The checks of the worktree the checks overlay last asked for.
+    pub checks: Option<ChecksInfo>,
 }
 
 impl Workspaces {
@@ -257,6 +259,11 @@ impl Workspaces {
                     });
                 }
             }
+            Purpose::TrustChecks { worktree, hash } => {
+                effect
+                    .requests
+                    .push(ToDaemon::TrustChecks { worktree, hash });
+            }
             Purpose::NewWorktree { .. }
             | Purpose::Integrations
             | Purpose::NewTask { .. }
@@ -367,6 +374,31 @@ impl Workspaces {
                     parts.join("; ")
                 });
             }
+            FromDaemon::Checks(info) => self.checks = Some(info.clone()),
+            FromDaemon::CheckStarted { worktree, name, .. } => {
+                self.message = Some(format!("check {name} runs; ctrl-g e and o show it"));
+                effect.requests.push(ToDaemon::Checks {
+                    worktree: *worktree,
+                });
+            }
+            FromDaemon::CheckEnded(run) => {
+                if let Some(outcome) = run.outcome {
+                    let mut text = format!("check {}: {}", run.name, outcome.name());
+                    if outcome == twyx_core::check::Outcome::Pass {
+                        text = format!("{text}. {}", twyx_core::check::EVIDENCE);
+                    }
+                    self.message = Some(text);
+                }
+                if self
+                    .checks
+                    .as_ref()
+                    .is_some_and(|info| info.worktree == run.worktree)
+                {
+                    effect.requests.push(ToDaemon::Checks {
+                        worktree: run.worktree,
+                    });
+                }
+            }
             FromDaemon::Refused { reason } => {
                 self.switch_to_new = false;
                 self.message = Some(reason.clone());
@@ -375,6 +407,33 @@ impl Workspaces {
         }
         effect
     }
+}
+
+/// The trust prompt for a worktree's repository check file, when it needs
+/// one.
+pub fn trust_checks(info: &ChecksInfo) -> Option<Overlay> {
+    let file = info.file.as_ref().filter(|file| !file.trusted)?;
+    let mut lines = vec![format!("{} in the worktree", file.path)];
+    lines.push(format!("sha256 {}", file.hash));
+    if let Some(error) = &file.error {
+        lines.push(error.clone());
+    }
+    lines.extend(
+        info.checks
+            .iter()
+            .filter(|entry| entry.repository)
+            .map(|entry| format!("{} runs {}", entry.check.name, entry.check.command)),
+    );
+    lines.push("Trust covers this file as it is now, not the scripts its commands run.".to_owned());
+    Some(Overlay::Confirm {
+        title: "trust the repository's checks".to_owned(),
+        lines,
+        keys: vec![('y', "trust".to_owned())],
+        purpose: Purpose::TrustChecks {
+            worktree: info.worktree,
+            hash: file.hash.clone(),
+        },
+    })
 }
 
 /// The removal prompt: what the worktree would lose, and the keys.

@@ -244,6 +244,8 @@ pub enum Command {
     NewTask,
     /// Show the review of this worktree.
     Review,
+    /// Show this worktree's checks and their results.
+    Checks,
     Focus(Side),
     Resize(Side),
     Swap(Side),
@@ -306,6 +308,7 @@ impl Command {
             Command::Inbox => "inbox".to_owned(),
             Command::NewTask => "new-task".to_owned(),
             Command::Review => "review".to_owned(),
+            Command::Checks => "checks".to_owned(),
             Command::Focus(s) => format!("focus-{}", side(s)),
             Command::Resize(s) => format!("resize-{}", side(s)),
             Command::Swap(s) => format!("swap-{}", side(s)),
@@ -361,6 +364,7 @@ impl Command {
             Command::Inbox => "inbox".to_owned(),
             Command::NewTask => "task".to_owned(),
             Command::Review => "review".to_owned(),
+            Command::Checks => "checks".to_owned(),
             Command::Focus(_) => "focus".to_owned(),
             Command::Resize(_) => "resize".to_owned(),
             Command::Swap(_) => "move".to_owned(),
@@ -411,6 +415,7 @@ impl Command {
             Command::Inbox,
             Command::NewTask,
             Command::Review,
+            Command::Checks,
             Command::ToggleZoom,
             Command::ToggleFloating,
             Command::NextTab,
@@ -522,6 +527,7 @@ impl Default for Keymap {
             key('b', C::ToggleSidebar),
             key('i', C::Inbox),
             key('v', C::Review),
+            key('e', C::Checks),
         ];
         command.extend(arrows(C::Focus));
         command.extend((1..=9).map(|n| key(char::from(b'0' + n), C::GoToTab(n))));

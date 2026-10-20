@@ -818,6 +818,18 @@ impl Store {
             .collect())
     }
 
+    /// The worktree and check whose last run `pane` ran.
+    pub(crate) fn check_of_pane(&self, pane: PaneId) -> Result<Option<(u64, String)>> {
+        self.db
+            .query_row(
+                "SELECT worktree, name FROM check_runs WHERE pane = ?1 ORDER BY id DESC LIMIT 1",
+                params![pane.raw()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .context("find a pane's check")
+    }
+
     /// Runs with no result yet, with their row and timeout.
     pub(crate) fn running_checks(&self) -> Result<Vec<(u64, CheckRun, Option<u64>)>> {
         self.check_runs("WHERE result IS NULL", params![])
