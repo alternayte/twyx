@@ -117,3 +117,8 @@ pub const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The longest clipboard write a pane can make, in characters.
 pub const CLIPBOARD_CHARS: usize = 1 << 20;
+
+/// How long a holder waits after its child exits for the pty's last
+/// output, when the pty stays open, for example while a background process
+/// of the child holds it.
+pub const EXIT_DRAIN: Duration = Duration::from_millis(250);

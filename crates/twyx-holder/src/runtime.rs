@@ -43,6 +43,8 @@ pub struct Config {
 
 enum Event {
     Output(Vec<u8>),
+    /// The pty has no more output.
+    Closed,
     Exit(ExitState),
     Attach(Hello, Sender<FromHolder>),
     Command(ToHolder, Sender<FromHolder>),
@@ -137,6 +139,9 @@ impl Core<'_> {
         let mut last_frame = Instant::now();
         let mut exited: Option<ExitState> = None;
         let mut deadline: Option<Instant> = None;
+        // The child's exit, held until the pty has given its last output.
+        let mut ending: Option<(ExitState, Instant)> = None;
+        let mut closed = false;
 
         loop {
             // A pane that ended writes no more history; its log has it all.
@@ -162,12 +167,10 @@ impl Core<'_> {
                         self.output(&bytes, &mut out);
                         dirty = true;
                     }
+                    Event::Closed => closed = true,
                     Event::Exit(state) => {
-                        if exited.is_none() {
-                            send(&mut out, FromHolder::Exited(state.clone()));
-                            exited = Some(state);
-                            deadline = Some(Instant::now() + self.config.exit_grace);
-                            dirty = true;
+                        if exited.is_none() && ending.is_none() {
+                            ending = Some((state, Instant::now() + tuning::EXIT_DRAIN));
                         }
                     }
                     Event::Attach(hello, sender) => {
@@ -208,6 +211,19 @@ impl Core<'_> {
                         }
                     }
                 }
+            }
+
+            // Output still in the pty when the child exits belongs to its
+            // final screen.
+            if ending
+                .as_ref()
+                .is_some_and(|(_, drain)| closed || Instant::now() >= *drain)
+                && let Some((state, _)) = ending.take()
+            {
+                send(&mut out, FromHolder::Exited(state.clone()));
+                exited = Some(state);
+                deadline = Some(Instant::now() + self.config.exit_grace);
+                dirty = true;
             }
 
             if exited.is_none() {
@@ -573,6 +589,7 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, events: Sender<Event>) -> Resu
                     Err(_) => break,
                 }
             }
+            let _ = events.send(Event::Closed);
         })
         .context("start the pty reader")?;
     Ok(())
