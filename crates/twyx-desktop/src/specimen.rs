@@ -12,6 +12,7 @@ use gpui::{
     App, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, KeyDownEvent, Pixels, Render,
     SharedString, TextAlign, TextRun, Window, canvas, div, fill, font, point, px, size,
 };
+use twyx_core::palette;
 use twyx_core::specimen::{AGENT, EDITOR, Run, SHELL};
 use twyx_core::theme::{AgentState, DESKTOP, Sheet, Theme, Variant};
 use twyx_protocol::grid::{Attrs, Colour};
@@ -566,7 +567,9 @@ impl Specimen {
         let width = DESKTOP.palette_width;
         let left = (f32::from(window.viewport_size().width) - width) / 2.0;
         let mut entries = div().relative().flex().flex_col();
-        for (index, (label, kind, key)) in ENTRIES.iter().enumerate() {
+        let found = palette::search(ENTRIES.iter().map(|entry| entry.0), QUERY);
+        for (index, hit) in found.iter().enumerate() {
+            let (label, kind, key) = ENTRIES[hit.index];
             let selected = index == mark.to;
             entries = entries.child(
                 div()
@@ -576,15 +579,21 @@ impl Specimen {
                     .items_center()
                     .px(px(DESKTOP.pad * 2.0))
                     .gap(px(DESKTOP.gap))
-                    .child(matched(label, QUERY, tones, selected))
+                    .child(matched(label, &hit.positions, tones, selected))
                     .child(
                         div()
-                            .flex_1()
                             .text_size(px(DESKTOP.size.caption))
                             .text_color(tones.graphite)
-                            .child(*kind),
+                            .child(kind),
                     )
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(*key)),
+                    .child(
+                        div()
+                            .w(px(DESKTOP.unit * 20.0))
+                            .flex()
+                            .justify_end()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(key),
+                    ),
             );
         }
         let entries = entries.child(
@@ -617,12 +626,13 @@ impl Specimen {
                     .border_b(px(DESKTOP.rule))
                     .border_color(tones.rule)
                     .child(div().text_color(tones.accent).child("›"))
-                    .child(div().child(QUERY))
                     .child(
-                        div()
-                            .w(px(DESKTOP.rule))
-                            .h(px(DESKTOP.size.body))
-                            .bg(tones.ink),
+                        div().flex().flex_row().items_center().child(QUERY).child(
+                            div()
+                                .w(px(DESKTOP.rule))
+                                .h(px(DESKTOP.size.body))
+                                .bg(tones.ink),
+                        ),
                     ),
             )
             .child(entries)
@@ -630,17 +640,14 @@ impl Specimen {
 }
 
 /// A label with the characters the query matched in the accent.
-fn matched(label: &str, query: &str, tones: Tones, selected: bool) -> Div {
-    let mut wanted = query.chars().peekable();
+fn matched(label: &str, positions: &[usize], tones: Tones, selected: bool) -> Div {
     let mut line = div()
+        .flex_1()
         .flex()
         .flex_row()
         .when(selected, |line| line.font_weight(FontWeight::SEMIBOLD));
-    for character in label.chars() {
-        let hit = wanted.peek() == Some(&character);
-        if hit {
-            wanted.next();
-        }
+    for (index, character) in label.chars().enumerate() {
+        let hit = positions.contains(&index);
         line = line.child(
             div()
                 .text_color(if hit { tones.accent } else { tones.ink })
@@ -868,7 +875,7 @@ fn review(tones: Tones) -> Div {
                 .px(px(DESKTOP.pad * 2.0))
                 .text_size(px(DESKTOP.size.caption))
                 .text_color(tones.graphite)
-                .child("@@ -31,7 +31,8 @@ pub fn mix(self, other: Self) -> Self"),
+                .child("@@ -31,6 +31,7 @@ pub fn mix(self, other: Self) -> Self"),
         )
         .child(
             div()
