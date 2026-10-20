@@ -4,7 +4,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
-use twyx_core::keys::{Chord, Command, Key, Mode};
+use twyx_core::keys::{Chord, Command, Key};
 use twyx_core::layout::LeafId;
 use twyx_core::palette::search;
 
@@ -642,15 +642,9 @@ fn lines(scene: &Scene<'_>, switcher: bool) -> Vec<Line> {
                         Command::Enter(_) | Command::GoToTab(_) | Command::Palette
                     )
                 })
-                .filter(|command| {
-                    Mode::BOUND.iter().any(|(mode, _)| {
-                        scene
-                            .keymap
-                            .bindings(*mode)
-                            .iter()
-                            .any(|(_, c)| c == command)
-                    }) || matches!(command, Command::RenameTab | Command::Integrations)
-                })
+                // Every command stays in reach of the keyboard, bound or not;
+                // copy motions act only inside copy mode.
+                .filter(|command| !matches!(command, Command::CopyMove(_)))
                 .map(|command| Line {
                     label: command.name().replace('-', " "),
                     kind: scene
