@@ -135,6 +135,8 @@ enum Command {
     },
     /// Print what the outer terminal supports.
     Doctor,
+    /// Print a skill file that teaches an agent to use twyx.
+    Skill,
     /// Show the theme specimen: the chrome over sample panes.
     Specimen {
         /// Paint a reference sheet instead of drawing on the terminal's own
@@ -360,6 +362,10 @@ pub fn run() -> Result<()> {
         Command::Review { command } => crate::review::review(command),
         Command::Check { command } => crate::checks::check(command),
         Command::Doctor => twyx_tui::app::doctor(),
+        Command::Skill => {
+            print!("{}", include_str!("../../../docs/skill.md"));
+            Ok(())
+        }
         Command::Specimen { paper } => twyx_tui::specimen::run(paper.map(|paper| match paper {
             Paper::Light => Variant::Light,
             Paper::Dark => Variant::Dark,
