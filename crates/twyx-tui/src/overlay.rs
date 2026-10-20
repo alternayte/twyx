@@ -332,7 +332,7 @@ fn lines(scene: &Scene<'_>, switcher: bool) -> Vec<Line> {
                             .bindings(*mode)
                             .iter()
                             .any(|(_, c)| c == command)
-                    }) || matches!(command, Command::RenameTab)
+                    }) || matches!(command, Command::RenameTab | Command::Integrations)
                 })
                 .map(|command| Line {
                     label: command.name().replace('-', " "),

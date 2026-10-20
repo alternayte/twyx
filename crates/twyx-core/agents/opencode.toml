@@ -25,5 +25,6 @@ all = ['esc interrupt']
 [[screen]]
 name = "input box"
 state = "awaiting-prompt"
-rows = 3
+# A tip can sit under the box on the start screen.
+rows = 5
 all = ['^\s*╹▀{20,}']

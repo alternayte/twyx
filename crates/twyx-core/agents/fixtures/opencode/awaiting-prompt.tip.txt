@@ -1,0 +1,41 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                     ▄
+                    █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                    █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                    ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+  ┃
+  ┃  Ask anything... "What is the tech stack of this project?"
+  ┃
+  ┃  Build · DeepSeek V4 Pro DeepSeek · max
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                 tab agents  ctrl+p commands
+
+
+
+           ● Tip Use opencode --continue to resume the last session
+
+
+
+
+
+
+
+
+
+
+  /private/tmp/twyx/oc:main                                          1.18.26
+
