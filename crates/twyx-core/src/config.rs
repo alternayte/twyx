@@ -202,9 +202,9 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         }
         None => None,
     };
+    let known = crate::agent::names_in(&file.with_file_name("agents"));
     let default_agent = match raw.agents.and_then(|agents| agents.default) {
-        Some(kind) if crate::agent::command(kind.get_ref()).is_none() => {
-            let known: Vec<&str> = crate::agent::KINDS.iter().map(|(name, _)| *name).collect();
+        Some(kind) if !known.contains(kind.get_ref()) => {
             return Err(fail(
                 Some(kind.span()),
                 format!(

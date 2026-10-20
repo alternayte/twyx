@@ -1,0 +1,30 @@
+
+  I type man and the pages open wide,
+  Dense columns of the flags that I forgot.
+  The knowledge of the elders lives inside,
+  In terse plain text that tells me what is what.
+
+  When ssh connects me far away,
+  A server in a cold room hums for me.
+  The same small prompt is there, the same display,
+  And distance falls away to what I see.
+
+  At night the tmux panes stay split and lit,
+  A log that tails, a process that still runs.
+  I close the lid, but they do not quit;
+  They wait for me like patient, quiet ones.
+
+  So let the windows bloom with all their chrome;
+  I keep this narrow place where words have weight.
+  The terminal, the cursor, and the home:
+  A tilde marks the place where I return and wait.
+
+✻ Crunched for 11s · done 1:03 PM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ➜  claude [Opus 5.5] 4%
+  ⏸ manual mode on · ← 2 agents
+
+

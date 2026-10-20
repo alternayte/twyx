@@ -1,0 +1,30 @@
+
+  >_ OpenAI Codex (v0.163.0)
+     /private/tmp/twyx/codex
+
+  To get started, describe a task or try one of these commands:
+
+  /init - create an AGENTS.md file with instructions for Codex
+  /status - show current session configuration
+  /permissions - choose what Codex is allowed to do
+  /model - choose what model and reasoning effort to use
+  /review - review any changes and find issues
+
+
+› Run the shell command `touch codex-probe.txt`. Ask for approval if the sandbox blocks it.
+
+
+  Would you like to run the following command?
+
+  Reason: this is a test reason such as one that would be produced by the model
+
+  $ echo hello world
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `echo hello world` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel
+
+

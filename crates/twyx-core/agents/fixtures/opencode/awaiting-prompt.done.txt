@@ -1,0 +1,30 @@
+     139
+     140
+     141
+     142
+     143
+     144
+     145
+     146
+     147
+     148
+     149
+     150
+
+  ┃
+  ┃  $ touch /tmp/twyx/opencode-probe.txt
+  ┃
+  ┃  (no output)
+  ┃
+
+     Done.                                                                                       ▄
+                                                                                                 █
+     ▣  Build · DeepSeek V4 Pro · 11.7s                                                          █
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · DeepSeek V4 Pro DeepSeek · max
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /private/tmp/twyx/opencode                                  14.3K (1%) · $0.01  ctrl+p commands
+

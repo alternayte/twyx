@@ -145,6 +145,8 @@ pub struct Daemon {
     pub(crate) legacy: Vec<LegacyHolder>,
     /// The last good config.
     pub(crate) config: twyx_core::config::Config,
+    /// The last good agent kinds.
+    pub(crate) agents: twyx_core::agent::AgentKinds,
     /// Messages for clients, sent once the event that made them is written,
     /// so no client sees a change a crash could still lose.
     pub(crate) outbox: RefCell<Vec<(Sender<FromDaemon>, FromDaemon)>>,
@@ -161,6 +163,7 @@ pub fn run(paths: Paths) -> Result<()> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_owned());
     let saved = store.load(&home)?;
     let config_file = paths.config.join("config.toml");
+    let agents_dir = paths.config.join("agents");
 
     let mut daemon = Daemon {
         paths,
@@ -189,6 +192,10 @@ pub fn run(paths: Paths) -> Result<()> {
         config: twyx_core::config::load(&config_file).unwrap_or_else(|error| {
             eprintln!("twyx daemon: {error}");
             twyx_core::config::Config::default()
+        }),
+        agents: twyx_core::agent::AgentKinds::load(&agents_dir).unwrap_or_else(|error| {
+            eprintln!("twyx daemon: {error}");
+            twyx_core::agent::AgentKinds::built_in()
         }),
     };
     daemon.restore(saved);
@@ -228,6 +235,17 @@ fn bind(path: &Path) -> Result<UnixListener> {
 }
 
 impl Daemon {
+    /// A changed config or agent rule file applies from the next pane; a bad
+    /// one keeps the last good.
+    pub(crate) fn reload_config(&mut self) {
+        if let Ok(config) = twyx_core::config::load(&self.paths.config.join("config.toml")) {
+            self.config = config;
+        }
+        if let Ok(agents) = twyx_core::agent::AgentKinds::load(&self.paths.config.join("agents")) {
+            self.agents = agents;
+        }
+    }
+
     /// Brings back the tabs, layouts and panes the last daemon wrote. A pane
     /// that was running shows as lost until its holder is adopted.
     fn restore(&mut self, saved: Saved) {

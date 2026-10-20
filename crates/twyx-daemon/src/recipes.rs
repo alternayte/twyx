@@ -367,9 +367,7 @@ impl Daemon {
         else {
             return Err(format!("no workspace {workspace}"));
         };
-        if let Ok(config) = twyx_core::config::load(&self.paths.config.join("config.toml")) {
-            self.config = config;
-        }
+        self.reload_config();
         for (name, pane) in &recipe.panes {
             let dir = pane_dir(&directory, pane.dir.as_deref());
             if !dir.is_dir() {
@@ -498,10 +496,8 @@ impl Daemon {
                 .config
                 .default_agent
                 .as_deref()
-                .and_then(twyx_core::agent::command)
-                .map_or(Launch::Shell, |command| {
-                    Launch::Command(vec![command.to_owned()])
-                }),
+                .and_then(|kind| self.agents.get(kind))
+                .map_or(Launch::Shell, |kind| Launch::Command(kind.command.clone())),
             None => Launch::Shell,
         }
     }

@@ -1,0 +1,30 @@
+
+
+
+
+
+
+
+
+                                                                ▄
+                               █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                               █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                               ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+             ┃
+             ┃  Ask anything... "What is the tech stack of this project?"
+             ┃
+             ┃  Build · DeepSeek V4 Pro DeepSeek · max
+             ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                             tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+  /private/tmp/twyx/opencode                                                               1.18.26
+

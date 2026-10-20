@@ -1,0 +1,30 @@
+                                                                                                 █
+  ┃                                                                                              █
+  ┃  Write the numbers 1 to 150, one per line. Then run the shell command `touch /tmp/twyx/      █
+  ┃  opencode-probe.txt`.                                                                        █
+  ┃                                                                                              █
+                                                                                                 █
+     ⠙ Thinking                                                                                  █
+                                                                                                 █
+     ▣  Build · DeepSeek V4 Pro                                                                  █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+                                                                                                 █
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · DeepSeek V4 Pro DeepSeek · max
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt                                             tab agents  ctrl+p commands
+

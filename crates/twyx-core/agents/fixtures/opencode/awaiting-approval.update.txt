@@ -1,0 +1,30 @@
+
+
+
+
+
+
+
+
+
+                      Update Available                                     esc
+
+                      A new release v1.19.3 is available. Would you like to
+                      update now?
+
+             ┃
+             ┃  Ask                                             Skip  Confirm
+             ┃
+             ┃  Build · DeepSeek V4 Pro DeepSeek · max
+             ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                             tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+  /private/tmp/twyx/opencode                                                               1.18.26
+

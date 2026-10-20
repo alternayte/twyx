@@ -1,0 +1,30 @@
+
+[Extensions]
+  @juicesharp/rpiv-ask-user-question, cache-ratio.ts, gate.ts, pi-lens:dist, pi-subagents,
+pi-tracker, pi-web-access:dist, zdeck.ts
+
+
+ Warning: tmux extended-keys is off. Modified Enter keys may not work. Add `set -g extended-keys
+ on` to ~/.tmux.conf and restart tmux.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Package Updates Available
+ Package updates are available. Run pi update --extensions
+ Packages:
+ - pi-subagents
+ - pi-web-access
+ - pi-lens
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+ Write the numbers 1 to 300, one per line, nothing else. Do not use tools.
+
+
+ Thinking...
+
+── ⠹ Working ───────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+/private/tmp/twyx/pi
+1.7%/1.0M (auto)                                                     (deepseek) deepseek-flash • max
+cache – LSP Inactive

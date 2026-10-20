@@ -1,0 +1,30 @@
+     138
+     139
+     140
+     141
+     142
+     143
+     144
+     145
+     146
+     147
+     148
+     149
+     150
+
+     $ touch /tmp/twyx/opencode-probe.txt
+                                                                                                 ▄
+     ▣  Build · DeepSeek V4 Pro                                                                  █
+
+  ┃
+  ┃  △ Permission required
+  ┃    ← Access external directory /tmp/twyx
+  ┃
+  ┃  Patterns
+  ┃
+  ┃  - /tmp/twyx/*
+  ┃
+  ┃
+  ┃   Allow once   Allow always   Reject             ctrl+f fullscreen  ⇆ select  enter confirm
+  ┃
+

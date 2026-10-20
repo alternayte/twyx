@@ -1,0 +1,28 @@
+title = "OpenCode"
+processes = ["opencode"]
+command = ["opencode"]
+launch_with_prompt = ["opencode", "--prompt", "{prompt}"]
+resume = ["opencode", "--session", "{session}"]
+
+[[screen]]
+name = "permission dialog"
+state = "awaiting-approval"
+all = ['△ Permission required']
+any = ['Allow once', 'enter confirm']
+
+[[screen]]
+name = "update dialog"
+state = "awaiting-approval"
+all = ['Update Available', 'Confirm']
+
+[[screen]]
+name = "interrupt hint"
+state = "working"
+rows = 3
+all = ['esc interrupt']
+
+[[screen]]
+name = "input box"
+state = "awaiting-prompt"
+rows = 3
+all = ['^\s*╹▀{20,}']

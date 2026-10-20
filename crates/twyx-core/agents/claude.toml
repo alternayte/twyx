@@ -1,0 +1,32 @@
+# Claude Code. It shows its spinner row while it thinks, not while it
+# streams an answer, so a streaming answer reads as no screen state.
+title = "Claude Code"
+processes = ["claude"]
+command = ["claude"]
+launch_with_prompt = ["claude", "{prompt}"]
+resume = ["claude", "--resume", "{session}"]
+
+[[screen]]
+name = "permission dialog"
+state = "awaiting-approval"
+rows = 14
+all = ['Do you want to (proceed|make this edit|create|allow)', 'Esc to cancel']
+
+[[screen]]
+name = "folder trust"
+state = "awaiting-approval"
+all = ['Yes, I trust this folder', 'Enter to confirm']
+
+[[screen]]
+name = "spinner"
+state = "working"
+above = '^❯'
+rows = 4
+all = ['^\S [A-Z][a-z]+… \(']
+
+[[screen]]
+name = "turn done"
+state = "awaiting-prompt"
+above = '^❯'
+rows = 2
+all = ['^\S [A-Z][a-z]+ for (\d+h )?(\d+m )?\d+s\b']

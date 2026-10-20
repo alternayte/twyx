@@ -1,0 +1,17 @@
+title = "Pi"
+processes = ["pi"]
+command = ["pi"]
+launch_with_prompt = ["pi", "{prompt}"]
+resume = ["pi", "--session", "{session}"]
+
+[[screen]]
+name = "working border"
+state = "working"
+rows = 8
+all = ['^── \S Working']
+
+[[screen]]
+name = "empty editor"
+state = "awaiting-prompt"
+rows = 6
+all = ['^─{20,}$']

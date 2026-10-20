@@ -23,11 +23,7 @@ impl Daemon {
         place: Place,
         history: bool,
     ) {
-        // A changed config applies from the next pane; a bad one keeps the
-        // last good.
-        if let Ok(config) = twyx_core::config::load(&self.paths.config.join("config.toml")) {
-            self.config = config;
-        }
+        self.reload_config();
         let history = history && self.config.history;
         if argv(&launch).is_none() {
             self.refuse(id, "a pane needs a command".to_owned());

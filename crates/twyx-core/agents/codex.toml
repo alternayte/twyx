@@ -1,0 +1,34 @@
+title = "Codex"
+processes = ["codex"]
+command = ["codex"]
+launch_with_prompt = ["codex", "{prompt}"]
+resume = ["codex", "resume", "{session}"]
+
+[[screen]]
+name = "approval dialog"
+state = "awaiting-approval"
+rows = 16
+all = ['Press enter to confirm or esc to cancel']
+any = ['Would you like to', 'Allow command']
+
+[[screen]]
+name = "update dialog"
+state = "awaiting-approval"
+all = ['Update available!', 'Press enter to continue']
+
+[[screen]]
+name = "folder trust"
+state = "awaiting-approval"
+all = ['Do you trust the contents of this directory\?', 'Press enter to continue']
+
+[[screen]]
+name = "status row"
+state = "working"
+rows = 6
+all = ['^\S Working \(.*esc to interrupt\)']
+
+[[screen]]
+name = "composer"
+state = "awaiting-prompt"
+rows = 3
+all = ['^› ', '\? for shortcuts']

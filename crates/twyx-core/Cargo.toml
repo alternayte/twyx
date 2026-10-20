@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
+regex = "1"
 rustix = { version = "1", features = ["fs", "process"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1"

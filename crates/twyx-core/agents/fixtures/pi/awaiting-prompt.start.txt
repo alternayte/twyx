@@ -1,0 +1,30 @@
+
+
+
+
+
+
+
+
+
+
+
+
+ Warning: tmux extended-keys is off. Modified Enter keys may not work. Add `set -g extended-keys
+ on` to ~/.tmux.conf and restart tmux.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Package Updates Available
+ Package updates are available. Run pi update --extensions
+ Packages:
+ - pi-subagents
+ - pi-web-access
+ - pi-lens
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+/private/tmp/twyx/pi
+0.0%/1.0M (auto)                                                     (deepseek) deepseek-flash • max
+cache – LSP Inactive
