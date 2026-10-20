@@ -607,6 +607,37 @@ impl Sandbox {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
+
+    /// Waits until the history files stop changing: the history writer runs
+    /// behind the screen.
+    fn wait_for_history_writes(&self, pane: u64) {
+        let sizes = || -> Vec<(std::ffi::OsString, u64)> {
+            let mut sizes: Vec<_> = std::fs::read_dir(self.history(pane))
+                .map(|entries| {
+                    entries
+                        .filter_map(|entry| {
+                            let entry = entry.ok()?;
+                            Some((entry.file_name(), entry.metadata().ok()?.len()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            sizes.sort();
+            sizes
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut last = sizes();
+        let mut since = Instant::now();
+        while since.elapsed() < Duration::from_millis(500) {
+            assert!(Instant::now() < deadline, "the history never settled");
+            std::thread::sleep(Duration::from_millis(20));
+            let now = sizes();
+            if now != last {
+                last = now;
+                since = Instant::now();
+            }
+        }
+    }
 }
 
 #[test]
@@ -627,6 +658,7 @@ fn invariant_21_a_pane_whose_holder_died_shows_its_last_screen_from_history() {
     // The terminal echoes the line, and cat writes it again.
     client.type_text("logged-after\r");
     client.wait_for_text(pane, "logged-after\nlogged-after");
+    sandbox.wait_for_history_writes(pane);
     let before = client.text(pane);
     drop(client);
 
