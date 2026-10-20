@@ -23,9 +23,14 @@ pub fn to_input(event: Event) -> Option<InputEvent> {
 
 fn key_event(key: CrosstermKey) -> Option<KeyEvent> {
     let code = key_code(key.code)?;
+    let mut mods = modifiers(key.modifiers);
+    // A legacy terminal sends Shift+Tab as `CSI Z`, which arrives as BackTab.
+    if key.code == CrosstermCode::BackTab {
+        mods.insert(Modifiers::SHIFT);
+    }
     Some(KeyEvent {
         code,
-        mods: modifiers(key.modifiers),
+        mods,
         kind: match key.kind {
             CrosstermKind::Press => KeyKind::Press,
             CrosstermKind::Repeat => KeyKind::Repeat,
@@ -41,7 +46,7 @@ fn key_code(code: CrosstermCode) -> Option<KeyCode> {
     Some(match code {
         CrosstermCode::Char(c) => KeyCode::Char(c),
         CrosstermCode::Enter => KeyCode::Enter,
-        CrosstermCode::Tab => KeyCode::Tab,
+        CrosstermCode::Tab | CrosstermCode::BackTab => KeyCode::Tab,
         CrosstermCode::Backspace => KeyCode::Backspace,
         CrosstermCode::Esc => KeyCode::Escape,
         CrosstermCode::Delete => KeyCode::Delete,
@@ -56,7 +61,6 @@ fn key_code(code: CrosstermCode) -> Option<KeyCode> {
         CrosstermCode::Right => KeyCode::Right,
         CrosstermCode::F(number) => KeyCode::F(number),
         CrosstermCode::Null
-        | CrosstermCode::BackTab
         | CrosstermCode::Menu
         | CrosstermCode::KeypadBegin
         | CrosstermCode::CapsLock
@@ -167,6 +171,19 @@ mod tests {
         };
         assert_eq!(key.text, None);
         assert!(key.mods.contains(Modifiers::CTRL));
+    }
+
+    #[test]
+    fn a_legacy_back_tab_is_a_shifted_tab() {
+        for mods in [CrosstermModifiers::SHIFT, CrosstermModifiers::NONE] {
+            let event = to_input(Event::Key(CrosstermKey::new(CrosstermCode::BackTab, mods)))
+                .expect("a key event");
+            let InputEvent::Key(key) = event else {
+                panic!("expected a key");
+            };
+            assert_eq!(key.code, KeyCode::Tab);
+            assert!(key.mods.contains(Modifiers::SHIFT));
+        }
     }
 
     #[test]
