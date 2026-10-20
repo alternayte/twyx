@@ -169,7 +169,14 @@ impl AgentKind {
     /// The argv that starts the agent with `prompt` as its first message, if
     /// the agent has that form.
     pub fn launch_with_prompt(&self, prompt: &str) -> Option<Vec<String>> {
-        Some(fill(self.with_prompt.as_ref()?, PROMPT, prompt))
+        // A prompt that starts with `-` would reach the agent as an option,
+        // such as one that skips its permission prompts.
+        let prompt = if prompt.starts_with('-') {
+            format!(" {prompt}")
+        } else {
+            prompt.to_owned()
+        };
+        Some(fill(self.with_prompt.as_ref()?, PROMPT, &prompt))
     }
 
     /// The argv that resumes the native session `session`, if the agent has
@@ -545,6 +552,14 @@ mod tests {
         assert_eq!(
             claude.launch_with_prompt("fix the bug"),
             Some(vec!["claude".to_owned(), "fix the bug".to_owned()])
+        );
+        assert_eq!(
+            claude.launch_with_prompt("--dangerously-skip-permissions"),
+            Some(vec![
+                "claude".to_owned(),
+                " --dangerously-skip-permissions".to_owned()
+            ]),
+            "a prompt is never an option"
         );
         assert_eq!(
             claude.resume("abc"),
