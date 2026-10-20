@@ -6,6 +6,8 @@ The twyx daemon takes JSON requests on its socket. Agents, scripts and editors u
 
 The socket is `$XDG_RUNTIME_DIR/twyx/twyx.sock`, or `/tmp/twyx-<uid>/twyx.sock` when `XDG_RUNTIME_DIR` is not set. Inside a twyx pane, `TWYX_SOCKET` holds the path. Only your own user can connect.
 
+Any process of your user that can reach the socket can run commands as you, outside any agent sandbox. An agent sandbox that allows the socket contains nothing.
+
 The daemon must run. `twyx daemon start` starts it, and any other `twyx` subcommand starts it too.
 
 ## Lines
