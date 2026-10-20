@@ -25,6 +25,10 @@ const WIDTH: u16 = 76;
 /// Breaks `line` at spaces into rows of at most `room` characters; a word
 /// longer than a row is cut.
 fn wrap(line: &str, room: usize) -> Vec<String> {
+    // A line that fits keeps its spacing.
+    if line.chars().count() <= room {
+        return vec![line.to_owned()];
+    }
     let mut rows = vec![String::new()];
     for word in line.split(' ') {
         let row = rows.last_mut().map_or(0, |row| row.chars().count());
