@@ -111,6 +111,13 @@ impl Master {
     pub fn session_leader(&self) -> Option<i32> {
         self.session_leader
     }
+
+    /// The process group in the terminal's foreground.
+    pub fn foreground(&self) -> Option<u32> {
+        self.inner
+            .process_group_leader()
+            .and_then(|pid| u32::try_from(pid).ok())
+    }
 }
 
 /// A handle that can end the pane's process tree from another thread.

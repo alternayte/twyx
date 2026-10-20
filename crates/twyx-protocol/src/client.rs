@@ -1,6 +1,7 @@
 //! The client protocol: one socket, the daemon on the listening end.
 
 use serde::{Deserialize, Serialize};
+use twyx_core::agent::{AgentState, Source};
 use twyx_core::keys::Command;
 use twyx_core::layout::{Axis, Fractions, Layout, LeafId, Side};
 
@@ -8,7 +9,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 0;
+pub const MINOR: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -59,6 +60,31 @@ pub struct PaneInfo {
     pub launch: Launch,
     pub cwd: String,
     pub title: String,
+    /// The agent session in the pane, if one runs. Since minor 1.
+    pub agent: Option<AgentInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub kind: String,
+    pub state: AgentState,
+    pub source: Source,
+    /// When the state was observed, in milliseconds since the Unix epoch.
+    pub observed_ms: u64,
+    /// The agent's own reference to its session, for resume.
+    pub session: Option<String>,
+}
+
+/// What an agent's integration reports through `twyx notify`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentEvent {
+    Working,
+    AwaitingApproval,
+    AwaitingPrompt,
+    TurnFinished,
+    Error,
+    /// Only the native session reference, with no change of state.
+    Session,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -453,6 +479,14 @@ pub enum ToDaemon {
     /// worktree's branch and dirty state current, not only the shown one's.
     ShowSidebar {
         shown: bool,
+    },
+    /// An agent integration's event for a pane. Since minor 1.
+    Notify {
+        pane: u64,
+        /// The agent kind, when the integration names it.
+        agent: Option<String>,
+        event: AgentEvent,
+        session: Option<String>,
     },
 }
 

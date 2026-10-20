@@ -72,6 +72,7 @@ impl Daemon {
             .filter(|(focus_tab, _)| *focus_tab == tab)
             .map(|(_, leaf)| leaf);
         let record = Pane {
+            agent: crate::agents::PaneAgent::default(),
             link: None,
             cols: 80,
             rows: 24,
@@ -111,6 +112,7 @@ impl Daemon {
             .map(|placed| placed.inner)
             .unwrap_or_default();
         let record = Pane {
+            agent: crate::agents::PaneAgent::default(),
             cols: inner.width.max(2),
             rows: inner.height.max(1),
             ..record
@@ -160,6 +162,7 @@ impl Daemon {
             .map(|placed| placed.inner)
             .unwrap_or_default();
         let record = Pane {
+            agent: crate::agents::PaneAgent::default(),
             cols: inner.width.max(2),
             rows: inner.height.max(1),
             ..record
@@ -205,6 +208,7 @@ impl Daemon {
         self.panes.insert(
             pane,
             Pane {
+                agent: crate::agents::PaneAgent::default(),
                 link: Some(link),
                 cols,
                 rows,
@@ -330,6 +334,7 @@ impl Daemon {
             return;
         }
         let record = Pane {
+            agent: crate::agents::PaneAgent::default(),
             link: None,
             cols: entry.cols,
             rows: entry.rows,

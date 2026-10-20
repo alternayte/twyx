@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use toml::Spanned;
 
 use crate::config::ConfigError;
@@ -26,7 +26,7 @@ const BUILT_IN: &[(&str, &str)] = &[
 const PROMPT: &str = "{prompt}";
 const SESSION: &str = "{session}";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AgentState {
     None,
     Working,
@@ -58,6 +58,77 @@ impl AgentState {
     }
 }
 
+/// Where an agent state came from, strongest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Source {
+    /// The agent's own hooks or plugins, through `twyx notify`.
+    Integration,
+    /// A screen rule of the agent kind.
+    Screen,
+    /// Notifications, the bell and prompt marks.
+    Terminal,
+    /// The foreground process.
+    Process,
+}
+
+impl Source {
+    pub const ALL: [Source; 4] = [
+        Source::Integration,
+        Source::Screen,
+        Source::Terminal,
+        Source::Process,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Source::Integration => "integration",
+            Source::Screen => "screen",
+            Source::Terminal => "terminal",
+            Source::Process => "process",
+        }
+    }
+}
+
+/// Programs that run another program named by their first argument.
+const RUNNERS: &[&str] = &[
+    "node", "bun", "deno", "python", "python3", "ruby", "perl", "sh", "bash", "zsh", "dash", "env",
+];
+
+/// The name an agent kind's `processes` list matches: the program's own name,
+/// or the script's for a runner such as `node` or `sh`.
+pub fn process_name(argv: &[String]) -> String {
+    let base = |arg: &str| -> String {
+        let name = arg
+            .rsplit('/')
+            .next()
+            .unwrap_or(arg)
+            .trim_start_matches('-');
+        let name = [".js", ".mjs", ".cjs", ".ts", ".py"]
+            .iter()
+            .find_map(|extension| name.strip_suffix(extension))
+            .unwrap_or(name);
+        name.to_owned()
+    };
+    let Some(program) = argv.first() else {
+        return String::new();
+    };
+    let name = base(program);
+    if !RUNNERS.contains(&name.as_str()) {
+        return name;
+    }
+    for arg in &argv[1..] {
+        match arg.as_str() {
+            // The program is inline code, not a file.
+            "-c" | "-e" | "--eval" => return name,
+            flag if flag.starts_with('-') => {}
+            // `env` passes variables before the program.
+            setting if name == "env" && setting.contains('=') => {}
+            script => return base(script),
+        }
+    }
+    name
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentKind {
     pub name: String,
@@ -65,6 +136,8 @@ pub struct AgentKind {
     /// Foreground process names that mean this agent runs.
     pub processes: Vec<String>,
     pub command: Vec<String>,
+    /// The rule file's text, which the daemon hands to the pane's holder.
+    pub source: String,
     with_prompt: Option<Vec<String>>,
     resume: Option<Vec<String>>,
     /// In priority order: the first rule that matches decides.
@@ -82,6 +155,11 @@ impl AgentKind {
     /// that form.
     pub fn resume(&self, session: &str) -> Option<Vec<String>> {
         Some(fill(self.resume.as_ref()?, SESSION, session))
+    }
+
+    /// Reads a rule file's text, as the holder gets it from the daemon.
+    pub fn from_source(name: &str, text: &str) -> Result<Self, ConfigError> {
+        parse(name, Path::new(&format!("{name}.toml")), text)
     }
 
     /// The first screen rule that matches the visible rows.
@@ -177,6 +255,13 @@ impl AgentKinds {
 
     pub fn get(&self, name: &str) -> Option<&AgentKind> {
         self.kinds.get(name)
+    }
+
+    /// The kind whose `processes` name this process.
+    pub fn by_process(&self, name: &str) -> Option<&AgentKind> {
+        self.kinds
+            .values()
+            .find(|kind| kind.processes.iter().any(|process| process == name))
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
@@ -315,6 +400,7 @@ fn parse(name: &str, file: &Path, text: &str) -> Result<AgentKind, ConfigError> 
         title: raw.title,
         processes: raw.processes,
         command: raw.command.into_inner(),
+        source: text.to_owned(),
         with_prompt,
         resume,
         screen,
@@ -482,6 +568,29 @@ mod tests {
         assert_eq!(error.line, 4, "{error}");
         let error = read("title = \"X\"\nprocesses = []\ncommand = []\n");
         assert_eq!(error.line, 3, "{error}");
+    }
+
+    #[test]
+    fn a_process_is_named_by_its_program_or_the_script_a_runner_runs() {
+        let name = |argv: &[&str]| {
+            process_name(&argv.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+        };
+        assert_eq!(name(&["/Users/x/.local/bin/claude"]), "claude");
+        assert_eq!(name(&["node", "/opt/homebrew/bin/pi"]), "pi");
+        assert_eq!(name(&["node", "--use-system-ca", "/x/codex.js"]), "codex");
+        assert_eq!(name(&["/bin/sh", "/tmp/fakeagent", "--fast"]), "fakeagent");
+        assert_eq!(name(&["sh", "-c", "claude"]), "sh");
+        assert_eq!(name(&["-zsh"]), "zsh");
+        assert_eq!(name(&["env", "A=1", "opencode"]), "opencode");
+        assert_eq!(name(&[]), "");
+        let kinds = AgentKinds::built_in();
+        assert_eq!(
+            kinds
+                .by_process("cursor-agent")
+                .map(|kind| kind.name.as_str()),
+            Some("cursor")
+        );
+        assert!(kinds.by_process("zsh").is_none());
     }
 
     #[test]

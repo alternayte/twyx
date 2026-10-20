@@ -26,6 +26,7 @@ use twyx_protocol::client::{
 use twyx_protocol::holder::{ExitState, FromHolder, ToHolder};
 use twyx_protocol::wire;
 
+use crate::agents::Terminal;
 use crate::holders::{self, HolderLink, Legacy};
 use crate::peer;
 use crate::store::{Saved, SavedPane, SavedTab, SavedWorkspace, Store};
@@ -79,6 +80,7 @@ pub(crate) struct Pane {
     pub spawn_worktree: Option<u64>,
     /// Variables the pane's command gets over the daemon's own.
     pub env: Vec<(String, String)>,
+    pub agent: crate::agents::PaneAgent,
 }
 
 #[derive(Debug)]
@@ -283,6 +285,7 @@ impl Daemon {
             self.panes.insert(
                 pane.id,
                 Pane {
+                    agent: crate::agents::PaneAgent::default(),
                     link: None,
                     cols: pane.cols,
                     rows: pane.rows,
@@ -369,6 +372,7 @@ impl Daemon {
             self.panes.insert(
                 pane,
                 Pane {
+                    agent: crate::agents::PaneAgent::default(),
                     link: Some(link),
                     cols,
                     rows,
@@ -624,6 +628,16 @@ impl Daemon {
     fn client_message(&mut self, id: u64, message: ToDaemon) {
         match message {
             ToDaemon::Hello(_) | ToDaemon::Shutdown => {}
+            ToDaemon::Notify {
+                pane,
+                agent,
+                event,
+                session,
+            } => {
+                if let Err(reason) = self.notify(PaneId::from_raw(pane), agent, event, session) {
+                    self.refuse(id, reason);
+                }
+            }
             ToDaemon::ShowSidebar { shown } => {
                 if let Some(client) = self.clients.get_mut(&id) {
                     client.sidebar = shown;
@@ -976,6 +990,8 @@ impl Daemon {
             return;
         };
         entry.state = state;
+        // Process exit always ends the agent session.
+        entry.agent.session = None;
         // The daemon has the exit status, so the holder may go.
         if let Some(link) = entry.link.take() {
             link.send(ToHolder::AckExit);
@@ -999,6 +1015,7 @@ impl Daemon {
         if entry.state == PaneState::Running {
             entry.state = PaneState::Lost;
             entry.link = None;
+            entry.agent.session = None;
             self.broadcast_pane(pane);
         }
     }
@@ -1018,12 +1035,13 @@ impl Daemon {
                 }
                 self.broadcast_pane(pane);
             }
-            Signal::Bell
-            | Signal::Notification { .. }
-            | Signal::PromptMark(_)
-            | Signal::WorkingDirectory(_)
-            | Signal::Link(_)
-            | Signal::Foreground { .. } => {}
+            Signal::Bell | Signal::Notification { .. } => {
+                self.terminal(pane, Terminal::Attention);
+            }
+            Signal::PromptMark(mark) => self.terminal(pane, Terminal::Mark(mark)),
+            Signal::Foreground { pid, name } => self.foreground(pane, pid, &name),
+            Signal::Screen(found) => self.screen(pane, found),
+            Signal::WorkingDirectory(_) | Signal::Link(_) => {}
         }
     }
 
@@ -1124,6 +1142,11 @@ impl Daemon {
             launch: entry.launch.clone(),
             cwd: entry.cwd.clone(),
             title: entry.title.clone(),
+            agent: entry
+                .agent
+                .session
+                .as_ref()
+                .map(crate::agents::Session::info),
         }
     }
 

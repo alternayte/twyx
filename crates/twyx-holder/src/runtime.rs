@@ -13,10 +13,11 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use portable_pty::{Child, ChildKiller};
 
+use twyx_core::agent::AgentKind;
 use twyx_core::pane::PaneId;
 use twyx_core::tuning;
 use twyx_protocol::holder::{
-    ExitState, FromHolder, Hello, MAJOR, MINOR, Signal, ToHolder, Welcome,
+    AgentRules, ExitState, FromHolder, Hello, MAJOR, MINOR, ScreenMatch, Signal, ToHolder, Welcome,
 };
 use twyx_protocol::wire;
 
@@ -79,6 +80,7 @@ pub fn run(
         killer,
         builder: FrameBuilder::new(config.spawn.cols, config.spawn.rows),
         scanner: Scanner::default(),
+        watch: Watch::new(),
     }
     .run(&inbound)
 }
@@ -92,6 +94,36 @@ struct Core<'a> {
     killer: Box<dyn ChildKiller + Send + Sync>,
     builder: FrameBuilder,
     scanner: Scanner,
+    watch: Watch,
+}
+
+/// What the holder watches for the daemon's agent state: the foreground
+/// process, and the visible screen against the agent kind's rules.
+struct Watch {
+    foreground: Option<(u32, String)>,
+    polled: Instant,
+    agent: Option<AgentKind>,
+    /// The match last reported.
+    screen: Option<ScreenMatch>,
+    /// The screen changed since it was last read.
+    changed: bool,
+    output: Instant,
+    read: Instant,
+}
+
+impl Watch {
+    fn new() -> Self {
+        let long_ago = Instant::now() - tuning::FOREGROUND_POLL;
+        Self {
+            foreground: None,
+            polled: long_ago,
+            agent: None,
+            screen: None,
+            changed: false,
+            output: Instant::now(),
+            read: Instant::now(),
+        }
+    }
 }
 
 impl Core<'_> {
@@ -159,6 +191,7 @@ impl Core<'_> {
                         if let Some(state) = &exited {
                             send(&mut out, FromHolder::Exited(state.clone()));
                         }
+                        self.resend_watch(&mut out);
                         dirty = true;
                         last_frame = Instant::now() - tuning::FRAME_INTERVAL;
                     }
@@ -171,6 +204,11 @@ impl Core<'_> {
                         }
                     }
                 }
+            }
+
+            if exited.is_none() {
+                self.poll_foreground(&mut out);
+                self.read_screen(&mut out);
             }
 
             if dirty && last_frame.elapsed() >= tuning::FRAME_INTERVAL {
@@ -202,7 +240,94 @@ impl Core<'_> {
         }
     }
 
+    /// A daemon that attaches learns what an earlier one was told.
+    fn resend_watch(&mut self, out: &mut Option<Sender<FromHolder>>) {
+        if let Some((pid, name)) = &self.watch.foreground {
+            send(
+                out,
+                FromHolder::Signal(Signal::Foreground {
+                    pid: *pid,
+                    name: name.clone(),
+                }),
+            );
+        }
+        if self.watch.screen.is_some() {
+            send(
+                out,
+                FromHolder::Signal(Signal::Screen(self.watch.screen.clone())),
+            );
+        }
+    }
+
+    fn poll_foreground(&mut self, out: &mut Option<Sender<FromHolder>>) {
+        if self.watch.polled.elapsed() < tuning::FOREGROUND_POLL {
+            return;
+        }
+        self.watch.polled = Instant::now();
+        let Some(pid) = self.master.foreground() else {
+            return;
+        };
+        if self
+            .watch
+            .foreground
+            .as_ref()
+            .is_some_and(|(seen, _)| *seen == pid)
+        {
+            return;
+        }
+        let Some(name) = crate::process::name(pid) else {
+            return;
+        };
+        self.watch.foreground = Some((pid, name.clone()));
+        send(out, FromHolder::Signal(Signal::Foreground { pid, name }));
+    }
+
+    /// Reads the screen once output pauses, or at least every so often while
+    /// it keeps changing.
+    fn read_screen(&mut self, out: &mut Option<Sender<FromHolder>>) {
+        let Some(agent) = &self.watch.agent else {
+            return;
+        };
+        if !self.watch.changed
+            || self.engine.in_copy_mode()
+            || (self.watch.output.elapsed() < tuning::SCREEN_SETTLE
+                && self.watch.read.elapsed() < tuning::SCREEN_READ_MAX)
+        {
+            return;
+        }
+        let view = self.engine.view();
+        let rows: Vec<String> = view
+            .rows
+            .iter()
+            .map(|row| row.cells.iter().map(|cell| cell.text.as_str()).collect())
+            .collect();
+        let found = agent.read_screen(&rows).map(|rule| ScreenMatch {
+            state: rule.state,
+            rule: rule.name.clone(),
+        });
+        self.watch.changed = false;
+        self.watch.read = Instant::now();
+        if found != self.watch.screen {
+            self.watch.screen = found.clone();
+            send(out, FromHolder::Signal(Signal::Screen(found)));
+        }
+    }
+
+    fn agent(&mut self, rules: Option<AgentRules>, out: &mut Option<Sender<FromHolder>>) {
+        self.watch.agent = rules.and_then(|rules| {
+            AgentKind::from_source(&rules.kind, &rules.rules)
+                .inspect_err(|error| eprintln!("twyx holder: agent rules: {error}"))
+                .ok()
+        });
+        self.watch.changed = true;
+        if self.watch.agent.is_none() && self.watch.screen.take().is_some() {
+            send(out, FromHolder::Signal(Signal::Screen(None)));
+        }
+    }
+
     fn output(&mut self, bytes: &[u8], out: &mut Option<Sender<FromHolder>>) {
+        self.watch.changed = true;
+        self.watch.output = Instant::now();
         if let Some(history) = &mut self.history {
             history.output(bytes);
         }
@@ -264,6 +389,7 @@ impl Core<'_> {
                     return Some(Err(error));
                 }
                 *dirty = true;
+                self.watch.changed = true;
             }
             ToHolder::Snapshot => {
                 self.builder.reset_consumer();
@@ -294,7 +420,9 @@ impl Core<'_> {
                     send(out, FromHolder::Copied(text));
                 }
                 *dirty = true;
+                self.watch.changed = true;
             }
+            ToHolder::Agent(rules) => self.agent(rules, out),
         }
         None
     }

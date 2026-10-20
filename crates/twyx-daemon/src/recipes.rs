@@ -401,6 +401,7 @@ impl Daemon {
                     .to_string_lossy()
                     .into_owned();
                 let record = Pane {
+                    agent: crate::agents::PaneAgent::default(),
                     link: None,
                     cols: 80,
                     rows: 24,
@@ -461,6 +462,7 @@ impl Daemon {
                     .map(|placed| placed.inner)
                     .unwrap_or_default();
                 let record = Pane {
+                    agent: crate::agents::PaneAgent::default(),
                     cols: inner.width.max(2),
                     rows: inner.height.max(1),
                     ..record

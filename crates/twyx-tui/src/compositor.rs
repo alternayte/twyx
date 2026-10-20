@@ -636,6 +636,7 @@ mod tests {
             launch: Launch::Command(vec![format!("/bin/p{pane}")]),
             cwd: "/home/n/project".to_owned(),
             title: String::new(),
+            agent: None,
         }
     }
 

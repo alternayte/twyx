@@ -19,6 +19,8 @@ use crate::daemon::Event;
 
 pub(crate) struct HolderLink {
     out: Sender<ToHolder>,
+    /// The holder's protocol minor.
+    minor: u16,
 }
 
 impl std::fmt::Debug for HolderLink {
@@ -84,7 +86,18 @@ impl HolderLink {
             })
             .context("start the holder reader")?;
 
-        Ok((Self { out }, welcome))
+        Ok((
+            Self {
+                out,
+                minor: welcome.minor,
+            },
+            welcome,
+        ))
+    }
+
+    /// Whether the holder takes agent rules and reports screen matches.
+    pub(crate) fn reads_screens(&self) -> bool {
+        self.minor >= 2
     }
 
     pub(crate) fn send(&self, message: ToHolder) {

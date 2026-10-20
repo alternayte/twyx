@@ -246,6 +246,7 @@ impl Daemon {
         {
             let cwd = entry.path.clone();
             let record = Pane {
+                agent: crate::agents::PaneAgent::default(),
                 link: None,
                 cols: 80,
                 rows: 24,

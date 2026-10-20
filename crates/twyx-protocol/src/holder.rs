@@ -4,12 +4,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use twyx_core::agent::AgentState;
 use twyx_core::keys::CopyMotion;
 
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 1;
-pub const MINOR: u16 = 1;
+pub const MINOR: u16 = 2;
 
 /// Sent by the daemon when it connects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,12 +51,29 @@ pub enum PromptMark {
 pub enum Signal {
     Bell,
     Title(String),
-    Notification { title: String, body: String },
+    Notification {
+        title: String,
+        body: String,
+    },
     PromptMark(PromptMark),
     WorkingDirectory(String),
     ClipboardWrite(String),
     Link(String),
-    Foreground { pid: u32 },
+    /// The pane's foreground process changed; `name` is what agent kinds
+    /// match. Since minor 2.
+    Foreground {
+        pid: u32,
+        name: String,
+    },
+    /// The screen rule that matches the visible screen changed. Since
+    /// minor 2.
+    Screen(Option<ScreenMatch>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenMatch {
+    pub state: AgentState,
+    pub rule: String,
 }
 
 /// What copy mode does. The holder keeps one copy cursor, selection and
@@ -95,6 +113,16 @@ pub enum ToHolder {
     Ping,
     /// Since minor 1.
     Copy(CopyAction),
+    /// The agent kind's rule file to read the screen with; `None` stops
+    /// reading it. Since minor 2.
+    Agent(Option<AgentRules>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRules {
+    pub kind: String,
+    /// The rule file's text.
+    pub rules: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

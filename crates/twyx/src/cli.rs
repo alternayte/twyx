@@ -11,7 +11,9 @@ use twyx_core::paths::Paths;
 use twyx_core::theme::Variant;
 use twyx_holder::engine::Geometry;
 use twyx_holder::pty::Spawn;
-use twyx_protocol::client::{FromDaemon, Launch, PaneState, Place, ToDaemon};
+use twyx_protocol::client::{
+    AgentEvent, AgentInfo, FromDaemon, Launch, PaneState, Place, ToDaemon,
+};
 use twyx_protocol::connection as client;
 
 #[derive(Debug, Parser)]
@@ -68,6 +70,18 @@ enum Command {
     History {
         #[command(subcommand)]
         command: HistoryCommand,
+    },
+    /// Report an agent's state for the pane this runs in. Agent
+    /// integrations run this from their hooks.
+    Notify {
+        #[arg(value_enum)]
+        event: NotifyEvent,
+        /// The agent kind; needed when the pane has no agent session yet.
+        #[arg(long)]
+        agent: Option<String>,
+        /// The agent's own reference to its session, for resume.
+        #[arg(long)]
+        session: Option<String>,
     },
     /// Print what the outer terminal supports.
     Doctor,
@@ -127,6 +141,17 @@ enum PanePlace {
     Float,
     /// Open it in a new tab.
     Tab,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum NotifyEvent {
+    Working,
+    AwaitingApproval,
+    AwaitingPrompt,
+    TurnFinished,
+    Error,
+    /// Only the session reference.
+    Session,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -207,6 +232,11 @@ pub fn run() -> Result<()> {
             println!("deleted all pane history");
             Ok(())
         }
+        Command::Notify {
+            event,
+            agent,
+            session,
+        } => notify(event, agent, session),
         Command::Doctor => twyx_tui::app::doctor(),
         Command::Specimen { paper } => twyx_tui::specimen::run(paper.map(|paper| match paper {
             Paper::Light => Variant::Light,
@@ -374,11 +404,12 @@ fn pane(command: PaneCommand) -> Result<()> {
             }
             for pane in connection.hello.panes {
                 println!(
-                    "{} {}x{} {}",
+                    "{} {}x{} {}{}",
                     pane.pane,
                     pane.cols,
                     pane.rows,
-                    state(&pane.state)
+                    state(&pane.state),
+                    agent(pane.agent.as_ref())
                 );
             }
             Ok(())
@@ -395,6 +426,51 @@ fn pane(command: PaneCommand) -> Result<()> {
 /// another build only when no interactive client uses it.
 fn command_client(paths: &Paths) -> Result<client::Connection> {
     client::attach(paths, 80, 24, false, None, |_| false)
+}
+
+/// Sends an integration's event to the daemon of the pane this runs in. It
+/// never starts or replaces a daemon: a hook must not.
+fn notify(event: NotifyEvent, agent: Option<String>, session: Option<String>) -> Result<()> {
+    let pane =
+        std::env::var("TWYX_PANE_ID").context("not in a twyx pane: TWYX_PANE_ID is not set")?;
+    let pane: PaneId = pane.parse().context("TWYX_PANE_ID")?;
+    let socket =
+        std::env::var_os("TWYX_SOCKET").context("not in a twyx pane: TWYX_SOCKET is not set")?;
+    if let Some(kind) = &agent {
+        let known = twyx_core::agent::names_in(&Paths::discover()?.config.join("agents"));
+        if !known.contains(kind) {
+            bail!(
+                "{kind:?} is not an agent kind; the kinds are {}",
+                known.join(", ")
+            );
+        }
+    }
+    let event = match event {
+        NotifyEvent::Working => AgentEvent::Working,
+        NotifyEvent::AwaitingApproval => AgentEvent::AwaitingApproval,
+        NotifyEvent::AwaitingPrompt => AgentEvent::AwaitingPrompt,
+        NotifyEvent::TurnFinished => AgentEvent::TurnFinished,
+        NotifyEvent::Error => AgentEvent::Error,
+        NotifyEvent::Session => AgentEvent::Session,
+    };
+    let mut connection = client::connect(std::path::Path::new(&socket), 80, 24, false, None)?;
+    connection.send(&ToDaemon::Notify {
+        pane: pane.raw(),
+        agent,
+        event,
+        session,
+    })
+}
+
+fn agent(agent: Option<&AgentInfo>) -> String {
+    agent.map_or_else(String::new, |agent| {
+        format!(
+            " {} {} ({})",
+            agent.kind,
+            agent.state.name(),
+            agent.source.name()
+        )
+    })
 }
 
 fn state(state: &PaneState) -> String {
@@ -452,7 +528,7 @@ fn holder(args: HolderArgs) -> Result<()> {
         ("TWYX_PANE_ID".to_owned(), pane.to_string()),
         (
             "TWYX_SOCKET".to_owned(),
-            socket.to_string_lossy().into_owned(),
+            Paths::discover()?.socket().to_string_lossy().into_owned(),
         ),
         ("TERM".to_owned(), "xterm-256color".to_owned()),
         ("COLORTERM".to_owned(), "truecolor".to_owned()),

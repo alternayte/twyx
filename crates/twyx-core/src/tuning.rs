@@ -78,3 +78,14 @@ pub const PROMPT_COMMITS: usize = 20;
 
 /// How long a confirmed worktree removal waits for the panes it kills.
 pub const REMOVAL_KILL_WAIT: Duration = Duration::from_secs(10);
+
+/// How long a pane's output must pause before the holder reads its screen
+/// against the agent's screen rules.
+pub const SCREEN_SETTLE: Duration = Duration::from_millis(250);
+
+/// The longest the holder goes without reading a changing screen, so an
+/// agent that animates without pause is still read.
+pub const SCREEN_READ_MAX: Duration = Duration::from_secs(1);
+
+/// How often the holder looks at the pane's foreground process.
+pub const FOREGROUND_POLL: Duration = Duration::from_millis(500);
