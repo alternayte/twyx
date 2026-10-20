@@ -179,6 +179,42 @@ pub fn parse(text: &str) -> Vec<FileDiff> {
     files
 }
 
+/// Where the lines `first..=last` of the old file are in the new one, for a
+/// diff made with `-U0`: shifted past the hunks before them, or `None` when
+/// a hunk changes any of them.
+pub fn move_lines(first: u32, last: u32, hunks: &[Hunk]) -> Option<(u32, u32)> {
+    let mut shift: i64 = 0;
+    for hunk in hunks {
+        let removed = hunk
+            .lines
+            .iter()
+            .filter(|line| line.kind == LineKind::Removed)
+            .count() as u32;
+        let added = hunk
+            .lines
+            .iter()
+            .filter(|line| line.kind == LineKind::Added)
+            .count() as u32;
+        // A pure insertion's old start is the line it comes after.
+        let (start, end) = if removed == 0 {
+            (hunk.old_start + 1, hunk.old_start)
+        } else {
+            (hunk.old_start, hunk.old_start + removed - 1)
+        };
+        if removed > 0 && start <= last && end >= first {
+            return None;
+        }
+        if removed == 0 && start > first && start <= last {
+            return None;
+        }
+        if end < first || (removed == 0 && start <= first) {
+            shift += i64::from(added) - i64::from(removed);
+        }
+    }
+    let moved = |line: u32| u32::try_from(i64::from(line) + shift).ok();
+    Some((moved(first)?, moved(last)?))
+}
+
 fn ranges(header: &str) -> (u32, u32) {
     let mut starts = header.split_whitespace().take(2).map(|range| {
         range
@@ -315,5 +351,28 @@ Ic${M2000H80RR91
             DIFF[DIFF.find("diff --git a/img").unwrap()..]
         );
         assert_ne!(files[0].hunks[0].id(), second);
+    }
+
+    #[test]
+    fn a_note_moves_past_changes_above_it_and_is_outdated_by_changes_to_it() {
+        let hunks = |text: &str| {
+            parse(&format!("diff --git a/x b/x\n--- a/x\n+++ b/x\n{text}"))[0]
+                .hunks
+                .clone()
+        };
+        // Two lines added after line 2.
+        let added = hunks("@@ -2,0 +3,2 @@\n+a\n+b\n");
+        assert_eq!(move_lines(5, 6, &added), Some((7, 8)));
+        assert_eq!(move_lines(1, 2, &added), Some((1, 2)));
+        assert_eq!(
+            move_lines(2, 4, &added),
+            None,
+            "lines added inside the range"
+        );
+        // Line 4 changed, line 9 removed.
+        let changed = hunks("@@ -4 +4 @@\n-x\n+y\n@@ -9 +8,0 @@\n-z\n");
+        assert_eq!(move_lines(4, 4, &changed), None);
+        assert_eq!(move_lines(10, 11, &changed), Some((9, 10)));
+        assert_eq!(move_lines(5, 8, &changed), Some((5, 8)));
     }
 }

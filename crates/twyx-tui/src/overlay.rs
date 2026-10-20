@@ -47,6 +47,17 @@ pub enum Purpose {
     NewTask {
         workspace: u64,
     },
+    /// A review note's text, for these lines.
+    Note {
+        worktree: u64,
+        path: String,
+        lines: (u32, u32),
+    },
+    /// Send a worktree's open notes to one of these agent panes, by digit.
+    SendNotes {
+        worktree: u64,
+        panes: Vec<u64>,
+    },
 }
 
 /// What one key in an overlay comes to.

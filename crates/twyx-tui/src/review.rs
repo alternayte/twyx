@@ -15,7 +15,9 @@ use twyx_core::diff::{FileDiff, LineKind};
 use twyx_core::keys::{Chord, Key};
 use twyx_core::layout::LeafId;
 use twyx_core::theme::{RULES, SPACE, Tone};
-use twyx_protocol::client::{GitState, Overview, ReviewInfo, Reviewed, ToDaemon};
+use twyx_protocol::client::{
+    GitState, NoteInfo, NoteState, Overview, ReviewInfo, Reviewed, ToDaemon,
+};
 
 use crate::chrome::Pen;
 use crate::chrome::bars::put;
@@ -35,9 +37,23 @@ pub struct Cursor {
     pub flip: bool,
 }
 
+/// What a key in a review leaf asks for.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    Send(ToDaemon),
+    /// Ask for a note's text, for these lines of this file.
+    Note {
+        path: String,
+        lines: (u32, u32),
+    },
+    /// Choose the agent pane that gets the open notes.
+    SendNotes,
+}
+
 #[derive(Debug, Default)]
 pub struct Reviews {
     pub infos: HashMap<u64, ReviewInfo>,
+    pub notes: HashMap<u64, Vec<NoteInfo>>,
     pub cursors: HashMap<LeafId, Cursor>,
     /// Each asked worktree's Git state when it was asked for.
     asked: HashMap<u64, Option<GitState>>,
@@ -60,6 +76,9 @@ impl Reviews {
                 requests.push(ToDaemon::Review {
                     worktree: *worktree,
                 });
+                requests.push(ToDaemon::Notes {
+                    worktree: *worktree,
+                });
             }
         }
         requests
@@ -70,7 +89,7 @@ impl Reviews {
     }
 
     /// Takes a key for the review leaf `leaf` of `worktree`.
-    pub fn key(&mut self, leaf: LeafId, worktree: u64, chord: Chord) -> Option<ToDaemon> {
+    pub fn key(&mut self, leaf: LeafId, worktree: u64, chord: Chord) -> Option<Action> {
         let info = self.infos.get(&worktree)?;
         let cursor = self.cursors.entry(leaf).or_default();
         let files = &info.files;
@@ -95,24 +114,39 @@ impl Reviews {
             (_, Some('n')) => cursor.hunk = (cursor.hunk + 1).min(hunks.saturating_sub(1)),
             (_, Some('p')) => cursor.hunk = cursor.hunk.saturating_sub(1),
             (_, Some('s')) => cursor.flip = !cursor.flip,
-            (_, Some('r')) => return Some(ToDaemon::Review { worktree }),
+            (_, Some('r')) => return Some(Action::Send(ToDaemon::Review { worktree })),
             (Key::Enter, _) | (_, Some(' ')) => {
                 let file = files.get(cursor.file)?;
                 let hunk = file.diff.as_ref()?.hunks.get(cursor.hunk)?;
-                return Some(ToDaemon::MarkReviewed {
+                return Some(Action::Send(ToDaemon::MarkReviewed {
                     worktree,
                     path: file.path.clone(),
                     hunks: Some(vec![hunk.id()]),
-                });
+                }));
             }
             (_, Some('f')) => {
                 let file = files.get(cursor.file).filter(|file| file.diff.is_some())?;
-                return Some(ToDaemon::MarkReviewed {
+                return Some(Action::Send(ToDaemon::MarkReviewed {
                     worktree,
                     path: file.path.clone(),
                     hunks: None,
+                }));
+            }
+            (_, Some('c')) => {
+                let file = files.get(cursor.file)?;
+                let hunk = file.diff.as_ref()?.hunks.get(cursor.hunk)?;
+                let count = hunk
+                    .lines
+                    .iter()
+                    .filter(|line| matches!(line.kind, LineKind::Context | LineKind::Added))
+                    .count() as u32;
+                let first = hunk.new_start.max(1);
+                return Some(Action::Note {
+                    path: file.path.clone(),
+                    lines: (first, first + count.max(1) - 1),
                 });
             }
+            (_, Some('S')) => return Some(Action::SendNotes),
             _ => {}
         }
         None
@@ -124,6 +158,7 @@ impl Reviews {
 pub struct ReviewView<'a> {
     pub pen: &'a Pen,
     pub info: Option<&'a ReviewInfo>,
+    pub notes: &'a [NoteInfo],
     pub cursor: Cursor,
     pub focused: bool,
 }
@@ -179,6 +214,8 @@ impl Widget for ReviewView<'_> {
                 ("space", "mark hunk"),
                 ("f", "mark file"),
                 ("s", "sides"),
+                ("c", "note"),
+                ("S", "send notes"),
                 ("r", "reload"),
             ] {
                 x = put(buf, x, bottom, right, key, pen.face(kind.key));
@@ -244,6 +281,34 @@ impl Widget for ReviewView<'_> {
             }
         };
         let file = &info.files[selected];
+        // The file's notes, above its diff.
+        let notes: Vec<&NoteInfo> = self
+            .notes
+            .iter()
+            .filter(|note| note.path == file.path)
+            .collect();
+        let shown = notes.len().min(usize::from(diff_area.height / 3));
+        for (row, note) in notes.iter().take(shown).enumerate() {
+            let state = match note.state {
+                NoteState::Open => "",
+                NoteState::Sent => " (sent)",
+                NoteState::Outdated => " (outdated)",
+            };
+            let text = format!("✎ {}-{}{state}: {}", note.lines.0, note.lines.1, note.body);
+            put(
+                buf,
+                diff_area.x + 1,
+                diff_area.y + row as u16,
+                diff_area.right(),
+                &text,
+                pen.face(kind.label),
+            );
+        }
+        let diff_area = Rect {
+            y: diff_area.y + shown as u16,
+            height: diff_area.height - shown as u16,
+            ..diff_area
+        };
         match (&file.diff, file.reviewed) {
             (Some(diff), _) => {
                 let split = (diff_area.width >= SPLIT_WIDTH) != self.cursor.flip;
@@ -469,7 +534,11 @@ mod tests {
     #[test]
     fn keys_move_through_hunks_and_mark_the_chosen_one() {
         let mut reviews = Reviews::default();
-        assert_eq!(reviews.wanted(&[3, 3], None).len(), 1, "asked once");
+        assert_eq!(
+            reviews.wanted(&[3, 3], None).len(),
+            2,
+            "the review and its notes, asked once"
+        );
         reviews.answer(info());
         let leaf = LeafId(1);
         let key = |ch| Chord::plain(Key::Char(ch));
@@ -477,11 +546,19 @@ mod tests {
         let second = info().files[0].diff.as_ref().unwrap().hunks[1].id();
         assert_eq!(
             reviews.key(leaf, 3, key(' ')),
-            Some(ToDaemon::MarkReviewed {
+            Some(Action::Send(ToDaemon::MarkReviewed {
                 worktree: 3,
                 path: "a.txt".to_owned(),
                 hunks: Some(vec![second]),
-            })
+            }))
+        );
+        assert_eq!(
+            reviews.key(leaf, 3, key('c')),
+            Some(Action::Note {
+                path: "a.txt".to_owned(),
+                lines: (9, 10),
+            }),
+            "a note covers the hunk's lines in the file as it is now"
         );
         reviews.key(leaf, 3, key('j'));
         assert_eq!(
@@ -491,7 +568,7 @@ mod tests {
         );
         assert_eq!(
             reviews.key(leaf, 3, key('r')),
-            Some(ToDaemon::Review { worktree: 3 })
+            Some(Action::Send(ToDaemon::Review { worktree: 3 }))
         );
     }
 }

@@ -16,7 +16,7 @@ use twyx_core::agent::{AgentState, Source};
 use twyx_core::inbox::Reason;
 use twyx_core::layout::{Layout, LeafId};
 use twyx_core::pane::PaneId;
-use twyx_protocol::client::{Launch, PaneState};
+use twyx_protocol::client::{Launch, NoteState, PaneState};
 
 /// Each entry moves the schema one version on. Never edit one; add another.
 const MIGRATIONS: &[&str] = &[
@@ -118,6 +118,19 @@ const MIGRATIONS: &[&str] = &[
         dismissed_at INTEGER
     );
 ",
+    "
+    CREATE TABLE review_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        worktree INTEGER NOT NULL REFERENCES worktrees(id),
+        path TEXT NOT NULL,
+        blob TEXT NOT NULL,
+        line_start INTEGER NOT NULL,
+        line_end INTEGER NOT NULL,
+        body TEXT NOT NULL,
+        state TEXT NOT NULL,
+        sent_at INTEGER
+    );
+",
 ];
 
 #[derive(Debug)]
@@ -163,6 +176,17 @@ pub(crate) struct SavedAgent {
     pub source: Source,
     pub observed_ms: u64,
     pub pid: Option<u32>,
+}
+
+/// One `review_notes` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SavedNote {
+    pub id: u64,
+    pub path: String,
+    pub blob: String,
+    pub lines: (u32, u32),
+    pub body: String,
+    pub state: NoteState,
 }
 
 /// One `inbox_items` row that is not dismissed.
@@ -650,6 +674,76 @@ impl Store {
             )
             .context("reserve a pane")?;
         Ok(PaneId::from_raw(self.db.last_insert_rowid() as u64))
+    }
+
+    pub(crate) fn notes(&self, worktree: u64) -> Result<Vec<SavedNote>> {
+        self.rows(
+            &format!(
+                "SELECT id, path, blob, line_start, line_end, body, state FROM review_notes
+                 WHERE worktree = {worktree} ORDER BY id"
+            ),
+            |row| {
+                Ok(SavedNote {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    blob: row.get(2)?,
+                    lines: (row.get(3)?, row.get(4)?),
+                    body: row.get(5)?,
+                    state: match row.get::<_, String>(6)?.as_str() {
+                        "sent" => NoteState::Sent,
+                        "outdated" => NoteState::Outdated,
+                        _ => NoteState::Open,
+                    },
+                })
+            },
+        )
+    }
+
+    pub(crate) fn add_note(&self, worktree: u64, note: &SavedNote) -> Result<()> {
+        self.db
+            .execute(
+                "INSERT INTO review_notes (worktree, path, blob, line_start, line_end, body, state)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'open')",
+                params![
+                    worktree,
+                    note.path,
+                    note.blob,
+                    note.lines.0,
+                    note.lines.1,
+                    note.body
+                ],
+            )
+            .context("add a review note")?;
+        Ok(())
+    }
+
+    /// Moves a note to new lines of a new blob, or marks it outdated.
+    pub(crate) fn move_note(&self, id: u64, moved: Option<(&str, (u32, u32))>) -> Result<()> {
+        match moved {
+            Some((blob, (start, end))) => self.db.execute(
+                "UPDATE review_notes SET blob = ?2, line_start = ?3, line_end = ?4 WHERE id = ?1",
+                params![id, blob, start, end],
+            ),
+            None => self.db.execute(
+                "UPDATE review_notes SET state = 'outdated' WHERE id = ?1",
+                params![id],
+            ),
+        }
+        .context("move a review note")?;
+        Ok(())
+    }
+
+    pub(crate) fn notes_sent(&self, ids: &[u64]) -> Result<()> {
+        for id in ids {
+            self.db
+                .execute(
+                    "UPDATE review_notes SET state = 'sent', sent_at = unixepoch()
+                     WHERE id = ?1 AND state = 'open'",
+                    params![id],
+                )
+                .context("mark a review note sent")?;
+        }
+        Ok(())
     }
 
     /// The inbox items not dismissed, oldest first.

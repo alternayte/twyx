@@ -169,6 +169,9 @@ pub struct Daemon {
     pub(crate) tasks: BTreeMap<PaneId, crate::tasks::Waiting>,
     /// One review job at a time per worktree.
     pub(crate) review_locks: BTreeMap<u64, std::sync::Arc<std::sync::Mutex<()>>>,
+    /// Pastes a holder has yet to answer, by id.
+    pub(crate) injections: BTreeMap<u64, crate::inject::Pending>,
+    pub(crate) next_injection: u64,
 }
 
 /// Starts the daemon and serves it until the socket closes.
@@ -213,6 +216,8 @@ pub fn run(paths: Paths) -> Result<()> {
         last_notice: None,
         tasks: BTreeMap::new(),
         review_locks: BTreeMap::new(),
+        injections: BTreeMap::new(),
+        next_injection: 0,
         legacy: Vec::new(),
         config: twyx_core::config::load(&config_file).unwrap_or_else(|error| {
             eprintln!("twyx daemon: {error}");
@@ -714,6 +719,16 @@ impl Daemon {
             ToDaemon::Dismiss { item } => self.dismiss(item),
             ToDaemon::Review { worktree } => self.review(id, worktree, None),
             ToDaemon::OpenReview { worktree } => self.open_review(id, worktree),
+            ToDaemon::Notes { worktree } => self.notes(id, worktree),
+            ToDaemon::AddNote {
+                worktree,
+                path,
+                lines,
+                body,
+            } => self.add_note(id, worktree, path, lines, body),
+            ToDaemon::SendNotes { worktree, pane } => {
+                self.send_notes(id, worktree, PaneId::from_raw(pane));
+            }
             ToDaemon::MarkReviewed {
                 worktree,
                 path,
@@ -1084,6 +1099,7 @@ impl Daemon {
                     text,
                 });
             }
+            FromHolder::Injected { id, result } => self.injected(id, result),
             FromHolder::Unsupported { .. } | FromHolder::Pong => {}
         }
     }

@@ -289,6 +289,35 @@ pub(crate) fn mark(
     save(worktree, &files, name)
 }
 
+/// Stores a working tree file as a blob, for a note's anchor.
+pub(crate) fn store_file(worktree: &Path, path: &str) -> Result<String> {
+    Ok(
+        run(background(worktree, &["hash-object", "-w", "--", path]))?
+            .trim()
+            .to_owned(),
+    )
+}
+
+/// The hunks from one blob to another, with no context lines.
+pub(crate) fn blob_hunks(worktree: &Path, old: &str, new: &str) -> Result<Vec<diff::Hunk>> {
+    let text = run(background(
+        worktree,
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "-U0",
+            old,
+            new,
+        ],
+    ))?;
+    Ok(diff::parse(&text)
+        .into_iter()
+        .flat_map(|file| file.hunks)
+        .collect())
+}
+
 /// Deletes a worktree's review ref.
 pub(crate) fn delete_ref(dir: &Path, name: &str) -> Result<()> {
     run(background(dir, &["update-ref", "-d", &reference(name)]))?;

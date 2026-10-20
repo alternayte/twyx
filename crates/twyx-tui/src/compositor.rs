@@ -480,6 +480,7 @@ impl Scene<'_> {
                 ReviewView {
                     pen: self.pen,
                     info: self.reviews.infos.get(&worktree),
+                    notes: self.reviews.notes.get(&worktree).map_or(&[], Vec::as_slice),
                     cursor: self
                         .reviews
                         .cursors

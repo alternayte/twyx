@@ -8,6 +8,8 @@ pub mod daemon;
 mod git;
 mod holders;
 mod inbox;
+mod inject;
+mod notes;
 pub mod peer;
 mod recipes;
 mod review;

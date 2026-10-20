@@ -37,6 +37,7 @@ use crate::input;
 use crate::mouse::{Action, Mouse};
 use crate::overlay::{Choice, Outcome as OverlayOutcome, Overlay, Purpose};
 use crate::probe;
+use crate::review::Action as ReviewAction;
 use crate::workspace::{Effect, Workspaces};
 use twyx_protocol::connection as client;
 use twyx_protocol::view::View;
@@ -353,6 +354,9 @@ fn run(
                     screen.write(&format!("\x1b]52;c;{encoded}\x1b\\"))?;
                 }
                 FromDaemon::Review(info) => reviews.answer(info),
+                FromDaemon::Notes { worktree, notes } => {
+                    reviews.notes.insert(worktree, notes);
+                }
                 FromDaemon::Notify { title, body, sound } => {
                     if let Some(form) = screen.notice {
                         screen.write(&form.encode(&title, &body))?;
@@ -383,6 +387,7 @@ fn run(
                 | FromDaemon::Overview(_)
                 | FromDaemon::Inbox(_)
                 | FromDaemon::TaskStarted { .. }
+                | FromDaemon::Delivered { .. }
                 | FromDaemon::WorktreeAdded { .. }
                 | FromDaemon::RemovalPlan(_)
                 | FromDaemon::WorktreeRemoved { .. }
@@ -636,8 +641,32 @@ fn run(
                         // A review leaf takes its keys itself.
                         Outcome::ToPane => match (follow.focused_review(), chord) {
                             (Some((leaf, worktree)), Some(chord)) => {
-                                if let Some(request) = reviews.key(leaf, worktree, chord) {
-                                    let _ = daemon.outgoing.send(request);
+                                match reviews.key(leaf, worktree, chord) {
+                                    Some(ReviewAction::Send(request)) => {
+                                        let _ = daemon.outgoing.send(request);
+                                    }
+                                    Some(ReviewAction::Note { path, lines }) => {
+                                        overlay = Some(Overlay::Prompt {
+                                            title: format!(
+                                                "note on {path} lines {}-{}",
+                                                lines.0, lines.1
+                                            ),
+                                            text: String::new(),
+                                            purpose: Purpose::Note {
+                                                worktree,
+                                                path,
+                                                lines,
+                                            },
+                                        });
+                                    }
+                                    Some(ReviewAction::SendNotes) => {
+                                        overlay = notes_target(&follow, &panes, worktree);
+                                        if overlay.is_none() {
+                                            workspaces.message =
+                                                Some("no agent runs in this workspace".to_owned());
+                                        }
+                                    }
+                                    None => {}
                                 }
                                 dirty = true;
                                 None
@@ -977,6 +1006,43 @@ impl Drop for Screen {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// The choice of agent pane for a worktree's open notes: the agent panes
+/// of the shown workspace, by digit.
+fn notes_target(follow: &Follow, panes: &HashMap<u64, PaneInfo>, worktree: u64) -> Option<Overlay> {
+    let agents: Vec<&PaneInfo> = follow
+        .workspace
+        .iter()
+        .flat_map(|workspace| &workspace.tabs)
+        .flat_map(|tab| tab.layout.panes())
+        .filter_map(|pane| panes.get(&pane.raw()))
+        .filter(|info| info.agent.is_some())
+        .take(9)
+        .collect();
+    if agents.is_empty() {
+        return None;
+    }
+    let lines = agents
+        .iter()
+        .enumerate()
+        .map(|(number, info)| {
+            let kind = info.agent.as_ref().map_or("", |agent| agent.kind.as_str());
+            format!("{} {kind} · {}", number + 1, info.title)
+        })
+        .collect();
+    let keys = (1..=agents.len())
+        .map(|number| (char::from(b'0' + number as u8), format!("pane {number}")))
+        .collect();
+    Some(Overlay::Confirm {
+        title: "send the open notes to".to_owned(),
+        lines,
+        keys,
+        purpose: Purpose::SendNotes {
+            worktree,
+            panes: agents.iter().map(|info| info.pane).collect(),
+        },
+    })
 }
 
 #[cfg(test)]

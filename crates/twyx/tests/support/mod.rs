@@ -264,6 +264,8 @@ impl Client {
             FromDaemon::Clipboard { .. }
             | FromDaemon::TaskStarted { .. }
             | FromDaemon::Review(_)
+            | FromDaemon::Delivered { .. }
+            | FromDaemon::Notes { .. }
             | FromDaemon::Unsupported { .. }
             | FromDaemon::Welcome(_)
             | FromDaemon::Opened { .. }

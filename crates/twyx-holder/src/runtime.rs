@@ -423,8 +423,45 @@ impl Core<'_> {
                 self.watch.changed = true;
             }
             ToHolder::Agent(rules) => self.agent(rules, out),
+            ToHolder::Inject { id, text } => {
+                let result = match exited {
+                    Some(_) => Err("the pane ended".to_owned()),
+                    None => self.inject(&text),
+                };
+                send(out, FromHolder::Injected { id, result });
+            }
         }
         None
+    }
+
+    /// Invariant 5, for the holder's part: bracketed paste on, no approval
+    /// rule on the screen, one paste, no line break at its end.
+    fn inject(&mut self, text: &str) -> Result<(), String> {
+        if !self.engine.modes().bracketed_paste {
+            return Err("the pane has bracketed paste off".to_owned());
+        }
+        if let Some(agent) = &self.watch.agent {
+            let view = self.engine.view();
+            let rows: Vec<String> = view
+                .rows
+                .iter()
+                .map(|row| row.cells.iter().map(|cell| cell.text.as_str()).collect())
+                .collect();
+            if let Some(rule) = agent
+                .read_screen(&rows)
+                .filter(|rule| rule.state == twyx_core::agent::AgentState::AwaitingApproval)
+            {
+                return Err(format!("the agent shows {}", rule.name));
+            }
+        }
+        // The paste's own end marker would end it early.
+        let text = text.replace("\x1b[201~", "");
+        let text = text.trim_end_matches(['\r', '\n']);
+        let mut bytes = b"\x1b[200~".to_vec();
+        bytes.extend_from_slice(text.as_bytes());
+        bytes.extend_from_slice(b"\x1b[201~");
+        self.input.send(bytes);
+        Ok(())
     }
 
     fn publish_frame(&mut self, out: &mut Option<Sender<FromHolder>>) {

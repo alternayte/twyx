@@ -172,8 +172,31 @@ impl Daemon {
             (Some(kind), Some(prompt)) => kind.launch_with_prompt(prompt).map(Launch::Command),
             _ => None,
         };
-        let note = match (&task.prompt, &prompted) {
-            (Some(prompt), None) => {
+        let has_kind = kind.is_some();
+        let launches = (prompted.clone().unwrap_or_else(|| plain.clone()), plain);
+        let recipe = self
+            .runnable(workspace, "default")
+            .ok()
+            .filter(|recipe| recipe.panes.values().any(|pane| pane.agent));
+        let started = match recipe {
+            Some(recipe) => self
+                .recipe_tabs(workspace, &recipe, Some(&launches))
+                .map(|_| None),
+            None => self.agent_tab(workspace, &task, launches.0).map(Some),
+        };
+        // An agent that takes no prompt at start gets it at its first prompt,
+        // under Invariant 5; a shell, or a recipe's pane, on the clipboard.
+        let note = match (&task.prompt, &prompted, &started, has_kind) {
+            (Some(prompt), None, Ok(Some(pane)), true) => {
+                if let Some(entry) = self.panes.get_mut(pane) {
+                    entry.agent.prompt = Some((prompt.clone(), client));
+                }
+                Some(format!(
+                    "{} takes no prompt at start; twyx pastes it at its first prompt, else puts it on the clipboard",
+                    task.agent.as_deref().unwrap_or("the agent")
+                ))
+            }
+            (Some(prompt), None, _, _) => {
                 let target = self.last_used_client();
                 if let Some(target) = target.and_then(|id| self.clients.get(&id)) {
                     self.post(
@@ -190,17 +213,6 @@ impl Daemon {
                 ))
             }
             _ => None,
-        };
-        let launches = (prompted.unwrap_or_else(|| plain.clone()), plain);
-        let recipe = self
-            .runnable(workspace, "default")
-            .ok()
-            .filter(|recipe| recipe.panes.values().any(|pane| pane.agent));
-        let started = match recipe {
-            Some(recipe) => self
-                .recipe_tabs(workspace, &recipe, Some(&launches))
-                .map(|_| ()),
-            None => self.agent_tab(workspace, &task, launches.0).map(|_| ()),
         };
         if let Err(reason) = started {
             self.refuse(client, reason);

@@ -201,6 +201,19 @@ impl Workspaces {
     /// Takes a prompt's text.
     pub fn prompted(&mut self, purpose: Purpose, text: String) -> Effect {
         let mut effect = Effect::default();
+        if let Purpose::Note {
+            worktree,
+            path,
+            lines,
+        } = &purpose
+        {
+            effect.requests.push(ToDaemon::AddNote {
+                worktree: *worktree,
+                path: path.clone(),
+                lines: *lines,
+                body: text.clone(),
+            });
+        }
         if let Purpose::NewWorktree { project } = purpose {
             self.switch_to_new = true;
             self.message = Some(format!("creating {text}"));
@@ -233,7 +246,21 @@ impl Workspaces {
                     panes: if key == 'a' { all } else { vec![this] },
                 });
             }
-            Purpose::NewWorktree { .. } | Purpose::Integrations | Purpose::NewTask { .. } => {}
+            Purpose::SendNotes { worktree, panes } => {
+                if let Some(pane) = key
+                    .to_digit(10)
+                    .and_then(|digit| panes.get((digit as usize).checked_sub(1)?))
+                {
+                    effect.requests.push(ToDaemon::SendNotes {
+                        worktree,
+                        pane: *pane,
+                    });
+                }
+            }
+            Purpose::NewWorktree { .. }
+            | Purpose::Integrations
+            | Purpose::NewTask { .. }
+            | Purpose::Note { .. } => {}
         }
         effect
     }
@@ -244,6 +271,12 @@ impl Workspaces {
         match message {
             FromDaemon::Overview(overview) => self.overview = Some(overview.clone()),
             FromDaemon::Inbox(items) => self.inbox = items.clone(),
+            FromDaemon::Delivered { result, .. } => {
+                self.message = Some(match result {
+                    Ok(()) => "sent to the agent".to_owned(),
+                    Err(reason) => format!("on the clipboard: {reason}"),
+                });
+            }
             FromDaemon::TaskStarted { branch, note, .. } => {
                 self.message = Some(match note {
                     Some(note) => format!("started {branch}; {note}"),

@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 7;
+pub const MINOR: u16 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -209,6 +209,25 @@ pub struct ReviewFile {
     pub reviewed: Reviewed,
     /// The unreviewed changes.
     pub diff: Option<twyx_core::diff::FileDiff>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoteState {
+    Open,
+    Sent,
+    /// The lines it was on changed.
+    Outdated,
+}
+
+/// A review note, anchored to lines of a file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteInfo {
+    pub note: u64,
+    pub path: String,
+    /// The first and last line, from 1, in the file as it is now.
+    pub lines: (u32, u32),
+    pub body: String,
+    pub state: NoteState,
 }
 
 /// One inbox item: an agent session or a pane that needs the user.
@@ -588,6 +607,24 @@ pub enum ToDaemon {
     OpenReview {
         worktree: Option<u64>,
     },
+    /// Sends the worktree's `Notes`. Since minor 8.
+    Notes {
+        worktree: u64,
+    },
+    /// Adds a note on lines of a file as the working tree has it now.
+    /// Since minor 8.
+    AddNote {
+        worktree: u64,
+        path: String,
+        lines: (u32, u32),
+        body: String,
+    },
+    /// Sends the worktree's open notes to an agent pane under Invariant 5,
+    /// else to the clipboard, and marks them sent. Since minor 8.
+    SendNotes {
+        worktree: u64,
+        pane: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -694,6 +731,17 @@ pub enum FromDaemon {
     },
     /// A worktree's review. Since minor 6.
     Review(ReviewInfo),
+    /// What became of text twyx typed into a pane for the user: `Err`
+    /// says why it went to the clipboard instead. Since minor 8.
+    Delivered {
+        pane: u64,
+        result: Result<(), String>,
+    },
+    /// A worktree's review notes, oldest first. Since minor 8.
+    Notes {
+        worktree: u64,
+        notes: Vec<NoteInfo>,
+    },
 }
 
 /// The request a keymap command makes of the daemon, for a client whose

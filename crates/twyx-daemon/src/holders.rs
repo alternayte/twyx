@@ -17,6 +17,7 @@ use twyx_protocol::wire;
 
 use crate::daemon::Event;
 
+#[derive(Clone)]
 pub(crate) struct HolderLink {
     out: Sender<ToHolder>,
     /// The holder's protocol minor.
@@ -98,6 +99,11 @@ impl HolderLink {
     /// Whether the holder takes agent rules and reports screen matches.
     pub(crate) fn reads_screens(&self) -> bool {
         self.minor >= 2
+    }
+
+    /// Whether the holder pastes for twyx under Invariant 5.
+    pub(crate) fn injects(&self) -> bool {
+        self.minor >= 3
     }
 
     pub(crate) fn send(&self, message: ToHolder) {

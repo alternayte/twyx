@@ -149,6 +149,16 @@ pub(crate) enum Done {
         client: u64,
         review: twyx_protocol::client::ReviewInfo,
     },
+    NotesMoved {
+        client: u64,
+        worktree: u64,
+        moved: crate::notes::Moved,
+    },
+    NoteAnchored {
+        client: u64,
+        worktree: u64,
+        note: Result<crate::store::SavedNote, String>,
+    },
 }
 
 /// What follows a new worktree's setup.
@@ -361,6 +371,16 @@ impl Daemon {
             Done::Reviewed { client, review } => {
                 self.reply(client, FromDaemon::Review(review));
             }
+            Done::NotesMoved {
+                client,
+                worktree,
+                moved,
+            } => self.notes_moved(client, worktree, moved),
+            Done::NoteAnchored {
+                client,
+                worktree,
+                note,
+            } => self.note_anchored(client, worktree, note),
         }
     }
 

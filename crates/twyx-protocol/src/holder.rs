@@ -10,7 +10,7 @@ use twyx_core::keys::CopyMotion;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 1;
-pub const MINOR: u16 = 2;
+pub const MINOR: u16 = 3;
 
 /// Sent by the daemon when it connects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +116,13 @@ pub enum ToHolder {
     /// The agent kind's rule file to read the screen with; `None` stops
     /// reading it. Since minor 2.
     Agent(Option<AgentRules>),
+    /// Paste `text` into the pane for the daemon, under Invariant 5: only
+    /// while bracketed paste is on and no approval rule matches the screen,
+    /// as one bracketed paste with no trailing line break. Since minor 3.
+    Inject {
+        id: u64,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,4 +155,10 @@ pub enum FromHolder {
     Pong,
     /// The text copy mode copied. Since minor 1.
     Copied(String),
+    /// What became of an `Inject`: `Err` says why nothing was written.
+    /// Since minor 3.
+    Injected {
+        id: u64,
+        result: Result<(), String>,
+    },
 }

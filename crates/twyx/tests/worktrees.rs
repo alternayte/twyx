@@ -749,3 +749,88 @@ fn invariant_12_a_review_lives_in_its_ref_until_its_worktree_is_removed() {
         "the removed worktree's review ref is left"
     );
 }
+
+#[test]
+fn invariant_5_a_prompt_is_pasted_only_at_a_trusted_prompt_with_bracketed_paste_on() {
+    let mut sandbox = Sandbox::new("inject");
+    let bin = sandbox.root.join("bin");
+    let agents = sandbox.root.join("config/twyx/agents");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&agents).unwrap();
+    let twyx = env!("CARGO_BIN_EXE_twyx");
+    // Both wait at their prompt by their integration; only one turns on
+    // bracketed paste. Each keeps every byte it reads.
+    for (kind, paste) in [
+        ("pasteagent", "printf '\\033[?2004h'; "),
+        ("plainagent", ""),
+    ] {
+        let script = bin.join(kind);
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nstty raw -echo\n{paste}sleep 1\n{twyx} notify awaiting-prompt --agent {kind}\nexec cat > received\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        std::fs::write(
+            agents.join(format!("{kind}.toml")),
+            format!(
+                "title = \"{kind}\"\nprocesses = [\"{kind}\"]\ncommand = [\"{}\"]\n",
+                script.display()
+            ),
+        )
+        .unwrap();
+    }
+    sandbox.start();
+    let main = repo(&sandbox, "app");
+    let mut command = Client::command(&sandbox.socket());
+    let workspace = open(&mut command, &main);
+    command
+        .send(&ToDaemon::NewTask {
+            workspace,
+            name: "paste".to_owned(),
+            start: None,
+            agents: vec![Some("pasteagent".to_owned()), Some("plainagent".to_owned())],
+            prompt: Some("hi there\n".to_owned()),
+        })
+        .unwrap();
+    let mut results = Vec::new();
+    while results.len() < 2 {
+        results.push(command.expect("a delivery", |message| match message {
+            FromDaemon::Delivered { result, .. } => Some(result.clone()),
+            _ => None,
+        }));
+    }
+    assert!(results.contains(&Ok(())), "{results:?}");
+    assert!(
+        results.iter().any(|result| result
+            .as_ref()
+            .is_err_and(|reason| reason.contains("bracketed paste off"))),
+        "{results:?}"
+    );
+
+    let received = main.parent().unwrap().join("app.worktrees/paste/received");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::fs::read(&received).unwrap_or_default().is_empty() {
+        assert!(Instant::now() < deadline, "the agent got nothing");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        std::fs::read(&received).unwrap(),
+        b"\x1b[200~hi there\x1b[201~",
+        "one bracketed paste, with no line break at its end"
+    );
+    assert!(
+        std::fs::read(
+            main.parent()
+                .unwrap()
+                .join("app.worktrees/paste-2/received")
+        )
+        .unwrap_or_default()
+        .is_empty(),
+        "a pane with bracketed paste off got the text"
+    );
+}

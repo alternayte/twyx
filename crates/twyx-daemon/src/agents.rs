@@ -38,6 +38,9 @@ pub(crate) struct PaneAgent {
     /// For a resumed pane: the kind and reference its next session of that
     /// kind continues.
     resumed: Option<(String, String)>,
+    /// A task's prompt for an agent that takes none at start, and the
+    /// client to tell: sent at the agent's first prompt.
+    pub prompt: Option<(String, u64)>,
 }
 
 #[derive(Debug)]
@@ -50,6 +53,9 @@ pub(crate) struct Session {
     observed: BTreeMap<Source, (AgentState, u64)>,
     pub reference: Option<String>,
     turn: Turn,
+    /// Whether the terminal source's last observation was a prompt mark,
+    /// not a notification or the bell.
+    prompt_mark: bool,
 }
 
 impl PaneAgent {
@@ -72,6 +78,7 @@ impl Session {
             observed: BTreeMap::new(),
             reference: None,
             turn: Turn::default(),
+            prompt_mark: false,
         };
         session.observe(Source::Process, AgentState::Unknown);
         session
@@ -86,6 +93,18 @@ impl Session {
             .observed
             .insert(saved.source, (saved.state, saved.observed_ms));
         session
+    }
+
+    /// The daemon's half of Invariant 5: the agent waits at its prompt by
+    /// its integration's word or by a prompt mark, not by the screen alone.
+    pub fn trusted_prompt(&self) -> bool {
+        let at_prompt = |source| {
+            self.observed
+                .get(&source)
+                .is_some_and(|(state, _)| *state == AgentState::AwaitingPrompt)
+        };
+        self.info().state == AgentState::AwaitingPrompt
+            && (at_prompt(Source::Integration) || (at_prompt(Source::Terminal) && self.prompt_mark))
     }
 
     /// The row to write, if the session has one.
@@ -317,6 +336,20 @@ impl Daemon {
         if let Some(reason) = reason {
             self.raise(pane, reason);
         }
+        if after.state == AgentState::AwaitingPrompt {
+            self.prompt_ready(pane);
+        }
+    }
+
+    /// Sends a waiting task prompt once the agent first shows its prompt.
+    fn prompt_ready(&mut self, pane: PaneId) {
+        if let Some((text, client)) = self
+            .panes
+            .get_mut(&pane)
+            .and_then(|entry| entry.agent.prompt.take())
+        {
+            self.inject(client, pane, text, crate::inject::Purpose::Prompt);
+        }
     }
 
     pub(crate) fn screen(&mut self, pane: PaneId, found: Option<ScreenMatch>) {
@@ -335,6 +368,13 @@ impl Daemon {
                 AgentState::Working
             }
         };
+        if let Some(session) = self
+            .panes
+            .get_mut(&pane)
+            .and_then(|entry| entry.agent.session.as_mut())
+        {
+            session.prompt_mark = matches!(signal, Terminal::Mark(_));
+        }
         self.observe(pane, Source::Terminal, Some(state));
     }
 
@@ -405,6 +445,9 @@ impl Daemon {
         self.broadcast_pane(pane);
         if let Some(reason) = reason {
             self.raise(pane, reason);
+        }
+        if after == AgentState::AwaitingPrompt {
+            self.prompt_ready(pane);
         }
         Ok(())
     }
