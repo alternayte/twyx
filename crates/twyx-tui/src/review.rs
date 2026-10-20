@@ -168,11 +168,37 @@ impl Widget for ReviewView<'_> {
         );
         let y = area.y + u16::from(info.error.is_some());
         put(buf, left, y, right, &summary, pen.face(kind.caption));
+        // The keys, on the last row, while the view has the focus.
+        let keys_row = u16::from(self.focused && area.height > 6);
+        if keys_row == 1 {
+            let mut x = left;
+            let bottom = area.bottom() - 1;
+            for (key, word) in [
+                ("j k", "file"),
+                ("n p", "hunk"),
+                ("space", "mark hunk"),
+                ("f", "mark file"),
+                ("s", "sides"),
+                ("r", "reload"),
+            ] {
+                x = put(buf, x, bottom, right, key, pen.face(kind.key));
+                x = put(buf, x, bottom, right, " ", pen.paper());
+                x = put(
+                    buf,
+                    x,
+                    bottom,
+                    right,
+                    word,
+                    pen.fg(Tone::Rgb(pen.theme.graphite)),
+                );
+                x = put(buf, x, bottom, right, "   ", pen.paper());
+            }
+        }
         let body = Rect {
             x: area.x,
             y: y + 2,
             width: area.width,
-            height: area.bottom().saturating_sub(y + 2),
+            height: area.bottom().saturating_sub(y + 2 + keys_row),
         };
         if info.files.is_empty() {
             put(
