@@ -77,6 +77,18 @@ fn copy(from: &Path, to: &Path) -> Result<(), String> {
     }
 }
 
+/// Whether a directory between `target` and `to` is a link: a branch can
+/// commit one that points out of the worktree.
+fn through_link(target: &Path, to: &Path) -> bool {
+    to.ancestors()
+        .skip(1)
+        .take_while(|dir| *dir != target)
+        .any(|dir| {
+            dir.symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+        })
+}
+
 /// The copies and links, off the daemon's thread.
 fn prepare_files(main: &Path, target: &Path, shared: Option<&[String]>) -> SetupReport {
     let mut report = SetupReport::default();
@@ -87,6 +99,12 @@ fn prepare_files(main: &Path, target: &Path, shared: Option<&[String]>) -> Setup
                 for path in paths {
                     let to = target.join(&path);
                     if to.symlink_metadata().is_ok() {
+                        continue;
+                    }
+                    if through_link(target, &to) {
+                        report.errors.push(format!(
+                            "{path} is under a link in the new worktree; not copied"
+                        ));
                         continue;
                     }
                     match copy(&main.join(&path), &to) {
@@ -111,6 +129,12 @@ fn prepare_files(main: &Path, target: &Path, shared: Option<&[String]>) -> Setup
             report
                 .errors
                 .push(format!("{path} is already in the new worktree; not linked"));
+            continue;
+        }
+        if through_link(target, &to) {
+            report.errors.push(format!(
+                "{path} is under a link in the new worktree; not linked"
+            ));
             continue;
         }
         let linked = to

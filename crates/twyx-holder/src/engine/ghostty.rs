@@ -255,7 +255,9 @@ impl Ghostty {
         }
 
         for (row, col) in linked {
-            let Some(uri) = hyperlink_at(&self.term, col as u16, row as u32) else {
+            let Some(uri) = hyperlink_at(&self.term, col as u16, row as u32)
+                .filter(|uri| twyx_core::text::link_allowed(uri))
+            else {
                 continue;
             };
             let id = self.links.intern(&uri);

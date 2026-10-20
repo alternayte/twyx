@@ -172,7 +172,8 @@ enum Command {
         /// A history to show above the new output, for a pane that runs again.
         #[arg(long)]
         after: Option<PathBuf>,
-        /// A variable for the command, as NAME=VALUE.
+        /// A variable for the command: NAME takes its value from this
+        /// process's environment; NAME=VALUE sets it.
         #[arg(long = "env")]
         env: Vec<String>,
         /// The command and its arguments.
@@ -787,9 +788,9 @@ fn holder(args: HolderArgs) -> Result<()> {
     };
     let mut env: Vec<(String, String)> = overrides
         .iter()
-        .filter_map(|setting| {
-            let (name, value) = setting.split_once('=')?;
-            Some((name.to_owned(), value.to_owned()))
+        .filter_map(|setting| match setting.split_once('=') {
+            Some((name, value)) => Some((name.to_owned(), value.to_owned())),
+            None => Some((setting.clone(), std::env::var(setting).ok()?)),
         })
         .collect();
     // twyx's own variables come last, so a recipe cannot hide the pane.

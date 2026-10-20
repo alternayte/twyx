@@ -277,6 +277,23 @@ impl Store {
             .mode(0o600)
             .open(path)
             .with_context(|| format!("create {}", path.display()))?;
+        // A database or directory left from before keeps no looser mode:
+        // the database holds the last lines of check output.
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(parent) = path.parent() {
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                .with_context(|| format!("set the mode of {}", parent.display()))?;
+        }
+        for file in [
+            path.to_path_buf(),
+            path.with_extension("db-wal"),
+            path.with_extension("db-shm"),
+        ] {
+            if file.exists() {
+                std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))
+                    .with_context(|| format!("set the mode of {}", file.display()))?;
+            }
+        }
         let db = Connection::open(path).with_context(|| format!("open {}", path.display()))?;
         db.pragma_update(None, "journal_mode", "WAL")
             .context("use the write-ahead log")?;

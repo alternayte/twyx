@@ -32,6 +32,15 @@ pub fn hides(text: &str) -> bool {
         .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\t'))
 }
 
+/// Whether a link from pane output may reach a client (Invariant 14): only
+/// `http`, `https` and `file` targets.
+pub fn link_allowed(uri: &str) -> bool {
+    let scheme = uri
+        .split_once(':')
+        .map(|(scheme, _)| scheme.to_ascii_lowercase());
+    matches!(scheme.as_deref(), Some("http" | "https" | "file"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,6 +49,9 @@ mod tests {
     fn control_characters_print_as_escapes() {
         assert_eq!(visible("a\x1b[2K\rb\u{9b}"), "a\\u{1b}[2K\\u{d}b\\u{9b}");
         assert_eq!(visible("plain ünïcode"), "plain ünïcode");
+        assert!(link_allowed("HTTPS://example.com") && link_allowed("file:///tmp/a"));
+        assert!(!link_allowed("vscode://open") && !link_allowed("x-apple.systempreferences:a"));
+        assert!(!link_allowed("no scheme"));
         assert_eq!(printable("a\tb\nc\x07"), "a\tb\nc\\u{7}");
     }
 }

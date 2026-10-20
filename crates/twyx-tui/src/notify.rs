@@ -46,12 +46,13 @@ impl Form {
         };
         let body = clean(body);
         match self {
-            Self::Osc9 => format!("\x1b]9;{body}\x1b\\"),
+            // A body that starts `4;` would be a progress report to Ghostty.
+            Self::Osc9 => format!("\x1b]9;twyx: {body}\x1b\\"),
             Self::Osc777 => format!(
                 "\x1b]777;notify;{};{body}\x1b\\",
                 clean(title).replace(';', ",")
             ),
-            Self::Tmux => format!("\x1bPtmux;\x1b\x1b]9;{body}\x07\x1b\\"),
+            Self::Tmux => format!("\x1bPtmux;\x1b\x1b]9;twyx: {body}\x07\x1b\\"),
         }
     }
 }
@@ -69,7 +70,7 @@ mod tests {
         assert_eq!(Form::of(Some("xterm"), None, false), None);
         assert_eq!(
             Form::Osc9.encode("twyx", "a\x1b]0;x\x07b"),
-            "\x1b]9;a ]0;x b\x1b\\"
+            "\x1b]9;twyx: a ]0;x b\x1b\\"
         );
         assert_eq!(
             Form::Osc777.encode("t;w", "done"),
@@ -77,7 +78,7 @@ mod tests {
         );
         assert_eq!(
             Form::Tmux.encode("twyx", "done"),
-            "\x1bPtmux;\x1b\x1b]9;done\x07\x1b\\"
+            "\x1bPtmux;\x1b\x1b]9;twyx: done\x07\x1b\\"
         );
     }
 }

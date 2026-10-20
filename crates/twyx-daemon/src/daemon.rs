@@ -244,6 +244,7 @@ pub fn run(paths: Paths) -> Result<()> {
     daemon.adopt();
     daemon.restore_agents(agents);
     daemon.restore_checks();
+    daemon.sweep_history();
     match daemon.store.inbox() {
         Ok(items) => {
             daemon.inbox = items
@@ -804,14 +805,9 @@ impl Daemon {
                     self.refuse(id, format!("pane {pane} is not running"));
                     return;
                 };
-                let answers = input
-                    .iter()
-                    .any(|event| matches!(event, InputEvent::Key(_) | InputEvent::Paste(_)));
+                // Not the user's own keys, so an integration's state stays.
                 for event in input {
                     link.send(ToHolder::Input(event));
-                }
-                if answers {
-                    self.user_input(pane);
                 }
             }
             ToDaemon::Commit { worktree, message } => self.commit(id, worktree, message),
@@ -1235,8 +1231,28 @@ impl Daemon {
         self.broadcast_pane(pane);
     }
 
+    /// Deletes the history of panes that no longer exist, such as one
+    /// closed while the daemon went down (Invariant 22).
+    fn sweep_history(&self) {
+        let Ok(entries) = std::fs::read_dir(self.paths.history()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let known = entry
+                .file_name()
+                .to_str()
+                .and_then(|stem| stem.parse::<PaneId>().ok())
+                .is_some_and(|pane| self.panes.contains_key(&pane));
+            if !known {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+
     fn holder_gone(&mut self, pane: PaneId) {
         if self.closing.remove(&pane).is_some() {
+            // A checkpoint after the close may have written the history again.
+            let _ = std::fs::remove_dir_all(self.paths.pane_history(pane));
             self.advance_removals();
         }
         let Some(entry) = self.panes.get_mut(&pane) else {

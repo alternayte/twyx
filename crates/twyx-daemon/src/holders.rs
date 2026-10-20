@@ -166,8 +166,10 @@ pub(crate) fn start(
     if let Some(after) = &start.after {
         command.arg("--after").arg(after);
     }
+    // Values go in the holder's environment, not its argv, which any user
+    // can read with ps.
     for (name, value) in start.env {
-        command.arg(format!("--env={name}={value}"));
+        command.arg(format!("--env={name}")).env(name, value);
     }
     command
         .arg("--pane")
