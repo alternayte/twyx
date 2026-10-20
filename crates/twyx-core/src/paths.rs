@@ -41,6 +41,12 @@ impl Paths {
         builder
             .create(&self.runtime)
             .with_context(|| format!("create {}", self.runtime.display()))?;
+        self.check_runtime()
+    }
+
+    /// Refuses a runtime directory that another user owns, that is a link,
+    /// or that this user left open.
+    pub fn check_runtime(&self) -> Result<()> {
         let metadata = std::fs::symlink_metadata(&self.runtime)
             .with_context(|| format!("read {}", self.runtime.display()))?;
         let uid = rustix::process::geteuid().as_raw();

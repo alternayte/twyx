@@ -414,7 +414,7 @@ fn daemon(command: DaemonCommand) -> Result<()> {
             Ok(())
         }
         DaemonCommand::Stop { json } => {
-            if std::os::unix::net::UnixStream::connect(paths.socket()).is_ok() {
+            if twyx_protocol::peer::dial(&paths.socket()).is_ok() {
                 match client::connect(&paths.socket(), 80, 24, false, None) {
                     Ok(mut connection) => connection.send(&ToDaemon::Shutdown)?,
                     // A daemon of another major still says who it is.

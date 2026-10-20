@@ -9,6 +9,7 @@ pub mod connection;
 pub mod grid;
 pub mod holder;
 pub mod input;
+pub mod peer;
 pub mod sidebar;
 pub mod view;
 pub mod wire;

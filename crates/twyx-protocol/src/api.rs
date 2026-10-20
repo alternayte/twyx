@@ -400,7 +400,7 @@ pub struct Client {
 impl Client {
     /// Connects and says `hello`.
     pub fn connect(socket: &Path) -> Result<Self> {
-        let stream = UnixStream::connect(socket)
+        let stream = crate::peer::dial(socket)
             .with_context(|| format!("connect to the daemon on {}", socket.display()))?;
         let mut client = Client {
             reader: BufReader::new(stream.try_clone().context("clone the socket")?),

@@ -1511,6 +1511,8 @@ fn serve_client(stream: UnixStream, events: Sender<Event>) {
 
     let client = CLIENTS.fetch_add(1, Ordering::Relaxed);
     let (out, queued) = mpsc::channel::<FromDaemon>();
+    // A client that stops reading is dropped, not buffered without end.
+    let _ = stream.set_write_timeout(Some(twyx_core::tuning::CLIENT_WRITE_TIMEOUT));
     let mut writer = BufWriter::new(stream);
     thread::spawn(move || {
         for message in queued {

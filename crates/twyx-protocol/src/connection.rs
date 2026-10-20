@@ -38,7 +38,7 @@ pub fn connect(
     interactive: bool,
     workspace: Option<u64>,
 ) -> Result<Connection> {
-    let stream = UnixStream::connect(socket)
+    let stream = crate::peer::dial(socket)
         .with_context(|| format!("connect to the daemon on {}", socket.display()))?;
     let reader = BufReader::new(stream.try_clone().context("clone the socket")?);
     let mut connection = Connection {
@@ -178,7 +178,7 @@ pub fn attach_api(paths: &twyx_core::paths::Paths) -> Result<crate::api::Client>
 /// Waits for a daemon to go, and ends it if it does not go by itself.
 fn stop(paths: &twyx_core::paths::Paths, pid: u32) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(2);
-    while UnixStream::connect(paths.socket()).is_ok() {
+    while crate::peer::dial(&paths.socket()).is_ok() {
         if Instant::now() >= deadline {
             if let Some(pid) = rustix::process::Pid::from_raw(pid as i32) {
                 let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
@@ -193,7 +193,11 @@ fn stop(paths: &twyx_core::paths::Paths, pid: u32) -> Result<()> {
 }
 
 pub fn ensure_daemon(paths: &twyx_core::paths::Paths) -> Result<()> {
-    if UnixStream::connect(paths.socket()).is_ok() {
+    // A runtime dir someone else made, or left open, is never used.
+    if std::fs::symlink_metadata(&paths.runtime).is_ok() {
+        paths.check_runtime()?;
+    }
+    if crate::peer::dial(&paths.socket()).is_ok() {
         return Ok(());
     }
     let binary = daemon_binary()?;
@@ -206,7 +210,7 @@ pub fn ensure_daemon(paths: &twyx_core::paths::Paths) -> Result<()> {
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if UnixStream::connect(paths.socket()).is_ok() {
+        if crate::peer::dial(&paths.socket()).is_ok() {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(20));

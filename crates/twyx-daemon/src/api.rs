@@ -3,7 +3,7 @@
 //! requests and waits for their answer, one method at a time, in order.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{self, Sender};
 
@@ -69,9 +69,11 @@ pub(crate) fn serve(
     let Ok(write_stream) = stream.try_clone() else {
         return;
     };
+    // A client that stops reading is dropped, not buffered without end.
+    let _ = write_stream.set_write_timeout(Some(twyx_core::tuning::CLIENT_WRITE_TIMEOUT));
     let mut writer = BufWriter::new(write_stream);
     let mut first = String::new();
-    if reader.read_line(&mut first).unwrap_or(0) == 0 {
+    if !read_bounded(&mut reader, &mut first) {
         return;
     }
     let hello = serde_json::from_str::<Request>(&first)
@@ -130,10 +132,12 @@ pub(crate) fn serve(
         }
     });
     std::thread::spawn(move || {
-        for line in reader.lines() {
-            let Ok(line) = line else {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if !read_bounded(&mut reader, &mut line) {
                 break;
-            };
+            }
             if line.trim().is_empty() {
                 continue;
             }
@@ -235,6 +239,16 @@ pub(crate) fn serve(
         }
     }
     let _ = events.send(Event::ClientGone { client });
+}
+
+/// Reads one line of at most the message size cap; false at the end, on
+/// an error, or for a longer line, which ends the connection.
+fn read_bounded(reader: &mut BufReader<UnixStream>, line: &mut String) -> bool {
+    let cap = twyx_core::tuning::MAX_MESSAGE_BYTES as u64;
+    match reader.by_ref().take(cap + 1).read_line(line) {
+        Ok(0) | Err(_) => false,
+        Ok(read) => (read as u64) <= cap && line.ends_with('\n'),
+    }
 }
 
 fn failure(id: u64, message: String) -> Reply {
