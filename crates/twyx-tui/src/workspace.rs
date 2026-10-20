@@ -347,8 +347,8 @@ impl Workspaces {
                         lines.push("Trust covers this file as it is now, not the scripts its commands run.".to_owned());
                         effect.overlay = Some(Overlay::Confirm {
                             title: "trust the setup file".to_owned(),
-                            lines,
-                            keys: vec![('y', "trust and set up".to_owned())],
+                            keys: trust_keys(&lines, "trust and set up"),
+                            lines: shown_lines(lines, "twyx worktree setup"),
                             purpose: Purpose::TrustSetup {
                                 worktree: info.worktree,
                                 hash: info.hash.clone(),
@@ -446,6 +446,28 @@ fn shipped(report: &twyx_protocol::client::ShipReport) -> String {
     }
 }
 
+/// A trust prompt's keys: `y` only when the dialog shows every line.
+fn trust_keys(lines: &[String], word: &str) -> Vec<(char, String)> {
+    if crate::chrome::dialog::fits(lines) {
+        vec![('y', word.to_owned())]
+    } else {
+        Vec::new()
+    }
+}
+
+/// A trust prompt's lines, or where to read them in full when the dialog
+/// cannot show them all.
+fn shown_lines(lines: Vec<String>, shell: &str) -> Vec<String> {
+    if crate::chrome::dialog::fits(&lines) {
+        return lines;
+    }
+    let mut short: Vec<String> = lines.into_iter().take(2).collect();
+    short.push(format!(
+        "The file is too long to show here. Run {shell} in a shell to read all of it and trust it."
+    ));
+    short
+}
+
 /// The trust prompt for a worktree's repository check file, when it needs
 /// one.
 pub fn trust_checks(info: &ChecksInfo) -> Option<Overlay> {
@@ -464,8 +486,8 @@ pub fn trust_checks(info: &ChecksInfo) -> Option<Overlay> {
     lines.push("Trust covers this file as it is now, not the scripts its commands run.".to_owned());
     Some(Overlay::Confirm {
         title: "trust the repository's checks".to_owned(),
-        lines,
-        keys: vec![('y', "trust".to_owned())],
+        keys: trust_keys(&lines, "trust"),
+        lines: shown_lines(lines, "twyx check trust"),
         purpose: Purpose::TrustChecks {
             worktree: info.worktree,
             hash: file.hash.clone(),

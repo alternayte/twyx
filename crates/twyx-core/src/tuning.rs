@@ -114,3 +114,6 @@ pub const CHECK_TAIL_LINES: u16 = 20;
 /// How long the daemon waits on a client that does not read before it
 /// drops the client.
 pub const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The longest clipboard write a pane can make, in characters.
+pub const CLIPBOARD_CHARS: usize = 1 << 20;

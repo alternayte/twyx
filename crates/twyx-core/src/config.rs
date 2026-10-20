@@ -30,6 +30,20 @@ pub struct Config {
     pub notifications: Notifications,
     /// `[[check]]`: the user's checks, for every worktree.
     pub checks: Vec<crate::check::Check>,
+    /// `[clipboard] osc52`: which panes may set the clipboard.
+    pub osc52: Osc52,
+}
+
+/// Which panes may set the clipboard with OSC 52. No pane reads it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Osc52 {
+    /// Any pane.
+    Allow,
+    /// Only a pane that has the focus in an interactive client.
+    #[default]
+    Focused,
+    /// No pane.
+    Deny,
 }
 
 /// What an inbox item of one kind does.
@@ -89,6 +103,7 @@ impl Default for Config {
             default_agent: None,
             notifications: Notifications::default(),
             checks: Vec::new(),
+            osc52: Osc52::default(),
         }
     }
 }
@@ -145,6 +160,13 @@ struct Raw {
     notifications: Option<RawNotifications>,
     #[serde(default)]
     check: Vec<crate::check::RawCheck>,
+    clipboard: Option<RawClipboard>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawClipboard {
+    osc52: Option<Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -318,6 +340,20 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         };
     }
     let checks = crate::check::read(raw.check, fail)?;
+    let osc52 = match raw.clipboard.and_then(|clipboard| clipboard.osc52) {
+        None => Osc52::default(),
+        Some(value) => match value.get_ref().as_str() {
+            "allow" => Osc52::Allow,
+            "focused" => Osc52::Focused,
+            "deny" => Osc52::Deny,
+            other => {
+                return Err(fail(
+                    Some(value.span()),
+                    format!("{other:?} is not allow, focused or deny"),
+                ));
+            }
+        },
+    };
     let mut keymap = Keymap::default();
     let Some(keys) = raw.keys else {
         return Ok(Config {
@@ -329,6 +365,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
             default_agent,
             notifications,
             checks,
+            osc52,
         });
     };
     if let Some(prefix) = keys.prefix {
@@ -379,6 +416,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         default_agent,
         notifications,
         checks,
+        osc52,
     })
 }
 

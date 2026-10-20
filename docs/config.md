@@ -83,6 +83,21 @@ No notification fires for a pane you can see in a focused client. When several c
 turn-finished = "inbox"
 ```
 
+## `[clipboard]`
+
+A program in a pane can set your clipboard with the OSC 52 escape sequence. No pane can read it.
+
+| `osc52` | Effect |
+|---|---|
+| `focused` | Only the pane that has the focus in a client can set the clipboard. This is the default. |
+| `allow` | Any pane can. |
+| `deny` | No pane can. |
+
+```toml
+[clipboard]
+osc52 = "deny"
+```
+
 ## `[[check]]`
 
 A check is a command whose result twyx ties to the source it ran on. Your checks in `config.toml` apply to every worktree. A repository can add its own in `.twyx/checks.toml`, with the same table. Repository checks run only after you trust that file as it is; a change to the file asks again. A repository check with the name of one of yours does not show.

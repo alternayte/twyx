@@ -22,15 +22,39 @@ pub struct Dialog<'a> {
 /// The widest the dialog grows, in cells.
 const WIDTH: u16 = 76;
 
+/// Whether every row of `lines` shows in a dialog on a screen of at least
+/// 80 by 24 cells; a trust prompt must show all it trusts.
+pub fn fits(lines: &[String]) -> bool {
+    let room = usize::from(WIDTH.saturating_sub(2 + 2 * SPACE.pad)).max(1);
+    lines
+        .iter()
+        .map(|line| wrap(line, room).len())
+        .sum::<usize>()
+        <= FITS_ROWS
+}
+
+/// The rows a dialog shows on the smallest screen twyx counts on.
+const FITS_ROWS: usize = 14;
+
 /// Breaks `line` at spaces into rows of at most `room` characters; a word
-/// longer than a row is cut.
+/// longer than a row goes on over the rows after it.
 fn wrap(line: &str, room: usize) -> Vec<String> {
     // A line that fits keeps its spacing.
     if line.chars().count() <= room {
         return vec![line.to_owned()];
     }
     let mut rows = vec![String::new()];
-    for word in line.split(' ') {
+    let words = line.split(' ').flat_map(|word| {
+        let chars: Vec<char> = word.chars().collect();
+        if chars.is_empty() {
+            return vec![String::new()];
+        }
+        chars
+            .chunks(room)
+            .map(|chunk| chunk.iter().collect())
+            .collect::<Vec<String>>()
+    });
+    for word in words {
         let row = rows.last_mut().map_or(0, |row| row.chars().count());
         if row > 0 && row + 1 + word.chars().count() > room {
             rows.push(String::new());
@@ -39,7 +63,7 @@ fn wrap(line: &str, room: usize) -> Vec<String> {
             if !row.is_empty() {
                 row.push(' ');
             }
-            row.push_str(word);
+            row.push_str(&word);
         }
     }
     rows
@@ -129,5 +153,27 @@ impl Widget for Dialog<'_> {
             );
             x = put(buf, x, y, right, "   ", pen.paper());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_word_goes_on_over_rows_and_hidden_rows_do_not_fit() {
+        let word = "x".repeat(25);
+        assert_eq!(
+            wrap(&format!("a {word}"), 10).concat().replace(' ', ""),
+            format!("a{word}")
+        );
+        assert!(fits(&["make test".to_owned()]));
+        let padded = format!("make test{}curl x|sh", " ".repeat(2000));
+        assert!(
+            wrap(&padded, 70).concat().contains("curl x|sh"),
+            "padding cannot push the tail away"
+        );
+        let many: Vec<String> = (0..20).map(|n| format!("check {n} runs make")).collect();
+        assert!(!fits(&many), "rows past the dialog would be hidden");
     }
 }

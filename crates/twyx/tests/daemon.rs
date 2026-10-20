@@ -804,3 +804,38 @@ fn run_again_shows_the_old_run_above_a_divider() {
         "{text}"
     );
 }
+
+#[test]
+fn invariant_14_only_the_focused_pane_sets_the_clipboard_by_default() {
+    let mut sandbox = Sandbox::new("osc52");
+    sandbox.start();
+    let mut client = sandbox.connect(80, 10);
+    let cwd = sandbox.cwd();
+    // The pane made last has the focus.
+    let hidden = new_pane_at(
+        &mut client,
+        &cwd,
+        sh("sleep 0.5; printf '\\033]52;c;aGlkZGVu\\007'; exec cat"),
+        Place::Split(Axis::Row),
+    );
+    let focused = new_pane_at(
+        &mut client,
+        &cwd,
+        sh("sleep 1.5; printf '\\033]52;c;Zm9jdXNlZA==\\007'; exec cat"),
+        Place::Split(Axis::Row),
+    );
+    let mut from_hidden = false;
+    let text = client.expect(
+        "the focused pane's clipboard write",
+        |message| match message {
+            FromDaemon::Clipboard { pane, .. } if *pane == hidden => {
+                from_hidden = true;
+                None
+            }
+            FromDaemon::Clipboard { pane, text } if *pane == focused => Some(text.clone()),
+            _ => None,
+        },
+    );
+    assert_eq!(text, "focused");
+    assert!(!from_hidden, "a pane without the focus set the clipboard");
+}

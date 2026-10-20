@@ -1269,13 +1269,25 @@ impl Daemon {
     }
 
     fn signal(&mut self, pane: PaneId, signal: twyx_protocol::holder::Signal) {
+        use twyx_core::config::Osc52;
         use twyx_protocol::holder::Signal;
         match signal {
             Signal::ClipboardWrite(text) => {
-                self.broadcast_frames(FromDaemon::Clipboard {
+                let message = FromDaemon::Clipboard {
                     pane: pane.raw(),
                     text,
-                });
+                };
+                match self.config.osc52 {
+                    Osc52::Deny => {}
+                    Osc52::Allow => self.broadcast_frames(message),
+                    Osc52::Focused => {
+                        for (id, client) in &self.clients {
+                            if client.interactive && self.focused_pane(*id) == Some(pane) {
+                                self.post(&client.out, message.clone());
+                            }
+                        }
+                    }
+                }
             }
             Signal::Title(title) => {
                 if let Some(entry) = self.panes.get_mut(&pane) {

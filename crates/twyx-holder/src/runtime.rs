@@ -350,7 +350,13 @@ impl Core<'_> {
                 }
                 EngineSignal::Bell => send(out, FromHolder::Signal(Signal::Bell)),
                 EngineSignal::ClipboardWrite(text) => {
-                    send(out, FromHolder::Signal(Signal::ClipboardWrite(trim(&text))));
+                    send(
+                        out,
+                        FromHolder::Signal(Signal::ClipboardWrite(trim_to(
+                            &text,
+                            tuning::CLIPBOARD_CHARS,
+                        ))),
+                    );
                 }
             }
         }
