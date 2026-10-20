@@ -569,6 +569,19 @@ fn run(
                             });
                             None
                         }
+                        OverlayOutcome::Submitted {
+                            purpose: Purpose::PullRequest { worktree },
+                            values,
+                        } => {
+                            overlay = None;
+                            let field = |at: usize| values.get(at).cloned().unwrap_or_default();
+                            let _ = daemon.outgoing.send(ToDaemon::OpenPullRequest {
+                                worktree,
+                                title: field(0),
+                                body: field(1),
+                            });
+                            None
+                        }
                         OverlayOutcome::Submitted { .. } => {
                             overlay = None;
                             None
@@ -713,6 +726,34 @@ fn run(
                                                 path,
                                                 lines,
                                             },
+                                        });
+                                    }
+                                    Some(ReviewAction::Commit) => {
+                                        overlay = Some(Overlay::Prompt {
+                                            title: "commit message".to_owned(),
+                                            text: String::new(),
+                                            purpose: Purpose::Commit { worktree },
+                                        });
+                                    }
+                                    Some(ReviewAction::Push) => {
+                                        overlay = Some(Overlay::Confirm {
+                                            title: "push".to_owned(),
+                                            lines: vec![
+                                                "Push this worktree's branch to its remote. The first push sets the upstream.".to_owned(),
+                                            ],
+                                            keys: vec![('y', "push".to_owned())],
+                                            purpose: Purpose::Push { worktree },
+                                        });
+                                    }
+                                    Some(ReviewAction::PullRequest) => {
+                                        overlay = Some(Overlay::Form {
+                                            title: "pull request".to_owned(),
+                                            fields: vec![
+                                                ("title".to_owned(), String::new()),
+                                                ("body".to_owned(), String::new()),
+                                            ],
+                                            at: 0,
+                                            purpose: Purpose::PullRequest { worktree },
                                         });
                                     }
                                     Some(ReviewAction::SendNotes) => {

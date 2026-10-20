@@ -206,3 +206,29 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 | `h` | `previous-workspace` |
 | `left` | `previous-workspace` |
 
+
+## Review view
+
+These keys work while a review leaf has the focus. They are fixed. The view shows them on its last two rows.
+
+| Key | Action |
+|---|---|
+| `j` `k` | next and previous file |
+| `n` `p` | next and previous hunk |
+| `space`, `enter` | mark the hunk reviewed |
+| `f` | mark the file reviewed |
+| `s` | one side or two sides |
+| `c` | add a note on the hunk |
+| `S` | send the open notes to an agent pane |
+| `r` | read the review again |
+| `a` `A` | stage the hunk, the file |
+| `u` `U` | unstage the hunk, the file |
+| `+` `-` | stage, unstage every change |
+| `R` | stage the files whose changes are all reviewed |
+| `C` | commit the staged changes; the hooks run in a new tab |
+| `P` | push the branch, after you confirm; the first push sets the upstream |
+| `O` | open a pull request with `gh` |
+
+## Checks
+
+`ctrl-g e` lists the checks of the worktree. In the list, `enter` runs the check, `o` shows its last run's pane, `x` cancels a running check, and `t` asks to trust the repository's check file.

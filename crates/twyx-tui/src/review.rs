@@ -17,7 +17,7 @@ use twyx_core::keys::{Chord, Key};
 use twyx_core::layout::LeafId;
 use twyx_core::theme::{RULES, SPACE, Tone};
 use twyx_protocol::client::{
-    GitState, NoteInfo, NoteState, Overview, ReviewInfo, Reviewed, ToDaemon,
+    GitState, IndexState, NoteInfo, NoteState, Overview, ReviewInfo, Reviewed, ToDaemon,
 };
 
 use crate::chrome::Pen;
@@ -49,6 +49,12 @@ pub enum Action {
     },
     /// Choose the agent pane that gets the open notes.
     SendNotes,
+    /// Ask for a commit message.
+    Commit,
+    /// Ask before pushing the branch.
+    Push,
+    /// Ask for a pull request's title and body.
+    PullRequest,
 }
 
 #[derive(Debug, Default)]
@@ -152,6 +158,32 @@ impl Reviews {
                 });
             }
             (_, Some('S')) => return Some(Action::SendNotes),
+            (_, Some(key @ ('a' | 'u' | 'A' | 'U'))) => {
+                let file = files.get(cursor.file)?;
+                let hunk = file
+                    .diff
+                    .as_ref()
+                    .and_then(|diff| diff.hunks.get(cursor.hunk))
+                    .filter(|_| key.is_lowercase());
+                return Some(Action::Send(ToDaemon::Stage {
+                    worktree,
+                    path: Some(file.path.clone()),
+                    hunks: hunk.map(|hunk| vec![hunk.id()]),
+                    unstage: key.eq_ignore_ascii_case(&'u'),
+                }));
+            }
+            (_, Some(key @ ('+' | '-'))) => {
+                return Some(Action::Send(ToDaemon::Stage {
+                    worktree,
+                    path: None,
+                    hunks: None,
+                    unstage: key == '-',
+                }));
+            }
+            (_, Some('R')) => return Some(Action::Send(ToDaemon::StageReviewed { worktree })),
+            (_, Some('C')) => return Some(Action::Commit),
+            (_, Some('P')) => return Some(Action::Push),
+            (_, Some('O')) => return Some(Action::PullRequest),
             _ => {}
         }
         None
@@ -208,12 +240,14 @@ impl Widget for ReviewView<'_> {
         );
         let y = area.y + u16::from(info.error.is_some());
         put(buf, left, y, right, &summary, pen.face(kind.caption));
-        // The keys, on the last row, while the view has the focus.
-        let keys_row = u16::from(self.focused && area.height > 6);
-        if keys_row == 1 {
-            let mut x = left;
-            let bottom = area.bottom() - 1;
-            for (key, word) in [
+        // The keys, on the last rows, while the view has the focus.
+        let keys_rows = if self.focused && area.height > 8 {
+            2
+        } else {
+            0
+        };
+        let rows: [&[(&str, &str)]; 2] = [
+            &[
                 ("j k", "file"),
                 ("n p", "hunk"),
                 ("space", "mark hunk"),
@@ -222,7 +256,21 @@ impl Widget for ReviewView<'_> {
                 ("c", "note"),
                 ("S", "send notes"),
                 ("r", "reload"),
-            ] {
+            ],
+            &[
+                ("a A", "stage hunk, file"),
+                ("u U", "unstage hunk, file"),
+                ("+ -", "stage, unstage all"),
+                ("R", "stage reviewed"),
+                ("C", "commit"),
+                ("P", "push"),
+                ("O", "pull request"),
+            ],
+        ];
+        for (row, keys) in rows.iter().enumerate().take(usize::from(keys_rows)) {
+            let mut x = left;
+            let bottom = area.bottom() - keys_rows + row as u16;
+            for (key, word) in keys.iter().copied() {
                 x = put(buf, x, bottom, right, key, pen.face(kind.key));
                 x = put(buf, x, bottom, right, " ", pen.paper());
                 x = put(
@@ -240,7 +288,7 @@ impl Widget for ReviewView<'_> {
             x: area.x,
             y: y + 2,
             width: area.width,
-            height: area.bottom().saturating_sub(y + 2 + keys_row),
+            height: area.bottom().saturating_sub(y + 2 + keys_rows),
         };
         if info.files.is_empty() {
             put(
@@ -379,6 +427,13 @@ impl ReviewView<'_> {
                 Reviewed::TooLarge => ("!", kind.caption),
             };
             let x = put(buf, x + 1, y, area.right(), glyph, pen.face(face));
+            // Staged on the main index: all of it, or some.
+            let staged = match file.index {
+                IndexState::Staged => "+",
+                IndexState::Partly => "±",
+                IndexState::Committed | IndexState::Unstaged => " ",
+            };
+            let x = put(buf, x, y, area.right(), staged, pen.face(kind.caption));
             put(buf, x + 1, y, area.right(), &file.path, pen.face(face));
         }
     }
@@ -525,13 +580,13 @@ mod tests {
                     path: "a.txt".to_owned(),
                     reviewed: Reviewed::Partly,
                     diff: diff.into_iter().next(),
-                    index: twyx_protocol::client::IndexState::Unstaged,
+                    index: IndexState::Unstaged,
                 },
                 ReviewFile {
                     path: "b.txt".to_owned(),
                     reviewed: Reviewed::Yes,
                     diff: None,
-                    index: twyx_protocol::client::IndexState::Committed,
+                    index: IndexState::Committed,
                 },
             ],
             error: None,

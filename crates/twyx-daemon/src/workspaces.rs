@@ -95,6 +95,21 @@ impl Daemon {
 
     /// Switches the client that asked when it is interactive; for a command,
     /// the last-used client when `switch` is set.
+    /// Shows a leaf in a workspace to the client, or for a command client
+    /// to the interactive client used last.
+    pub(crate) fn show_leaf(&mut self, id: u64, workspace: u64, leaf: twyx_core::layout::LeafId) {
+        let target = if self.client(id).is_some_and(|client| client.interactive) {
+            id
+        } else {
+            self.last_used_client().unwrap_or(id)
+        };
+        if self.client_workspace(target) != workspace {
+            self.switch_workspace(target, workspace);
+        }
+        self.focus_leaf(target, leaf);
+        self.broadcast_workspace();
+    }
+
     pub(crate) fn switch_for(&mut self, id: u64, workspace: u64, switch: bool) -> Option<u64> {
         let target = if self.client(id).is_some_and(|client| client.interactive) {
             Some(id)

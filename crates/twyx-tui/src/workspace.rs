@@ -216,6 +216,12 @@ impl Workspaces {
                 body: text.clone(),
             });
         }
+        if let Purpose::Commit { worktree } = purpose {
+            effect.requests.push(ToDaemon::Commit {
+                worktree,
+                message: text.clone(),
+            });
+        }
         if let Purpose::NewWorktree { project } = purpose {
             self.switch_to_new = true;
             self.message = Some(format!("creating {text}"));
@@ -259,12 +265,15 @@ impl Workspaces {
                     });
                 }
             }
+            Purpose::Push { worktree } => effect.requests.push(ToDaemon::Push { worktree }),
             Purpose::TrustChecks { worktree, hash } => {
                 effect
                     .requests
                     .push(ToDaemon::TrustChecks { worktree, hash });
             }
             Purpose::NewWorktree { .. }
+            | Purpose::Commit { .. }
+            | Purpose::PullRequest { .. }
             | Purpose::Integrations
             | Purpose::NewTask { .. }
             | Purpose::Note { .. } => {}
@@ -374,6 +383,7 @@ impl Workspaces {
                     parts.join("; ")
                 });
             }
+            FromDaemon::Shipped(report) => self.message = Some(shipped(report)),
             FromDaemon::Checks(info) => self.checks = Some(info.clone()),
             FromDaemon::CheckStarted { worktree, name, .. } => {
                 self.message = Some(format!("check {name} runs; ctrl-g e and o show it"));
@@ -406,6 +416,33 @@ impl Workspaces {
             _ => {}
         }
         effect
+    }
+}
+
+/// A shipping step for the status bar: its command and how it went, with a
+/// pull request's URL.
+fn shipped(report: &twyx_protocol::client::ShipReport) -> String {
+    let last = report
+        .output
+        .lines()
+        .rev()
+        .find(|line| line.trim().starts_with("https://"))
+        .or_else(|| {
+            report
+                .output
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+        })
+        .map(str::trim)
+        .unwrap_or_default();
+    match &report.result {
+        None => format!("{} runs in its tab", report.command),
+        Some(Ok(())) if last.is_empty() => format!("{}: done", report.command),
+        Some(Ok(())) => format!("{}: {last}", report.command),
+        Some(Err(error)) if report.command.is_empty() => error.clone(),
+        Some(Err(error)) if last.is_empty() => format!("{}: {error}", report.command),
+        Some(Err(error)) => format!("{}: {error}: {last}", report.command),
     }
 }
 

@@ -55,6 +55,18 @@ pub enum Purpose {
         path: String,
         lines: (u32, u32),
     },
+    /// A commit message for the worktree's staged changes.
+    Commit {
+        worktree: u64,
+    },
+    /// Push the worktree's branch.
+    Push {
+        worktree: u64,
+    },
+    /// A pull request's title and body.
+    PullRequest {
+        worktree: u64,
+    },
     /// Trust a worktree's repository check file at this hash.
     TrustChecks {
         worktree: u64,

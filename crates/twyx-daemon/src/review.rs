@@ -53,11 +53,7 @@ impl Daemon {
                 leaf.id
             }
         };
-        if self.client_workspace(client) != workspace {
-            self.switch_for(client, workspace, true);
-        }
-        self.focus_leaf(client, leaf);
-        self.broadcast_workspace();
+        self.show_leaf(client, workspace, leaf);
     }
 
     /// Sends a worktree's review, after `change`.
