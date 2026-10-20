@@ -225,7 +225,9 @@ impl Run {
         let runtime = root.join("run");
         std::fs::create_dir_all(&runtime)?;
         std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700))?;
-        std::fs::create_dir_all(root.join("state"))?;
+        std::fs::create_dir_all(root.join("state/twyx"))?;
+        // The first-run integrations offer would take the measured keys.
+        std::fs::write(root.join("state/twyx/integrations-offered"), "")?;
         std::fs::create_dir_all(root.join("config"))?;
         Ok(Self {
             session: format!("twyx-bench-{}", std::process::id()),

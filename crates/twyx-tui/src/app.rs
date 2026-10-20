@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -105,6 +104,41 @@ pub fn doctor() -> Result<()> {
 
 /// Waits for a daemon after the last one went away, starting one if none
 /// answers. The new daemon adopts the holders, so the panes are still there.
+/// What wakes the client loop.
+enum Wake {
+    Terminal(std::io::Result<Event>),
+    /// `None` once the connection is gone.
+    Daemon(Option<Box<FromDaemon>>),
+}
+
+/// Moves a connection's messages onto the wake channel.
+fn forward(daemon: &mut client::Parts, wake: &std::sync::mpsc::Sender<Wake>) {
+    let (_, unused) = std::sync::mpsc::channel();
+    let incoming = std::mem::replace(&mut daemon.incoming, unused);
+    let wake = wake.clone();
+    std::thread::spawn(move || {
+        for message in incoming {
+            if wake.send(Wake::Daemon(Some(Box::new(message)))).is_err() {
+                return;
+            }
+        }
+        let _ = wake.send(Wake::Daemon(None));
+    });
+}
+
+/// Reads terminal events on a thread of their own until the loop goes.
+fn read_terminal(wake: std::sync::mpsc::Sender<Wake>) {
+    std::thread::spawn(move || {
+        loop {
+            let event = event::read();
+            let failed = event.is_err();
+            if wake.send(Wake::Terminal(event)).is_err() || failed {
+                return;
+            }
+        }
+    });
+}
+
 fn reconnect(
     paths: &twyx_core::paths::Paths,
     size: (u16, u16),
@@ -241,6 +275,15 @@ fn run(
     let mut notice: Option<String> = config_error;
     let mut size = size;
     let mut daemon = connection.split();
+    // One channel wakes the loop for a key or a daemon message, so neither
+    // waits on a poll interval.
+    let (wake_tx, wake) = std::sync::mpsc::channel::<Wake>();
+    forward(&mut daemon, &wake_tx);
+    read_terminal(wake_tx.clone());
+    let mut from_daemon: std::collections::VecDeque<FromDaemon> = std::collections::VecDeque::new();
+    let mut from_terminal: std::collections::VecDeque<Event> = std::collections::VecDeque::new();
+    // The connection ended while the loop waited.
+    let mut gone = false;
     let mut follow = Follow::default();
     let mut panes: HashMap<u64, PaneInfo> = HashMap::new();
     let mut views: HashMap<u64, View> = HashMap::new();
@@ -313,16 +356,17 @@ fn run(
     }
 
     loop {
-        let mut lost = false;
-        loop {
-            let message = match daemon.incoming.try_recv() {
-                Ok(message) => message,
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    lost = true;
-                    break;
+        let mut lost = std::mem::take(&mut gone);
+        while let Ok(woken) = wake.try_recv() {
+            match woken {
+                Wake::Daemon(Some(message)) => from_daemon.push_back(*message),
+                Wake::Daemon(None) => lost = true,
+                Wake::Terminal(event) => {
+                    from_terminal.push_back(event.context("read a terminal event")?);
                 }
-            };
+            }
+        }
+        while let Some(message) = from_daemon.pop_front() {
             dirty = true;
             match message {
                 FromDaemon::Workspace(workspace) => {
@@ -414,6 +458,7 @@ fn run(
             let area = tab_area(size.0, size.1, workspaces.docked);
             let shown = follow.workspace.as_ref().map(|shown| shown.workspace);
             daemon = reconnect(paths, area, shown)?;
+            forward(&mut daemon, &wake_tx);
             let _ = daemon.outgoing.send(ToDaemon::WatchOverview);
             sidebar_told = false;
             client_id = daemon.hello.client;
@@ -500,14 +545,23 @@ fn run(
             }
         }
 
-        // Frames are only drained on each turn, so this timeout is a latency
-        // floor for every keystroke-to-screen path. It matches the holder's
-        // frame interval.
-        if !event::poll(Duration::from_millis(8)).context("poll the terminal")? {
-            continue;
-        }
+        let event = match from_terminal.pop_front() {
+            Some(event) => event,
+            None => match wake.recv_timeout(twyx_core::tuning::CLIENT_TICK) {
+                Ok(Wake::Terminal(event)) => event.context("read a terminal event")?,
+                Ok(Wake::Daemon(Some(message))) => {
+                    from_daemon.push_back(*message);
+                    continue;
+                }
+                Ok(Wake::Daemon(None)) => {
+                    gone = true;
+                    continue;
+                }
+                Err(_) => continue,
+            },
+        };
         dirty = true;
-        match event::read().context("read a terminal event")? {
+        match event {
             Event::Resize(new_cols, new_rows) => {
                 size = (new_cols.max(2), new_rows.max(1 + CHROME_ROWS));
                 screen.emitter.invalidate();

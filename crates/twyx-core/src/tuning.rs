@@ -122,3 +122,6 @@ pub const CLIPBOARD_CHARS: usize = 1 << 20;
 /// output, when the pty stays open, for example while a background process
 /// of the child holds it.
 pub const EXIT_DRAIN: Duration = Duration::from_millis(250);
+
+/// How often the TUI looks at its timers when no key and no message comes.
+pub const CLIENT_TICK: Duration = Duration::from_millis(100);
