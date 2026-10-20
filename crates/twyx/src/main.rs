@@ -5,6 +5,7 @@ mod cli;
 mod integrations;
 mod projects;
 mod recipes;
+mod review;
 mod tasks;
 
 fn main() {

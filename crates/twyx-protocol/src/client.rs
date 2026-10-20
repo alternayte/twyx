@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 5;
+pub const MINOR: u16 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -178,6 +178,37 @@ pub struct PaneRef {
     pub mark: Option<Mark>,
     /// The kind of the agent session in the pane. Since minor 3.
     pub agent: Option<String>,
+}
+
+/// A worktree's review: its base and each changed file's state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewInfo {
+    pub worktree: u64,
+    /// The base branch's full ref, and the merge-base commit.
+    pub base_ref: String,
+    pub base: String,
+    /// Files with unreviewed changes first, then the reviewed ones.
+    pub files: Vec<ReviewFile>,
+    /// Why there is no review, such as a missing base branch.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Reviewed {
+    No,
+    /// Some of its changes are reviewed.
+    Partly,
+    Yes,
+    /// A new file over the size cap: it cannot be reviewed.
+    TooLarge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewFile {
+    pub path: String,
+    pub reviewed: Reviewed,
+    /// The unreviewed changes.
+    pub diff: Option<twyx_core::diff::FileDiff>,
 }
 
 /// One inbox item: an agent session or a pane that needs the user.
@@ -541,6 +572,17 @@ pub enum ToDaemon {
         agents: Vec<Option<String>>,
         prompt: Option<String>,
     },
+    /// Sends the worktree's `Review`. Since minor 6.
+    Review {
+        worktree: u64,
+    },
+    /// Marks hunks of a file reviewed, or the whole file without `hunks`,
+    /// then sends the `Review`. Since minor 6.
+    MarkReviewed {
+        worktree: u64,
+        path: String,
+        hunks: Option<Vec<u64>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -645,6 +687,8 @@ pub enum FromDaemon {
         body: String,
         sound: bool,
     },
+    /// A worktree's review. Since minor 6.
+    Review(ReviewInfo),
 }
 
 /// The request a keymap command makes of the daemon, for a client whose

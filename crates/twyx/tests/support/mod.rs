@@ -263,6 +263,7 @@ impl Client {
             FromDaemon::Notify { body, sound, .. } => self.notices.push((body.clone(), *sound)),
             FromDaemon::Clipboard { .. }
             | FromDaemon::TaskStarted { .. }
+            | FromDaemon::Review(_)
             | FromDaemon::Unsupported { .. }
             | FromDaemon::Welcome(_)
             | FromDaemon::Opened { .. }

@@ -167,6 +167,8 @@ pub struct Daemon {
     pub(crate) last_notice: Option<std::time::Instant>,
     /// Tasks whose agent waits for a setup pane, by that pane.
     pub(crate) tasks: BTreeMap<PaneId, crate::tasks::Waiting>,
+    /// One review job at a time per worktree.
+    pub(crate) review_locks: BTreeMap<u64, std::sync::Arc<std::sync::Mutex<()>>>,
 }
 
 /// Starts the daemon and serves it until the socket closes.
@@ -210,6 +212,7 @@ pub fn run(paths: Paths) -> Result<()> {
         notified: BTreeMap::new(),
         last_notice: None,
         tasks: BTreeMap::new(),
+        review_locks: BTreeMap::new(),
         legacy: Vec::new(),
         config: twyx_core::config::load(&config_file).unwrap_or_else(|error| {
             eprintln!("twyx daemon: {error}");
@@ -706,6 +709,12 @@ impl Daemon {
             ToDaemon::Inbox => self.reply(id, FromDaemon::Inbox(self.inbox_items())),
             ToDaemon::MarkUnread { item } => self.set_read(item, false),
             ToDaemon::Dismiss { item } => self.dismiss(item),
+            ToDaemon::Review { worktree } => self.review(id, worktree, None),
+            ToDaemon::MarkReviewed {
+                worktree,
+                path,
+                hunks,
+            } => self.review(id, worktree, Some((path, hunks))),
             ToDaemon::NewTask {
                 workspace,
                 name,

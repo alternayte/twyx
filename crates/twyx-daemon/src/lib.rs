@@ -10,6 +10,7 @@ mod holders;
 mod inbox;
 pub mod peer;
 mod recipes;
+mod review;
 mod setup;
 mod store;
 mod tabs;

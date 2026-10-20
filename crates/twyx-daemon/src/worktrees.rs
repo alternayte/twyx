@@ -145,6 +145,10 @@ pub(crate) enum Done {
         script: Option<String>,
         after: crate::setup::After,
     },
+    Reviewed {
+        client: u64,
+        review: twyx_protocol::client::ReviewInfo,
+    },
 }
 
 /// What follows a new worktree's setup.
@@ -354,6 +358,9 @@ impl Daemon {
                 script,
                 after,
             } => self.prepared(worktree, report, script, after),
+            Done::Reviewed { client, review } => {
+                self.reply(client, FromDaemon::Review(review));
+            }
         }
     }
 
@@ -471,6 +478,19 @@ impl Daemon {
             {
                 self.worktree_workspace(id)?;
             }
+        }
+        // Review refs of worktrees made and removed outside twyx go too.
+        if let Some(main) = self.main_path(project) {
+            let names: Vec<String> = listed
+                .iter()
+                .filter(|entry| !entry.prunable)
+                .map(|entry| entry.admin.clone())
+                .collect();
+            std::thread::spawn(move || {
+                if let Err(error) = git::review::prune_refs(&main, &names) {
+                    eprintln!("twyx daemon: {error:#}");
+                }
+            });
         }
         let gone: Vec<u64> = self
             .worktrees
@@ -945,11 +965,18 @@ impl Daemon {
                 continue;
             };
             let path = PathBuf::from(&entry.path);
+            let admin = entry.admin.clone();
             let Some(main) = self.main_path(entry.project) else {
                 continue;
             };
             self.job(move || {
                 let result = git::remove_worktree(&main, &path, force).map_err(|e| message(&e));
+                // Invariant 12: the review state goes with its worktree.
+                if result.is_ok()
+                    && let Err(error) = git::review::delete_ref(&main, &admin)
+                {
+                    eprintln!("twyx daemon: {error:#}");
+                }
                 // The branch goes only with the worktree.
                 let branch = match (&result, delete) {
                     (Ok(()), Some(deletion)) => Some(delete_branch(&main, &deletion)),

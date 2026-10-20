@@ -15,7 +15,7 @@ You need these on PATH:
 
 - Rust through rustup. The repository pins the toolchain, and rustup installs it on the first build.
 - Zig 0.16. The terminal engine builds with it.
-- Git.
+- Git 2.34 or later. Review uses `git apply --cached --3way`, which older Git refuses.
 
 Build and install from a clone:
 

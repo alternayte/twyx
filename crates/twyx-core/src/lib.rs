@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod config;
+pub mod diff;
 pub mod inbox;
 pub mod integration;
 pub mod keys;

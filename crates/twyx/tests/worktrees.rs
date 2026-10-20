@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use twyx_protocol::client::{FromDaemon, Overview, Place, RemovalPlan, SetupReport, ToDaemon};
+use twyx_protocol::client::{
+    FromDaemon, Overview, Place, RemovalPlan, ReviewInfo, Reviewed, SetupReport, ToDaemon,
+};
 
 use support::{Client, Sandbox, new_pane_at, sh};
 
@@ -676,5 +678,74 @@ fn a_task_starts_each_agent_with_the_prompt_once_its_trusted_setup_ends() {
     assert_eq!(
         git(&path, &["branch", "--show-current"]).trim(),
         "fix-the-login"
+    );
+}
+
+fn review(client: &mut Client, message: ToDaemon) -> ReviewInfo {
+    client.send(&message).unwrap();
+    client.expect("a review", |message| match message {
+        FromDaemon::Review(review) => Some(review.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn invariant_12_a_review_lives_in_its_ref_until_its_worktree_is_removed() {
+    let mut sandbox = Sandbox::new("review");
+    sandbox.start();
+    let main = repo(&sandbox, "app");
+    let mut command = Client::command(&sandbox.socket());
+    open(&mut command, &main);
+    let project = overview(&mut command).projects[0].project;
+    let (worktree, path, _) = new_worktree(&mut command, project, "feature");
+    commit(&path, "one.txt");
+    std::fs::write(path.join("two.txt"), "two\n").unwrap();
+
+    let first = review(&mut command, ToDaemon::Review { worktree });
+    assert_eq!(first.error, None);
+    assert_eq!(first.base, git(&main, &["rev-parse", "main"]).trim());
+    let states: Vec<(&str, Reviewed)> = first
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.reviewed))
+        .collect();
+    assert_eq!(
+        states,
+        vec![("one.txt", Reviewed::No), ("two.txt", Reviewed::No)]
+    );
+
+    let marked = review(
+        &mut command,
+        ToDaemon::MarkReviewed {
+            worktree,
+            path: "one.txt".to_owned(),
+            hunks: None,
+        },
+    );
+    let states: Vec<(&str, Reviewed)> = marked
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.reviewed))
+        .collect();
+    assert_eq!(
+        states,
+        vec![("two.txt", Reviewed::No), ("one.txt", Reviewed::Yes)]
+    );
+    assert_eq!(
+        git(
+            &main,
+            &["for-each-ref", "--format=%(refname)", "refs/twyx/review/"]
+        )
+        .trim(),
+        "refs/twyx/review/feature"
+    );
+    // The main index stays as Git left it; review writes only its own.
+    assert_eq!(git(&path, &["status", "--porcelain"]).trim(), "?? two.txt");
+
+    let plan = plan(&mut command, worktree);
+    remove(&mut command, &plan);
+    assert!(
+        git(&main, &["for-each-ref", "refs/twyx/review/"]).is_empty(),
+        "the removed worktree's review ref is left"
     );
 }

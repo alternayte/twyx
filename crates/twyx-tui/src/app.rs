@@ -352,6 +352,7 @@ fn run(
                 | FromDaemon::Overview(_)
                 | FromDaemon::Inbox(_)
                 | FromDaemon::TaskStarted { .. }
+                | FromDaemon::Review(_)
                 | FromDaemon::WorktreeAdded { .. }
                 | FromDaemon::RemovalPlan(_)
                 | FromDaemon::WorktreeRemoved { .. }

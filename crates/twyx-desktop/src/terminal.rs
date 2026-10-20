@@ -274,6 +274,7 @@ impl Terminal {
                         | FromDaemon::Inbox(_)
                         | FromDaemon::Notify { .. }
                         | FromDaemon::TaskStarted { .. }
+                        | FromDaemon::Review(_)
                         | FromDaemon::WorktreeAdded { .. }
                         | FromDaemon::RemovalPlan(_)
                         | FromDaemon::WorktreeRemoved { .. }

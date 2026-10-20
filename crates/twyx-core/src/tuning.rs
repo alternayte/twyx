@@ -99,3 +99,7 @@ pub const NOTIFY_GAP: Duration = Duration::from_secs(1);
 
 /// The most characters of a notification's text.
 pub const NOTIFY_TEXT_MAX: usize = 120;
+
+/// The largest new file review shows; a larger one is listed but cannot be
+/// reviewed.
+pub const REVIEW_FILE_MAX: u64 = 1024 * 1024;
