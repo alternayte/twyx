@@ -102,7 +102,18 @@ impl Widget for Sidebar<'_> {
             } else {
                 right.saturating_sub(detail_width + 2 * SPACE.gap)
             };
-            let end = put(buf, x, y, label_limit, &row.label, style);
+            let mut end = put(buf, x, y, label_limit, &row.label, style);
+            if let Some(mark) = row.mark {
+                let tone = pen.fg(pen.theme.agent(mark));
+                end = put(
+                    buf,
+                    end,
+                    y,
+                    label_limit,
+                    &format!(" {}", mark.glyph()),
+                    tone,
+                );
+            }
             if !detail.is_empty() && end + 2 * SPACE.gap <= right.saturating_sub(detail_width) {
                 let start = right - detail_width;
                 let next = put(buf, start, y, right, &row.detail, pen.face(kind.caption));

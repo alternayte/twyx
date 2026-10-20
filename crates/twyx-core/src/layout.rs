@@ -163,6 +163,22 @@ impl Layout {
         self.floating.iter().any(|floating| floating.leaf.id == id)
     }
 
+    /// The panes whose content shows: not behind a zoom, not a collapsed
+    /// stack child.
+    pub fn shown(&self) -> Vec<PaneId> {
+        let area = Cells {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        self.place(area)
+            .into_iter()
+            .filter(|placed| placed.content)
+            .map(|placed| placed.leaf.pane)
+            .collect()
+    }
+
     /// Places every leaf in `area`: the tiled ones in tree order, then the
     /// floating ones bottom first.
     pub fn place(&self, area: Cells) -> Vec<Placed> {

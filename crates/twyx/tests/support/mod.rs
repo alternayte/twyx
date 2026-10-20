@@ -113,6 +113,8 @@ pub struct Client {
     pub panes: HashMap<u64, PaneInfo>,
     pub workspace: Option<WorkspaceInfo>,
     pub tab: Option<u64>,
+    /// The inbox, once the daemon sent it.
+    pub inbox: Vec<twyx_protocol::client::InboxItem>,
 }
 
 impl Client {
@@ -156,6 +158,7 @@ impl Client {
             panes: HashMap::new(),
             workspace: None,
             tab: None,
+            inbox: Vec::new(),
         };
         client
             .send(&ToDaemon::Hello(ClientHello {
@@ -252,6 +255,7 @@ impl Client {
             FromDaemon::PaneClosed { pane } => {
                 self.panes.remove(pane);
             }
+            FromDaemon::Inbox(items) => self.inbox = items.clone(),
             FromDaemon::Refused { .. } => {}
             FromDaemon::Clipboard { .. }
             | FromDaemon::Unsupported { .. }

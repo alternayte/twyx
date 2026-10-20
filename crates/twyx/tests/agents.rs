@@ -10,8 +10,11 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use twyx_core::agent::{AgentState, Source};
+use twyx_core::inbox::Reason;
 use twyx_core::layout::Axis;
-use twyx_protocol::client::{Launch, PaneState, Place, ToDaemon};
+use twyx_core::theme::AgentState as Mark;
+use twyx_protocol::client::{InboxItem, Launch, PaneState, Place, ToDaemon};
+use twyx_protocol::input::InputEvent;
 
 mod support;
 
@@ -296,4 +299,69 @@ fn invariant_15_output_silence_never_sets_a_state_other_than_unknown() {
         "silence changed the state: {}",
         pane_list(&sandbox)
     );
+}
+
+fn item(client: &Client, pane: u64) -> Option<(InboxItem, Option<Mark>)> {
+    client
+        .inbox
+        .iter()
+        .find(|item| item.pane == pane)
+        .map(|item| (item.clone(), item.mark))
+}
+
+#[test]
+fn an_inbox_item_is_read_once_its_pane_comes_into_view_in_a_focused_client() {
+    let mut sandbox = Sandbox::new("ainbox");
+    let agent = install(&sandbox, "fakeagent", FAKE_RULES, FAKE_AGENT);
+    sandbox.start();
+    let mut client = sandbox.connect(60, 10);
+    client.send(&ToDaemon::WatchOverview).expect("watch");
+    let pane = start(&sandbox, &mut client, &agent);
+    wait_for_state(
+        &mut client,
+        pane,
+        AgentState::AwaitingPrompt,
+        Source::Screen,
+    );
+
+    // In view in a focused client: seen as it appears.
+    client.type_text("ask\r");
+    client.wait_until("an approval item, read", |client| {
+        item(client, pane).is_some_and(|(item, mark)| {
+            item.reason == Reason::NeedsApproval && item.read && mark == Some(Mark::NeedsApproval)
+        })
+    });
+
+    // The client loses focus; the finished turn waits for the user.
+    client
+        .send(&ToDaemon::Input(InputEvent::Focus(false)))
+        .expect("focus out");
+    client.type_text("work\r");
+    wait_for_state(&mut client, pane, AgentState::Working, Source::Screen);
+    client.type_text("\r");
+    client.wait_until("a finished turn, unread and done", |client| {
+        item(client, pane).is_some_and(|(item, mark)| {
+            item.reason == Reason::TurnFinished && !item.read && mark == Some(Mark::Done)
+        })
+    });
+    assert_eq!(client.inbox.len(), 1, "one item per pane");
+
+    client
+        .send(&ToDaemon::Input(InputEvent::Focus(true)))
+        .expect("focus in");
+    client.wait_until("the item read, the pane idle", |client| {
+        item(client, pane).is_some_and(|(item, mark)| item.read && mark == Some(Mark::Idle))
+    });
+
+    let id = client.inbox[0].item;
+    client
+        .send(&ToDaemon::MarkUnread { item: id })
+        .expect("mark unread");
+    client.wait_until("unread again, while the pane stays in view", |client| {
+        item(client, pane).is_some_and(|(item, mark)| !item.read && mark == Some(Mark::Done))
+    });
+    client
+        .send(&ToDaemon::Dismiss { item: id })
+        .expect("dismiss");
+    client.wait_until("no item", |client| client.inbox.is_empty());
 }

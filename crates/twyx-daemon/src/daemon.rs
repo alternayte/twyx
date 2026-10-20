@@ -112,6 +112,11 @@ pub(crate) struct Client {
     pub watching: bool,
     /// Whether the client shows its sidebar, and so every worktree.
     pub sidebar: bool,
+    /// Whether the client's window has focus, as its last focus report
+    /// said; a client that never reports one counts as focused.
+    pub focused: bool,
+    /// The panes in view when the inbox last looked.
+    pub seen: std::collections::BTreeSet<PaneId>,
 }
 
 #[derive(Debug)]
@@ -153,6 +158,10 @@ pub struct Daemon {
     /// Messages for clients, sent once the event that made them is written,
     /// so no client sees a change a crash could still lose.
     pub(crate) outbox: RefCell<Vec<(Sender<FromDaemon>, FromDaemon)>>,
+    /// The inbox items not dismissed, by id.
+    pub(crate) inbox: BTreeMap<u64, crate::inbox::Item>,
+    /// Whether watching clients have yet to get the inbox's last change.
+    pub(crate) inbox_changed: bool,
 }
 
 /// Starts the daemon and serves it until the socket closes.
@@ -191,6 +200,8 @@ pub fn run(paths: Paths) -> Result<()> {
         next_leaf: saved.next_leaf,
         store,
         outbox: RefCell::new(Vec::new()),
+        inbox: BTreeMap::new(),
+        inbox_changed: false,
         legacy: Vec::new(),
         config: twyx_core::config::load(&config_file).unwrap_or_else(|error| {
             eprintln!("twyx daemon: {error}");
@@ -204,6 +215,15 @@ pub fn run(paths: Paths) -> Result<()> {
     let agents = daemon.restore(saved);
     daemon.adopt();
     daemon.restore_agents(agents);
+    match daemon.store.inbox() {
+        Ok(items) => {
+            daemon.inbox = items
+                .into_iter()
+                .map(|item| (item.id, item.into()))
+                .collect();
+        }
+        Err(error) => eprintln!("twyx daemon: {error:#}"),
+    }
     daemon.reconcile();
     daemon.save();
     spawn_ticker(events.clone())?;
@@ -564,6 +584,7 @@ impl Daemon {
             }
             if persist {
                 self.save();
+                self.settle_inbox();
                 self.send_overview();
             }
             for (out, message) in self.outbox.take() {
@@ -610,6 +631,8 @@ impl Daemon {
                 used: self.uses,
                 watching: false,
                 sidebar: false,
+                focused: true,
+                seen: std::collections::BTreeSet::new(),
             },
         );
         if !hello.interactive {
@@ -670,7 +693,11 @@ impl Daemon {
                     client.watching = true;
                 }
                 self.reply(id, FromDaemon::Overview(self.overview_now()));
+                self.reply(id, FromDaemon::Inbox(self.inbox_items()));
             }
+            ToDaemon::Inbox => self.reply(id, FromDaemon::Inbox(self.inbox_items())),
+            ToDaemon::MarkUnread { item } => self.set_read(item, false),
+            ToDaemon::Dismiss { item } => self.dismiss(item),
             ToDaemon::Resize { cols, rows } => {
                 if let Some(client) = self.clients.get_mut(&id) {
                     client.cols = cols;
@@ -686,6 +713,16 @@ impl Daemon {
                     self.apply_size(tab);
                 }
                 self.broadcast_workspace();
+            }
+            ToDaemon::Input(InputEvent::Focus(focused)) => {
+                if let Some(client) = self.clients.get_mut(&id) {
+                    client.focused = focused;
+                }
+                if let Some(pane) = self.focused_pane(id)
+                    && let Some(link) = self.panes.get(&pane).and_then(|entry| entry.link.as_ref())
+                {
+                    link.send(ToHolder::Input(InputEvent::Focus(focused)));
+                }
             }
             ToDaemon::Input(event) => {
                 self.uses += 1;
@@ -1024,8 +1061,12 @@ impl Daemon {
             link.send(ToHolder::AckExit);
         }
         let shell = entry.launch == Launch::Shell;
+        let failed = !matches!(entry.state, PaneState::Exited { code: 0 });
         // Process exit always ends the agent session.
         self.pane_ended(pane);
+        if failed && !shell {
+            self.raise(pane, twyx_core::inbox::Reason::Failed);
+        }
         if shell && let Some((tab, leaf)) = self.leaf_of(pane) {
             self.close_leaf(tab, leaf.id);
             return;

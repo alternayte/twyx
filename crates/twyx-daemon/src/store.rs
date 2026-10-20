@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use twyx_core::agent::{AgentState, Source};
+use twyx_core::inbox::Reason;
 use twyx_core::layout::{Layout, LeafId};
 use twyx_core::pane::PaneId;
 use twyx_protocol::client::{Launch, PaneState};
@@ -106,6 +107,17 @@ const MIGRATIONS: &[&str] = &[
         pid INTEGER
     );
 ",
+    "
+    CREATE TABLE inbox_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pane INTEGER NOT NULL REFERENCES panes(id) ON DELETE CASCADE,
+        agent_session INTEGER REFERENCES agent_sessions(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        read_at INTEGER,
+        dismissed_at INTEGER
+    );
+",
 ];
 
 #[derive(Debug)]
@@ -151,6 +163,16 @@ pub(crate) struct SavedAgent {
     pub source: Source,
     pub observed_ms: u64,
     pub pid: Option<u32>,
+}
+
+/// One `inbox_items` row that is not dismissed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SavedItem {
+    pub id: u64,
+    pub pane: PaneId,
+    pub reason: Reason,
+    pub created_ms: u64,
+    pub read: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -628,6 +650,79 @@ impl Store {
             )
             .context("reserve a pane")?;
         Ok(PaneId::from_raw(self.db.last_insert_rowid() as u64))
+    }
+
+    /// The inbox items not dismissed, oldest first.
+    pub(crate) fn inbox(&self) -> Result<Vec<SavedItem>> {
+        self.rows(
+            "SELECT id, pane, kind, created_at, read_at IS NOT NULL FROM inbox_items
+             WHERE dismissed_at IS NULL ORDER BY id",
+            |row| {
+                Ok(SavedItem {
+                    id: row.get(0)?,
+                    pane: PaneId::from_raw(row.get(1)?),
+                    reason: Reason::from_name(&row.get::<_, String>(2)?)
+                        .unwrap_or(Reason::TurnFinished),
+                    created_ms: row.get(3)?,
+                    read: row.get(4)?,
+                })
+            },
+        )
+    }
+
+    /// Writes an item: a new row, or `id`'s row with a new reason, unread.
+    pub(crate) fn raise_item(
+        &self,
+        id: Option<u64>,
+        pane: PaneId,
+        session: Option<i64>,
+        reason: Reason,
+        created_ms: u64,
+    ) -> Result<u64> {
+        match id {
+            Some(id) => {
+                self.db
+                    .execute(
+                        "UPDATE inbox_items SET kind = ?2, created_at = ?3, read_at = NULL,
+                             agent_session = ?4
+                         WHERE id = ?1",
+                        params![id, reason.name(), created_ms, session],
+                    )
+                    .context("update an inbox item")?;
+                Ok(id)
+            }
+            None => {
+                self.db
+                    .execute(
+                        "INSERT INTO inbox_items (pane, agent_session, kind, created_at)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![pane.raw(), session, reason.name(), created_ms],
+                    )
+                    .context("add an inbox item")?;
+                Ok(self.db.last_insert_rowid() as u64)
+            }
+        }
+    }
+
+    pub(crate) fn read_item(&self, id: u64, read: bool) -> Result<()> {
+        self.db
+            .execute(
+                "UPDATE inbox_items SET read_at = CASE WHEN ?2 THEN unixepoch() END
+                 WHERE id = ?1",
+                params![id, read],
+            )
+            .context("mark an inbox item")?;
+        Ok(())
+    }
+
+    pub(crate) fn dismiss_item(&self, id: u64) -> Result<()> {
+        self.db
+            .execute(
+                "UPDATE inbox_items SET dismissed_at = unixepoch() WHERE id = ?1",
+                params![id],
+            )
+            .context("dismiss an inbox item")?;
+        Ok(())
     }
 
     /// Starts an agent session row for a pane.

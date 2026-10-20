@@ -238,6 +238,8 @@ pub enum Command {
     Resume,
     /// Offer the agent integrations again.
     Integrations,
+    /// Show the inbox.
+    Inbox,
     Focus(Side),
     Resize(Side),
     Swap(Side),
@@ -297,6 +299,7 @@ impl Command {
             Command::RunAgain => "run-again".to_owned(),
             Command::Resume => "resume".to_owned(),
             Command::Integrations => "install-integrations".to_owned(),
+            Command::Inbox => "inbox".to_owned(),
             Command::Focus(s) => format!("focus-{}", side(s)),
             Command::Resize(s) => format!("resize-{}", side(s)),
             Command::Swap(s) => format!("swap-{}", side(s)),
@@ -349,6 +352,7 @@ impl Command {
             Command::RunAgain => "run again".to_owned(),
             Command::Resume => "resume".to_owned(),
             Command::Integrations => "integrations".to_owned(),
+            Command::Inbox => "inbox".to_owned(),
             Command::Focus(_) => "focus".to_owned(),
             Command::Resize(_) => "resize".to_owned(),
             Command::Swap(_) => "move".to_owned(),
@@ -396,6 +400,7 @@ impl Command {
             Command::RunAgain,
             Command::Resume,
             Command::Integrations,
+            Command::Inbox,
             Command::ToggleZoom,
             Command::ToggleFloating,
             Command::NextTab,
@@ -505,6 +510,7 @@ impl Default for Keymap {
             key('w', C::Enter(Mode::Workspace)),
             key('s', C::Switcher),
             key('b', C::ToggleSidebar),
+            key('i', C::Inbox),
         ];
         command.extend(arrows(C::Focus));
         command.extend((1..=9).map(|n| key(char::from(b'0' + n), C::GoToTab(n))));

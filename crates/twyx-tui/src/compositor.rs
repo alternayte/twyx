@@ -10,10 +10,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use ratatui::widgets::Widget;
+use twyx_core::inbox::most_urgent;
 use twyx_core::keys::{Command, Keymap, Mode};
 use twyx_core::layout::{Cells, Fractions, LeafId, Placed};
-use twyx_core::theme::SPACE;
-use twyx_protocol::client::{Launch, Overview, PaneInfo, PaneState, TabInfo, WorkspaceInfo};
+use twyx_core::theme::{AgentState, SPACE};
+use twyx_protocol::client::{
+    InboxItem, Launch, Overview, PaneInfo, PaneState, TabInfo, WorkspaceInfo,
+};
 use twyx_protocol::grid::{Attrs, Cell, Colour, Cursor};
 use twyx_protocol::sidebar::Row;
 use twyx_protocol::view::View;
@@ -53,6 +56,8 @@ pub struct Scene<'a> {
     pub notice: Option<&'a str>,
     /// Every project, worktree and workspace, once the daemon sent them.
     pub overview: Option<&'a Overview>,
+    /// The inbox, newest first.
+    pub inbox: &'a [InboxItem],
     pub sidebar: Option<SidebarScene<'a>>,
 }
 
@@ -185,6 +190,45 @@ impl Scene<'_> {
 
     pub fn title(&self, pane: u64) -> String {
         pane_title(self.panes, pane)
+    }
+
+    /// The leaf that shows a pane, in any workspace.
+    pub fn leaf_of(&self, pane: u64) -> Option<LeafId> {
+        self.overview?
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panes)
+            .find(|each| each.pane == pane)
+            .map(|each| each.leaf)
+    }
+
+    /// A pane's status mark, from the overview.
+    fn mark(&self, pane: u64) -> Option<AgentState> {
+        self.overview?
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panes)
+            .find(|each| each.pane == pane)?
+            .mark
+    }
+
+    /// How many panes of every workspace show each mark.
+    fn roll_up(&self) -> Vec<(AgentState, usize)> {
+        let mut marks = std::collections::BTreeMap::new();
+        for pane in self
+            .overview
+            .iter()
+            .flat_map(|overview| &overview.workspaces)
+            .flat_map(|workspace| &workspace.panes)
+        {
+            if let Some(mark) = pane.mark {
+                marks.insert(pane.pane, mark);
+            }
+        }
+        AgentState::ALL
+            .iter()
+            .map(|state| (*state, marks.values().filter(|mark| *mark == state).count()))
+            .collect()
     }
 
     /// The keys that run a command, from the prefix: `ctrl-g p a`.
@@ -343,7 +387,19 @@ impl Scene<'_> {
                 }
             })
             .collect();
-        let tabs: Vec<Tab<'_>> = names.iter().map(|name| Tab { name, agent: None }).collect();
+        let tabs: Vec<Tab<'_>> = names
+            .iter()
+            .zip(&workspace.tabs)
+            .map(|(name, tab)| Tab {
+                name,
+                agent: most_urgent(
+                    tab.layout
+                        .leaves()
+                        .iter()
+                        .filter_map(|leaf| self.mark(leaf.pane.raw())),
+                ),
+            })
+            .collect();
         TabBar {
             pen: self.pen,
             tabs: &tabs,
@@ -392,7 +448,7 @@ impl Scene<'_> {
             branch: &branch,
             dirty: git.is_some_and(|git| git.changed > 0),
             note,
-            roll_up: &[],
+            roll_up: &self.roll_up(),
         }
         .render(Rect::new(0, self.rows - 1, self.cols, 1), buf);
     }
@@ -695,6 +751,7 @@ mod tests {
             overlay: None,
             notice: None,
             overview: None,
+            inbox: &[],
             sidebar: None,
         }
         .compose();

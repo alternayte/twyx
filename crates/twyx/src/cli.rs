@@ -87,6 +87,9 @@ enum Command {
         #[arg(long, value_name = "FIELD", conflicts_with = "session")]
         session_from_stdin: Option<String>,
     },
+    /// List the inbox: the agent sessions and panes that need you, newest
+    /// first.
+    Inbox,
     /// Install, show and remove agent integrations.
     Integration {
         #[command(subcommand)]
@@ -254,6 +257,7 @@ pub fn run() -> Result<()> {
             notify(event, agent, session)
         }
         Command::Integration { command } => crate::integrations::integration(command),
+        Command::Inbox => inbox(),
         Command::Doctor => twyx_tui::app::doctor(),
         Command::Specimen { paper } => twyx_tui::specimen::run(paper.map(|paper| match paper {
             Paper::Light => Variant::Light,
@@ -477,6 +481,41 @@ fn notify(event: NotifyEvent, agent: Option<String>, session: Option<String>) ->
         event,
         session,
     })
+}
+
+fn inbox() -> Result<()> {
+    let paths = Paths::discover()?;
+    let mut connection = crate::projects::connect(&paths)?;
+    connection.send(&ToDaemon::Inbox)?;
+    let items = crate::projects::wait(&mut connection, |message| match message {
+        FromDaemon::Inbox(items) => Some(items),
+        _ => None,
+    })?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    for item in items {
+        let place = match (&item.project, &item.worktree) {
+            (Some(project), Some(worktree)) => format!("{project}/{worktree}"),
+            (Some(project), None) => project.clone(),
+            (None, _) => "-".to_owned(),
+        };
+        let state = match item.agent {
+            Some((state, source)) => format!("{} ({})", state.name(), source.name()),
+            None => "-".to_owned(),
+        };
+        println!(
+            "{}  {}  {}  {place}  pane {}  {}  {}s ago{}",
+            item.item,
+            item.mark.map_or(item.reason.name(), |mark| mark.word()),
+            state,
+            item.pane,
+            item.title,
+            now.saturating_sub(item.created_ms / 1000),
+            if item.read { "" } else { "  unread" },
+        );
+    }
+    Ok(())
 }
 
 /// A string field of the JSON object on stdin.

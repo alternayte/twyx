@@ -6,7 +6,9 @@ use std::collections::HashMap;
 
 use twyx_core::keys::Command;
 use twyx_core::layout::LeafId;
-use twyx_protocol::client::{FromDaemon, Overview, PaneInfo, RemovalPlan, ToDaemon, WorkspaceInfo};
+use twyx_protocol::client::{
+    FromDaemon, InboxItem, Overview, PaneInfo, RemovalPlan, ToDaemon, WorkspaceInfo,
+};
 use twyx_protocol::sidebar::{self, Kind, Row, Target};
 
 use crate::compositor::pane_title;
@@ -26,6 +28,8 @@ pub struct Effect {
 #[derive(Debug, Default)]
 pub struct Workspaces {
     pub overview: Option<Overview>,
+    /// The inbox, newest first, as the daemon last sent it.
+    pub inbox: Vec<InboxItem>,
     /// Whether the sidebar stays beside the panes.
     pub docked: bool,
     /// The workspace mode cursor, as a row index.
@@ -239,6 +243,7 @@ impl Workspaces {
         let mut effect = Effect::default();
         match message {
             FromDaemon::Overview(overview) => self.overview = Some(overview.clone()),
+            FromDaemon::Inbox(items) => self.inbox = items.clone(),
             FromDaemon::WorktreeAdded {
                 worktree,
                 workspace,
@@ -416,6 +421,8 @@ mod tests {
                 pane: id,
                 tab: id,
                 leaf: LeafId(id),
+                mark: None,
+                agent: None,
             }],
             clients: 0,
         };

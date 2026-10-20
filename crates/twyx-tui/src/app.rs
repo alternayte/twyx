@@ -239,6 +239,7 @@ fn run(
                 overlay: overlay.as_ref(),
                 notice: workspaces.message.as_deref().or(notice.as_deref()),
                 overview: workspaces.overview.as_ref(),
+                inbox: &workspaces.inbox,
                 sidebar: (workspaces.docked || keymap.mode() == Mode::Workspace).then_some(
                     SidebarScene {
                         rows: &workspaces.rows,
@@ -340,6 +341,7 @@ fn run(
                 | FromDaemon::RecipeTrusted { .. } => {}
                 answer @ (FromDaemon::Refused { .. }
                 | FromDaemon::Overview(_)
+                | FromDaemon::Inbox(_)
                 | FromDaemon::WorktreeAdded { .. }
                 | FromDaemon::RemovalPlan(_)
                 | FromDaemon::WorktreeRemoved { .. }
@@ -488,6 +490,14 @@ fn run(
                             apply!(workspaces.prompted(purpose, text));
                             None
                         }
+                        OverlayOutcome::Inbox { item, dismiss } => {
+                            let _ = daemon.outgoing.send(if dismiss {
+                                ToDaemon::Dismiss { item }
+                            } else {
+                                ToDaemon::MarkUnread { item }
+                            });
+                            None
+                        }
                         OverlayOutcome::Confirmed {
                             purpose: Purpose::Integrations,
                             ..
@@ -575,6 +585,14 @@ fn run(
                         ) {
                             Ok(offer) => overlay = Some(offer),
                             Err(why) => workspaces.message = Some(why),
+                        }
+                    }
+                    Some(Command::Inbox) => {
+                        keymap.reset();
+                        if workspaces.inbox.is_empty() {
+                            workspaces.message = Some("the inbox is empty".to_owned());
+                        } else {
+                            overlay = Some(Overlay::Inbox { selected: 0 });
                         }
                     }
                     Some(Command::Integrations) => {

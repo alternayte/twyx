@@ -292,8 +292,8 @@ pub const DESKTOP: Desktop = Desktop {
 };
 
 /// The state of an agent session, as the sidebar, inbox and status bar
-/// show it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// show it. `ALL` lists them from the most urgent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum AgentState {
     NeedsApproval,
     Failed,

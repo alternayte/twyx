@@ -2,14 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 use twyx_core::agent::{AgentState, Source};
+use twyx_core::inbox::Reason;
 use twyx_core::keys::Command;
 use twyx_core::layout::{Axis, Fractions, Layout, LeafId, Side};
+use twyx_core::theme::AgentState as Mark;
 
 use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 2;
+pub const MINOR: u16 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -167,11 +169,33 @@ pub struct WorkspaceSummary {
 }
 
 /// One pane where a workspace shows it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneRef {
     pub pane: u64,
     pub tab: u64,
     pub leaf: LeafId,
+    /// The pane's status mark; a plain running pane has none. Since minor 3.
+    pub mark: Option<Mark>,
+    /// The kind of the agent session in the pane. Since minor 3.
+    pub agent: Option<String>,
+}
+
+/// One inbox item: an agent session or a pane that needs the user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxItem {
+    pub item: u64,
+    pub pane: u64,
+    pub reason: Reason,
+    /// The pane's agent state and its source now, if an agent runs there.
+    pub agent: Option<(AgentState, Source)>,
+    pub mark: Option<Mark>,
+    /// When the item appeared, in milliseconds since the Unix epoch.
+    pub created_ms: u64,
+    pub read: bool,
+    pub workspace: u64,
+    pub project: Option<String>,
+    pub worktree: Option<String>,
+    pub title: String,
 }
 
 /// Every project, worktree and workspace.
@@ -475,7 +499,8 @@ pub enum ToDaemon {
     },
     /// Ask the daemon to exit. Panes keep running.
     Shutdown,
-    /// Sends an `Overview` now and after every change to it, for a sidebar.
+    /// Sends an `Overview` and the `Inbox` now and after every change to
+    /// them, for a sidebar.
     WatchOverview,
     /// Whether this client shows its sidebar: the daemon then keeps every
     /// worktree's branch and dirty state current, not only the shown one's.
@@ -494,6 +519,16 @@ pub enum ToDaemon {
     /// its leaf. The client asked the user first. Since minor 2.
     Resume {
         panes: Vec<u64>,
+    },
+    /// Sends the `Inbox` once. Since minor 3.
+    Inbox,
+    /// Sets an inbox item unread again. Since minor 3.
+    MarkUnread {
+        item: u64,
+    },
+    /// Removes an inbox item. Since minor 3.
+    Dismiss {
+        item: u64,
     },
 }
 
@@ -583,6 +618,8 @@ pub enum FromDaemon {
     RecipeTrusted {
         name: String,
     },
+    /// The inbox, newest first. Since minor 3.
+    Inbox(Vec<InboxItem>),
 }
 
 /// The request a keymap command makes of the daemon, for a client whose
@@ -626,6 +663,7 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
         Command::Detach
         | Command::Resume
         | Command::Integrations
+        | Command::Inbox
         | Command::ToggleSidebar
         | Command::Switcher
         | Command::SidebarUp

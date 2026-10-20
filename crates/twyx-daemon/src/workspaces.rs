@@ -198,6 +198,12 @@ impl Daemon {
                                 pane: leaf.pane.raw(),
                                 tab,
                                 leaf: leaf.id,
+                                mark: self.mark(leaf.pane),
+                                agent: self
+                                    .panes
+                                    .get(&leaf.pane)
+                                    .and_then(|entry| entry.agent.session.as_ref())
+                                    .map(|session| session.kind.clone()),
                             })
                         })
                         .collect(),

@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use twyx_core::agent::{AgentState, Source};
+use twyx_core::inbox::Turn;
 use twyx_core::pane::PaneId;
 use twyx_protocol::client::{AgentEvent, AgentInfo, PaneState};
 use twyx_protocol::holder::{AgentRules, PromptMark, ScreenMatch, ToHolder};
@@ -48,6 +49,7 @@ pub(crate) struct Session {
     pid: Option<u32>,
     observed: BTreeMap<Source, (AgentState, u64)>,
     pub reference: Option<String>,
+    turn: Turn,
 }
 
 impl PaneAgent {
@@ -69,6 +71,7 @@ impl Session {
             pid,
             observed: BTreeMap::new(),
             reference: None,
+            turn: Turn::default(),
         };
         session.observe(Source::Process, AgentState::Unknown);
         session
@@ -119,7 +122,7 @@ impl Session {
     }
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| {
@@ -305,8 +308,14 @@ impl Daemon {
             }
         }
         let after = session.info();
+        let reason = (after.state != before.state)
+            .then(|| session.turn.moved(after.state))
+            .flatten();
         if (after.state, after.source) != (before.state, before.source) {
             self.broadcast_pane(pane);
+        }
+        if let Some(reason) = reason {
+            self.raise(pane, reason);
         }
     }
 
@@ -385,10 +394,18 @@ impl Daemon {
             }
             AgentEvent::Session => None,
         };
+        let before = session.info().state;
         if let Some(state) = state {
             session.observe(Source::Integration, state);
         }
+        let after = session.info().state;
+        let reason = (after != before)
+            .then(|| session.turn.moved(after))
+            .flatten();
         self.broadcast_pane(pane);
+        if let Some(reason) = reason {
+            self.raise(pane, reason);
+        }
         Ok(())
     }
 }

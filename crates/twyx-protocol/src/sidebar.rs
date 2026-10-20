@@ -2,7 +2,9 @@
 //! projects, their worktrees and workspaces, and the panes of each.
 
 use serde::{Deserialize, Serialize};
+use twyx_core::inbox::most_urgent;
 use twyx_core::layout::LeafId;
+use twyx_core::theme::AgentState as Mark;
 
 use crate::client::{Overview, WorkspaceSummary, WorktreeInfo};
 
@@ -41,6 +43,9 @@ pub struct Row {
     pub worktree: Option<u64>,
     /// The project a row belongs to.
     pub project: Option<u64>,
+    /// A pane's status mark, or the most urgent mark of a project's,
+    /// worktree's or workspace's panes.
+    pub mark: Option<Mark>,
 }
 
 /// The rows, in order. `shown` is the client's workspace and `focused` its
@@ -71,6 +76,7 @@ pub fn rows(
                     target: Some(Target::Pane(pane.leaf)),
                     worktree: summary.worktree,
                     project,
+                    mark: pane.mark,
                 });
             }
         };
@@ -104,6 +110,7 @@ pub fn rows(
                 target: summary.map(|summary| Target::Workspace(summary.workspace)),
                 worktree: None,
                 project: Some(project.project),
+                mark: summary.and_then(rollup),
             });
             if let Some(summary) = summary {
                 panes(&mut rows, summary, 1, Some(project.project));
@@ -124,6 +131,13 @@ pub fn rows(
             target: main.map(target).or_else(|| own.map(Target::Workspace)),
             worktree: None,
             project: Some(project.project),
+            mark: most_urgent(
+                project
+                    .worktrees
+                    .iter()
+                    .filter_map(|worktree| worktree.workspace.and_then(workspace))
+                    .filter_map(rollup),
+            ),
         });
         for worktree in &project.worktrees {
             rows.push(Row {
@@ -136,6 +150,7 @@ pub fn rows(
                 target: Some(target(worktree)),
                 worktree: Some(worktree.worktree),
                 project: Some(project.project),
+                mark: worktree.workspace.and_then(workspace).and_then(rollup),
             });
             if let Some(summary) = worktree.workspace.and_then(workspace) {
                 panes(&mut rows, summary, 2, Some(project.project));
@@ -160,10 +175,16 @@ pub fn rows(
             target: Some(Target::Workspace(summary.workspace)),
             worktree: None,
             project: summary.project,
+            mark: rollup(summary),
         });
         panes(&mut rows, summary, 1, summary.project);
     }
     rows
+}
+
+/// The most urgent mark of a workspace's panes.
+fn rollup(summary: &WorkspaceSummary) -> Option<Mark> {
+    most_urgent(summary.panes.iter().filter_map(|pane| pane.mark))
 }
 
 fn target(worktree: &WorktreeInfo) -> Target {
@@ -226,6 +247,12 @@ mod tests {
                     pane: *pane,
                     tab: 1,
                     leaf: LeafId(*pane),
+                    mark: match pane {
+                        5 => Some(Mark::Working),
+                        6 => Some(Mark::NeedsApproval),
+                        _ => None,
+                    },
+                    agent: None,
                 })
                 .collect(),
             clients: 0,
@@ -292,5 +319,20 @@ mod tests {
         assert_eq!(rows[4].target, Some(Target::Open("/src/fix".to_owned())));
         assert_eq!(rows[0].target, Some(Target::Workspace(2)));
         assert_eq!(rows[5].target, Some(Target::Workspace(3)));
+        let marks: Vec<Option<Mark>> = rows.iter().map(|row| row.mark).collect();
+        assert_eq!(
+            marks,
+            vec![
+                Some(Mark::NeedsApproval),
+                Some(Mark::NeedsApproval),
+                Some(Mark::Working),
+                Some(Mark::NeedsApproval),
+                None,
+                None,
+                None,
+                None,
+            ],
+            "each row rolls up the most urgent mark of its panes"
+        );
     }
 }

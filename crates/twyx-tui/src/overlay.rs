@@ -65,6 +65,11 @@ pub enum Outcome {
         purpose: Purpose,
         key: char,
     },
+    /// Mark an inbox item unread, or dismiss it.
+    Inbox {
+        item: u64,
+        dismiss: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +94,10 @@ pub enum Overlay {
         title: String,
         text: String,
         purpose: Purpose,
+    },
+    /// The inbox, newest first.
+    Inbox {
+        selected: usize,
     },
     /// Lines to read and the keys that answer them; esc declines.
     Confirm {
@@ -202,6 +211,32 @@ impl Overlay {
                 },
                 _ => Outcome::Stay,
             },
+            Overlay::Inbox { selected } => {
+                let items = scene.inbox;
+                *selected = (*selected).min(items.len().saturating_sub(1));
+                let item = items.get(*selected);
+                match (chord.key, typed) {
+                    (Key::Escape, _) => Outcome::Close,
+                    (Key::Up, _) | (_, Some('k')) => {
+                        *selected = selected.saturating_sub(1);
+                        Outcome::Stay
+                    }
+                    (Key::Down, _) | (_, Some('j')) => {
+                        *selected = (*selected + 1).min(items.len().saturating_sub(1));
+                        Outcome::Stay
+                    }
+                    (Key::Enter, _) => item
+                        .and_then(|item| scene.leaf_of(item.pane))
+                        .map_or(Outcome::Stay, |leaf| Outcome::Choose(Choice::Leaf(leaf))),
+                    (_, Some(key @ ('u' | 'x'))) => {
+                        item.map_or(Outcome::Stay, |item| Outcome::Inbox {
+                            item: item.item,
+                            dismiss: key == 'x',
+                        })
+                    }
+                    _ => Outcome::Stay,
+                }
+            }
             Overlay::Rename { tab, name } => match (chord.key, typed) {
                 (Key::Escape, _) => Outcome::Close,
                 (Key::Enter, _) => Outcome::Rename {
@@ -232,7 +267,7 @@ impl Overlay {
             Overlay::Rename { name, .. } => name.push_str(&text),
             Overlay::Prompt { text: line, .. } => line.push_str(&text),
             Overlay::Search(needle) => needle.push_str(&text),
-            Overlay::Confirm { .. } => {}
+            Overlay::Confirm { .. } | Overlay::Inbox { .. } => {}
         }
     }
 
@@ -262,6 +297,48 @@ impl Overlay {
                     query,
                     entries: &entries[skip.min(entries.len())..],
                     selected: selected - skip.min(*selected),
+                }
+                .render(area, buf);
+            }
+            Overlay::Inbox { selected } => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_millis() as u64);
+                let lines: Vec<(String, String)> = scene
+                    .inbox
+                    .iter()
+                    .map(|item| {
+                        let place = match (&item.project, &item.worktree) {
+                            (Some(project), Some(worktree)) => format!("{project} / {worktree}"),
+                            (Some(project), None) => project.clone(),
+                            (None, _) => String::new(),
+                        };
+                        let mark = item.mark.map_or(' ', |mark| mark.glyph());
+                        let state = item.mark.map_or(item.reason.name(), |mark| mark.word());
+                        let unread = if item.read { ' ' } else { '•' };
+                        (
+                            format!("{unread} {mark} {state} · {place} · {}", item.title),
+                            age(now.saturating_sub(item.created_ms)),
+                        )
+                    })
+                    .collect();
+                let entries: Vec<Entry<'_>> = lines
+                    .iter()
+                    .map(|(text, kind)| Entry {
+                        text,
+                        kind,
+                        matched: &[],
+                    })
+                    .collect();
+                let room = usize::from(area.height.saturating_sub(6)).max(1);
+                let selected = (*selected).min(entries.len().saturating_sub(1));
+                let skip = selected.saturating_sub(room - 1);
+                Palette {
+                    pen: scene.pen,
+                    title: "inbox",
+                    query: "enter jump  u unread  x dismiss",
+                    entries: &entries[skip.min(entries.len())..],
+                    selected: selected - skip.min(selected),
                 }
                 .render(area, buf);
             }
@@ -306,6 +383,17 @@ impl Overlay {
                 .render(area, buf);
             }
         }
+    }
+}
+
+/// An age in the largest whole unit.
+fn age(ms: u64) -> String {
+    let seconds = ms / 1000;
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m", seconds / 60),
+        3600..86_400 => format!("{}h", seconds / 3600),
+        _ => format!("{}d", seconds / 86_400),
     }
 }
 
@@ -414,6 +502,14 @@ fn lines(scene: &Scene<'_>, switcher: bool) -> Vec<Line> {
                 kind: "pane".to_owned(),
                 choice: Choice::Leaf(pane.leaf),
             });
+            if let Some(agent) = &pane.agent {
+                let state = pane.mark.map_or("", |mark| mark.word());
+                lines.push(Line {
+                    label: format!("{agent} {state} · {}", summary.name),
+                    kind: "agent session".to_owned(),
+                    choice: Choice::Leaf(pane.leaf),
+                });
+            }
         }
     }
     lines
