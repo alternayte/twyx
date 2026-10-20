@@ -11,6 +11,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
+pub(crate) mod checks;
 pub(crate) mod review;
 
 /// Variables a daemon may inherit that would point Git at another
