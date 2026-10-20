@@ -95,6 +95,11 @@ enum Command {
         #[command(subcommand)]
         command: crate::review::ReviewCommand,
     },
+    /// Run the checks of the current worktree and read their results.
+    Check {
+        #[command(subcommand)]
+        command: crate::checks::CheckCommand,
+    },
     /// Start tasks: a worktree per agent, with the prompt.
     Task {
         #[command(subcommand)]
@@ -270,6 +275,7 @@ pub fn run() -> Result<()> {
         Command::Inbox => inbox(),
         Command::Task { command } => crate::tasks::task(command),
         Command::Review { command } => crate::review::review(command),
+        Command::Check { command } => crate::checks::check(command),
         Command::Doctor => twyx_tui::app::doctor(),
         Command::Specimen { paper } => twyx_tui::specimen::run(paper.map(|paper| match paper {
             Paper::Light => Variant::Light,

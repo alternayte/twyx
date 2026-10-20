@@ -45,6 +45,22 @@ pub(crate) fn here(connection: &mut Connection) -> Result<u64> {
     Ok(open_path(connection, &here, false)?.0)
 }
 
+/// The Git worktree of the current directory, which this opens.
+pub(crate) fn here_worktree(connection: &mut Connection) -> Result<u64> {
+    let workspace = here(connection)?;
+    connection.send(&ToDaemon::Overview { refresh: false })?;
+    let overview = wait(connection, |message| match message {
+        FromDaemon::Overview(overview) => Some(overview),
+        _ => None,
+    })?;
+    overview
+        .workspaces
+        .iter()
+        .find(|summary| summary.workspace == workspace)
+        .and_then(|summary| summary.worktree)
+        .context("this directory is not in a Git worktree")
+}
+
 fn recipes(connection: &mut Connection, workspace: u64) -> Result<Vec<RecipeInfo>> {
     connection.send(&ToDaemon::Recipes { workspace })?;
     wait(connection, |message| match message {

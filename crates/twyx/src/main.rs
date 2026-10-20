@@ -1,6 +1,7 @@
 //! The `twyx` binary: CLI, TUI client, and the hidden daemon and holder
 //! processes.
 
+mod checks;
 mod cli;
 mod integrations;
 mod projects;
