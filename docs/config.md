@@ -73,6 +73,7 @@ Each kind of inbox item can be `off` (no inbox item), `inbox` (an inbox item onl
 | `needs-approval` | `off`, `inbox`, `notify`, `sound` | `sound` |
 | `turn-finished` | `off`, `inbox`, `notify`, `sound` | `notify` |
 | `failed` | `off`, `inbox`, `notify`, `sound` | `notify` |
+| `check-ended` | `off`, `inbox`, `notify`, `sound` | `notify` |
 | `sound` | a path to a sound file for the desktop client | its own sound |
 
 No notification fires for a pane you can see in a focused client. When several clients are attached, the focused one notifies; when none is focused, the one you used last does. The TUI sends OSC 9 to Ghostty, iTerm2, WezTerm and kitty, and OSC 777 to foot and urxvt. Inside tmux it wraps OSC 9 in tmux's passthrough, which reaches your terminal only with `set -g allow-passthrough on`. With `sound`, the TUI also rings the bell.
@@ -81,3 +82,32 @@ No notification fires for a pane you can see in a focused client. When several c
 [notifications]
 turn-finished = "inbox"
 ```
+
+## `[[check]]`
+
+A check is a command whose result twyx ties to the source it ran on. Your checks in `config.toml` apply to every worktree. A repository can add its own in `.twyx/checks.toml`, with the same table. Repository checks run only after you trust that file as it is; a change to the file asks again. A repository check with the name of one of yours does not show.
+
+| Key | Value |
+|---|---|
+| `name` | the name you run it by |
+| `command` | a command for `/bin/sh -c`, run in the worktree's directory |
+| `timeout` | seconds; optional |
+
+```toml
+[[check]]
+name = "test"
+command = "cargo test"
+timeout = 900
+```
+
+Each run is a pane without a leaf. `ctrl-g e` lists the checks: `enter` runs one, `o` shows its pane, `x` cancels it. From a shell, `twyx check list`, `twyx check run <name>`, `twyx check status [<name>]` and `twyx check trust` do the same; `twyx check run` waits and exits non-zero unless the check passes.
+
+twyx takes the source key, the Git tree of the tracked files and the untracked files that are not ignored, before the run and after it. The result is:
+
+- `pass`: the command exited 0 and the source key did not change.
+- `fail`: the command exited with another code or a signal, and the source key did not change.
+- `inconclusive`: the source changed during the run.
+- `timed out`: the run passed its timeout; twyx killed its whole process group.
+- `cancelled`: you stopped the run, or closed its pane.
+
+A pass or a fail shows as `stale` once the source changes after it. A result keeps the exit code and the last 20 lines of output. A pass is evidence, not proof: the command exited 0 on that source.
