@@ -103,3 +103,7 @@ pub const NOTIFY_TEXT_MAX: usize = 120;
 /// The largest new file review shows; a larger one is listed but cannot be
 /// reviewed.
 pub const REVIEW_FILE_MAX: u64 = 1024 * 1024;
+
+/// How often a shown review reads the worktree again, to catch edits that
+/// leave its Git state as it was.
+pub const REVIEW_REFRESH: Duration = Duration::from_secs(5);

@@ -7,6 +7,7 @@
 //! column says which is which.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -55,13 +56,14 @@ pub struct Reviews {
     pub infos: HashMap<u64, ReviewInfo>,
     pub notes: HashMap<u64, Vec<NoteInfo>>,
     pub cursors: HashMap<LeafId, Cursor>,
-    /// Each asked worktree's Git state when it was asked for.
-    asked: HashMap<u64, Option<GitState>>,
+    /// Each asked worktree's Git state when it was asked for, and when.
+    asked: HashMap<u64, (Option<GitState>, Instant)>,
 }
 
 impl Reviews {
     /// Requests for the reviews that `shown` leaves need: not asked for
-    /// yet, or asked for before the worktree's Git state last changed.
+    /// yet, asked for before the worktree's Git state last changed, or
+    /// asked for a refresh interval ago.
     pub fn wanted(&mut self, shown: &[u64], overview: Option<&Overview>) -> Vec<ToDaemon> {
         let mut requests = Vec::new();
         for worktree in shown {
@@ -71,8 +73,11 @@ impl Reviews {
                 .flat_map(|project| &project.worktrees)
                 .find(|each| each.worktree == *worktree)
                 .and_then(|each| each.git.clone());
-            if self.asked.get(worktree) != Some(&git) {
-                self.asked.insert(*worktree, git);
+            let fresh = self.asked.get(worktree).is_some_and(|(seen, at)| {
+                *seen == git && at.elapsed() < twyx_core::tuning::REVIEW_REFRESH
+            });
+            if !fresh {
+                self.asked.insert(*worktree, (git, Instant::now()));
                 requests.push(ToDaemon::Review {
                     worktree: *worktree,
                 });
