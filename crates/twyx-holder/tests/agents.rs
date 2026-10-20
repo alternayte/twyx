@@ -111,6 +111,12 @@ fn workdir(agent: &Agent) -> PathBuf {
 
 fn submit(pane: &mut Pane, text: &str) {
     pane.type_text(text);
+    // Under load an agent can still be taking in the text; an Enter that
+    // arrives then is lost.
+    let start: String = text.chars().take(24).collect();
+    pane.wait_for_within("the typed prompt", Duration::from_secs(20), || {
+        pane.text().iter().any(|row| row.contains(&start))
+    });
     thread::sleep(Duration::from_millis(300));
     pane.key(KeyCode::Enter, Modifiers::empty());
 }
