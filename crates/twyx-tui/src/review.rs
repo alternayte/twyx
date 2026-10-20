@@ -30,8 +30,9 @@ const LIST_WIDTH: u16 = 60;
 pub struct Cursor {
     pub file: usize,
     pub hunk: usize,
-    /// Two sides, one, or as the width allows.
-    pub split: Option<bool>,
+    /// Whether to show the other layout than the width chooses: two sides
+    /// when the diff is wide enough, else one.
+    pub flip: bool,
 }
 
 #[derive(Debug, Default)]
@@ -93,7 +94,7 @@ impl Reviews {
             }
             (_, Some('n')) => cursor.hunk = (cursor.hunk + 1).min(hunks.saturating_sub(1)),
             (_, Some('p')) => cursor.hunk = cursor.hunk.saturating_sub(1),
-            (_, Some('s')) => cursor.split = Some(!cursor.split.unwrap_or(false)),
+            (_, Some('s')) => cursor.flip = !cursor.flip,
             (_, Some('r')) => return Some(ToDaemon::Review { worktree }),
             (Key::Enter, _) | (_, Some(' ')) => {
                 let file = files.get(cursor.file)?;
@@ -219,7 +220,7 @@ impl Widget for ReviewView<'_> {
         let file = &info.files[selected];
         match (&file.diff, file.reviewed) {
             (Some(diff), _) => {
-                let split = self.cursor.split.unwrap_or(diff_area.width >= SPLIT_WIDTH);
+                let split = (diff_area.width >= SPLIT_WIDTH) != self.cursor.flip;
                 self.diff(diff, split, diff_area, buf);
             }
             (None, Reviewed::TooLarge) => {
@@ -381,7 +382,7 @@ impl ReviewView<'_> {
                     buf[(x + 1 + half, y)]
                         .set_char(RULES.vertical)
                         .set_style(pen.rule());
-                    put(buf, x + 2 + half, y, area.right(), text, grey);
+                    put(buf, x + 3 + half, y, area.right(), text, grey);
                 }
                 Row::Pair(old, new) => {
                     if let Some(old) = old {
