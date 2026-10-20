@@ -16,7 +16,7 @@ use std::thread;
 
 use anyhow::{Context, Result, bail};
 
-use twyx_core::layout::{Axis, Cells, Layout, Leaf, LeafId};
+use twyx_core::layout::{Axis, Cells, Content, Layout, Leaf, LeafId};
 use twyx_core::pane::PaneId;
 use twyx_core::paths::Paths;
 use twyx_protocol::client::{
@@ -436,7 +436,11 @@ impl Daemon {
     fn reconcile(&mut self) {
         for (_, tab) in &mut self.tabs {
             for leaf in tab.layout.leaves() {
-                if !self.panes.contains_key(&leaf.pane) {
+                let known = match leaf.content {
+                    Content::Pane(pane) => self.panes.contains_key(&pane),
+                    Content::Review(worktree) => self.worktrees.contains_key(&worktree),
+                };
+                if !known {
                     tab.layout.remove(leaf.id);
                 }
             }
@@ -444,8 +448,7 @@ impl Daemon {
         let shown: Vec<PaneId> = self
             .tabs
             .iter()
-            .flat_map(|(_, tab)| tab.layout.leaves())
-            .map(|leaf| leaf.pane)
+            .flat_map(|(_, tab)| tab.layout.panes())
             .collect();
         let unshown: Vec<PaneId> = self
             .panes
@@ -710,6 +713,7 @@ impl Daemon {
             ToDaemon::MarkUnread { item } => self.set_read(item, false),
             ToDaemon::Dismiss { item } => self.dismiss(item),
             ToDaemon::Review { worktree } => self.review(id, worktree, None),
+            ToDaemon::OpenReview { worktree } => self.open_review(id, worktree),
             ToDaemon::MarkReviewed {
                 worktree,
                 path,
@@ -1019,7 +1023,10 @@ impl Daemon {
         for placed in placed {
             let cols = placed.inner.width.max(2);
             let rows = placed.inner.height.max(1);
-            let Some(pane) = self.panes.get_mut(&placed.leaf.pane) else {
+            let Some(id) = placed.leaf.terminal() else {
+                continue;
+            };
+            let Some(pane) = self.panes.get_mut(&id) else {
                 continue;
             };
             if pane.cols == cols && pane.rows == rows {
@@ -1030,7 +1037,7 @@ impl Daemon {
             if let Some(link) = &pane.link {
                 link.send(ToHolder::Resize { cols, rows });
             }
-            resized.push(placed.leaf.pane);
+            resized.push(id);
         }
         for pane in resized {
             self.broadcast_pane(pane);
@@ -1193,7 +1200,16 @@ impl Daemon {
     pub(crate) fn new_leaf(&mut self, pane: PaneId) -> Leaf {
         let id = LeafId(self.next_leaf);
         self.next_leaf += 1;
-        Leaf { id, pane }
+        Leaf::pane(id, pane)
+    }
+
+    pub(crate) fn new_review_leaf(&mut self, worktree: u64) -> Leaf {
+        let id = LeafId(self.next_leaf);
+        self.next_leaf += 1;
+        Leaf {
+            id,
+            content: Content::Review(worktree),
+        }
     }
 
     /// The tab and leaf that show a pane.
@@ -1221,7 +1237,7 @@ impl Daemon {
 
     fn focused_pane(&self, id: u64) -> Option<PaneId> {
         let (tab, leaf) = self.client_focus(id)?;
-        self.tab(tab)?.layout.leaf(leaf).map(|leaf| leaf.pane)
+        self.tab(tab)?.layout.leaf(leaf)?.terminal()
     }
 
     pub(crate) fn send_focus(&self, id: u64) {

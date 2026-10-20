@@ -13,5 +13,6 @@ pub mod mouse;
 pub mod notify;
 pub mod overlay;
 pub mod probe;
+pub mod review;
 pub mod specimen;
 pub mod workspace;

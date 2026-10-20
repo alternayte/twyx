@@ -258,7 +258,7 @@ fn a_shell_pane_closes_with_its_shell_and_a_command_pane_stays_to_run_again() {
         let leaves = c.workspace.as_ref().expect("a workspace").tabs[0]
             .layout
             .leaves();
-        leaves.len() == 1 && leaves[0].pane.raw() == again
+        leaves.len() == 1 && leaves[0].terminal().map(|pane| pane.raw()) == Some(again)
     });
 }
 
@@ -389,7 +389,7 @@ fn invariant_8_after_a_daemon_start_running_means_a_live_holder_owned_by_one_pan
         .tabs
         .iter()
         .flat_map(|tab| tab.layout.leaves())
-        .map(|leaf| leaf.pane.raw())
+        .filter_map(|leaf| leaf.terminal().map(|pane| pane.raw()))
         .collect();
     shown.sort_unstable();
     let mut expected = vec![live, crashed, 999];
@@ -400,7 +400,7 @@ fn invariant_8_after_a_daemon_start_running_means_a_live_holder_owned_by_one_pan
         .iter()
         .find(|tab| tab.name == "Recovered")
         .expect("a Recovered tab");
-    assert_eq!(recovered.layout.leaves()[0].pane.raw(), 999);
+    assert_eq!(recovered.layout.leaves()[0].terminal().unwrap().raw(), 999);
 }
 
 #[test]

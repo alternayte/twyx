@@ -17,9 +17,69 @@ pub struct LeafId(pub u64);
 
 /// What a leaf shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "RawLeaf", into = "RawLeaf")]
 pub struct Leaf {
     pub id: LeafId,
-    pub pane: PaneId,
+    pub content: Content,
+}
+
+/// A terminal, or a view the client draws itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Content {
+    Pane(PaneId),
+    /// The review of one worktree.
+    Review(u64),
+}
+
+impl Leaf {
+    pub fn pane(id: LeafId, pane: PaneId) -> Self {
+        Self {
+            id,
+            content: Content::Pane(pane),
+        }
+    }
+
+    /// The leaf's pane, if it is a terminal.
+    pub fn terminal(&self) -> Option<PaneId> {
+        match self.content {
+            Content::Pane(pane) => Some(pane),
+            Content::Review(_) => None,
+        }
+    }
+}
+
+/// A leaf as stored and sent. Layouts written before leaves had kinds hold
+/// only `pane`.
+#[derive(Serialize, Deserialize)]
+struct RawLeaf {
+    id: LeafId,
+    #[serde(default)]
+    pane: Option<PaneId>,
+    #[serde(default)]
+    content: Option<Content>,
+}
+
+impl From<RawLeaf> for Leaf {
+    fn from(raw: RawLeaf) -> Self {
+        let content = raw
+            .content
+            .or(raw.pane.map(Content::Pane))
+            .unwrap_or(Content::Pane(PaneId::from_raw(0)));
+        Self {
+            id: raw.id,
+            content,
+        }
+    }
+}
+
+impl From<Leaf> for RawLeaf {
+    fn from(leaf: Leaf) -> Self {
+        Self {
+            id: leaf.id,
+            pane: leaf.terminal(),
+            content: Some(leaf.content),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,7 +208,14 @@ impl Layout {
     }
 
     pub fn find(&self, pane: PaneId) -> Option<Leaf> {
-        self.leaves().into_iter().find(|leaf| leaf.pane == pane)
+        self.leaves()
+            .into_iter()
+            .find(|leaf| leaf.terminal() == Some(pane))
+    }
+
+    /// The panes of the terminal leaves.
+    pub fn panes(&self) -> Vec<PaneId> {
+        self.leaves().iter().filter_map(Leaf::terminal).collect()
     }
 
     pub fn contains(&self, id: LeafId) -> bool {
@@ -175,7 +242,7 @@ impl Layout {
         self.place(area)
             .into_iter()
             .filter(|placed| placed.content)
-            .map(|placed| placed.leaf.pane)
+            .filter_map(|placed| placed.leaf.terminal())
             .collect()
     }
 
@@ -481,11 +548,11 @@ impl Layout {
     /// Points a leaf at another pane, for "Run again".
     pub fn replace_pane(&mut self, id: LeafId, pane: PaneId) {
         if let Some(root) = &mut self.root {
-            replace_leaf(root, id, Leaf { id, pane });
+            replace_leaf(root, id, Leaf::pane(id, pane));
         }
         for floating in &mut self.floating {
             if floating.leaf.id == id {
-                floating.leaf.pane = pane;
+                floating.leaf.content = Content::Pane(pane);
             }
         }
     }
@@ -885,10 +952,19 @@ mod tests {
     use super::*;
 
     fn leaf(n: u64) -> Leaf {
-        Leaf {
-            id: LeafId(n),
-            pane: PaneId::from_raw(n),
-        }
+        Leaf::pane(LeafId(n), PaneId::from_raw(n))
+    }
+
+    #[test]
+    fn a_layout_saved_before_leaf_kinds_still_loads_and_a_review_leaf_round_trips() {
+        let old: Leaf = serde_json::from_str(r#"{"id":3,"pane":7}"#).unwrap();
+        assert_eq!(old, Leaf::pane(LeafId(3), PaneId::from_raw(7)));
+        let review = Leaf {
+            id: LeafId(4),
+            content: Content::Review(9),
+        };
+        let text = serde_json::to_string(&review).unwrap();
+        assert_eq!(serde_json::from_str::<Leaf>(&text).unwrap(), review);
     }
 
     fn area(width: u16, height: u16) -> Cells {

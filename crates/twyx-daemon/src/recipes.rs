@@ -476,7 +476,7 @@ impl Daemon {
             for (name, id, record) in records {
                 let inner = placed
                     .iter()
-                    .find(|placed| placed.leaf.pane == id)
+                    .find(|placed| placed.leaf.terminal() == Some(id))
                     .map(|placed| placed.inner)
                     .unwrap_or_default();
                 let record = Pane {

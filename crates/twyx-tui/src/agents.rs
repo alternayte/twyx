@@ -32,8 +32,8 @@ pub fn resume_offer(
         .map(|workspace| workspace.tabs.as_slice())
         .unwrap_or(&[])
     {
-        for leaf in tab.layout.leaves() {
-            let pane = leaf.pane.raw();
+        for pane in tab.layout.panes() {
+            let pane = pane.raw();
             if pane != focused.pane && panes.get(&pane).is_some_and(|info| info.resume.is_some()) {
                 all.push(pane);
             }

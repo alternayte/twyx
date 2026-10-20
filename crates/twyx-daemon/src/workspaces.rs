@@ -194,16 +194,19 @@ impl Daemon {
                         .iter()
                         .filter_map(|tab| Some((*tab, self.tab(*tab)?)))
                         .flat_map(|(tab, entry)| {
-                            entry.layout.leaves().into_iter().map(move |leaf| PaneRef {
-                                pane: leaf.pane.raw(),
-                                tab,
-                                leaf: leaf.id,
-                                mark: self.mark(leaf.pane),
-                                agent: self
-                                    .panes
-                                    .get(&leaf.pane)
-                                    .and_then(|entry| entry.agent.session.as_ref())
-                                    .map(|session| session.kind.clone()),
+                            entry.layout.leaves().into_iter().filter_map(move |leaf| {
+                                let pane = leaf.terminal()?;
+                                Some(PaneRef {
+                                    pane: pane.raw(),
+                                    tab,
+                                    leaf: leaf.id,
+                                    mark: self.mark(pane),
+                                    agent: self
+                                        .panes
+                                        .get(&pane)
+                                        .and_then(|entry| entry.agent.session.as_ref())
+                                        .map(|session| session.kind.clone()),
+                                })
                             })
                         })
                         .collect(),

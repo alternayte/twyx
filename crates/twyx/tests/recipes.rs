@@ -244,7 +244,7 @@ command = ["/bin/sh", "-c", "echo top; exec cat"]
     assert_eq!((children.len(), *expanded), (2, 1));
 
     let left = match &children_of(code)[0] {
-        Node::Leaf(leaf) => leaf.pane.raw(),
+        Node::Leaf(leaf) => leaf.terminal().unwrap().raw(),
         other => panic!("not a leaf: {other:?}"),
     };
     client.wait_for_text(left, "in-src greeting=hello");

@@ -428,7 +428,7 @@ impl Daemon {
     }
 
     /// The workspace of a worktree, made when it has none.
-    fn worktree_workspace(&mut self, worktree: u64) -> anyhow::Result<u64> {
+    pub(crate) fn worktree_workspace(&mut self, worktree: u64) -> anyhow::Result<u64> {
         let Some(entry) = self.worktrees.get(&worktree) else {
             anyhow::bail!("no worktree {worktree}");
         };
@@ -998,6 +998,23 @@ impl Daemon {
             eprintln!("twyx daemon: {error:#}");
         }
         self.worktrees.remove(&worktree);
+        // Its review leaves have nothing left to show.
+        for (_, tab) in &mut self.tabs {
+            for leaf in tab.layout.leaves() {
+                if leaf.content == twyx_core::layout::Content::Review(worktree) {
+                    tab.layout.remove(leaf.id);
+                }
+            }
+        }
+        let empty: Vec<u64> = self
+            .tabs
+            .iter()
+            .filter(|(_, tab)| tab.layout.is_empty())
+            .map(|(id, _)| *id)
+            .collect();
+        for tab in empty {
+            self.drop_empty_tab(tab);
+        }
         let workspaces: Vec<u64> = self
             .workspaces
             .iter()

@@ -12,7 +12,8 @@ use ratatui::style::{Color, Modifier};
 use ratatui::widgets::Widget;
 use twyx_core::inbox::most_urgent;
 use twyx_core::keys::{Command, Keymap, Mode};
-use twyx_core::layout::{Cells, Fractions, LeafId, Placed};
+use twyx_core::layout::{Cells, Content, Fractions, Leaf, LeafId, Placed};
+use twyx_core::pane::PaneId;
 use twyx_core::theme::{AgentState, SPACE};
 use twyx_protocol::client::{
     InboxItem, Launch, Overview, PaneInfo, PaneState, TabInfo, WorkspaceInfo,
@@ -28,6 +29,7 @@ use crate::chrome::sidebar::Sidebar;
 use crate::emitter::Grid;
 use crate::mouse::Selection;
 use crate::overlay::Overlay;
+use crate::review::{ReviewView, Reviews};
 
 /// A buffer cell no widget wrote: the cell below shows through.
 const UNTOUCHED: &str = "\u{0}";
@@ -58,6 +60,8 @@ pub struct Scene<'a> {
     pub overview: Option<&'a Overview>,
     /// The inbox, newest first.
     pub inbox: &'a [InboxItem],
+    /// The reviews that review leaves show.
+    pub reviews: &'a Reviews,
     pub sidebar: Option<SidebarScene<'a>>,
 }
 
@@ -192,6 +196,23 @@ impl Scene<'_> {
         pane_title(self.panes, pane)
     }
 
+    /// A leaf's title: its pane's, or what the view shows.
+    pub fn leaf_title(&self, leaf: &Leaf) -> String {
+        match leaf.content {
+            Content::Pane(pane) => self.title(pane.raw()),
+            Content::Review(worktree) => {
+                let name = self
+                    .overview
+                    .iter()
+                    .flat_map(|overview| &overview.projects)
+                    .flat_map(|project| &project.worktrees)
+                    .find(|each| each.worktree == worktree)
+                    .map_or("worktree", |each| each.name.as_str());
+                format!("review · {name}")
+            }
+        }
+    }
+
     /// The leaf that shows a pane, in any workspace.
     pub fn leaf_of(&self, pane: u64) -> Option<LeafId> {
         self.overview?
@@ -283,10 +304,7 @@ impl Scene<'_> {
 
         let placed = self.placed();
         let tiled: Vec<&Placed> = placed.iter().filter(|p| !p.floating && p.frame).collect();
-        let titles: Vec<String> = tiled
-            .iter()
-            .map(|p| self.title(p.leaf.pane.raw()))
-            .collect();
+        let titles: Vec<String> = tiled.iter().map(|p| self.leaf_title(&p.leaf)).collect();
         let frames: Vec<Frame<'_>> = tiled
             .iter()
             .zip(&titles)
@@ -309,7 +327,7 @@ impl Scene<'_> {
         for placed in placed.iter().filter(|p| p.floating) {
             clear(&mut grid, rect(placed.outer).intersection(panes_area));
             let mut layer = sentinel(screen);
-            let title = self.title(placed.leaf.pane.raw());
+            let title = self.leaf_title(&placed.leaf);
             Frames {
                 pen,
                 frames: &[Frame {
@@ -380,7 +398,7 @@ impl Scene<'_> {
                     tab.layout
                         .leaves()
                         .first()
-                        .map(|leaf| self.title(leaf.pane.raw()))
+                        .map(|leaf| self.leaf_title(leaf))
                         .unwrap_or_default()
                 } else {
                     tab.name.clone()
@@ -396,7 +414,7 @@ impl Scene<'_> {
                     tab.layout
                         .leaves()
                         .iter()
-                        .filter_map(|leaf| self.mark(leaf.pane.raw())),
+                        .filter_map(|leaf| self.mark(leaf.terminal()?.raw())),
                 ),
             })
             .collect();
@@ -456,7 +474,25 @@ impl Scene<'_> {
     /// Copies a pane's screen into its place, cut to the panes area. A pane
     /// that ended says so on its bottom rule.
     fn pane(&self, grid: &mut Grid, links: &mut Links, placed: &Placed, area: Rect) {
-        let pane = placed.leaf.pane.raw();
+        let Some(pane) = placed.leaf.terminal().map(PaneId::raw) else {
+            if let Content::Review(worktree) = placed.leaf.content {
+                let mut layer = sentinel(Rect::new(0, 0, self.cols, self.rows));
+                ReviewView {
+                    pen: self.pen,
+                    info: self.reviews.infos.get(&worktree),
+                    cursor: self
+                        .reviews
+                        .cursors
+                        .get(&placed.leaf.id)
+                        .copied()
+                        .unwrap_or_default(),
+                    focused: Some(placed.leaf.id) == self.focus,
+                }
+                .render(rect(placed.inner).intersection(area), &mut layer);
+                overlay_cells(grid, &layer);
+            }
+            return;
+        };
         let inner = rect(placed.inner).intersection(area);
         if let Some(view) = self.views.get(&pane) {
             for row in 0..inner.height {
@@ -541,8 +577,9 @@ impl Scene<'_> {
         let focused = placed
             .iter()
             .find(|p| Some(p.leaf.id) == self.focus && p.content)?;
-        let view = self.views.get(&focused.leaf.pane.raw())?;
-        let state = self.panes.get(&focused.leaf.pane.raw())?.state.clone();
+        let pane = focused.leaf.terminal()?.raw();
+        let view = self.views.get(&pane)?;
+        let state = self.panes.get(&pane)?.state.clone();
         // The copy cursor shows in copy mode; any other mode hides the cursor.
         let shown = matches!(self.keymap.mode(), Mode::Normal | Mode::Copy);
         if state != PaneState::Running || !view.cursor.visible || !shown || self.overlay.is_some() {
@@ -707,10 +744,7 @@ mod tests {
     /// Two panes side by side in a `tab`x4 tab area, on a client of
     /// `cols`x`rows`.
     fn screen(cols: u16, rows: u16, tab: u16, lease: u64, states: [PaneState; 2]) -> Vec<String> {
-        let leaf = |n: u64| Leaf {
-            id: LeafId(n),
-            pane: PaneId::from_raw(n),
-        };
+        let leaf = |n: u64| Leaf::pane(LeafId(n), PaneId::from_raw(n));
         let mut layout = Layout::default();
         layout.split(None, leaf(1), Axis::Row);
         layout.split(Some(LeafId(1)), leaf(2), Axis::Row);
@@ -752,6 +786,7 @@ mod tests {
             notice: None,
             overview: None,
             inbox: &[],
+            reviews: &Reviews::default(),
             sidebar: None,
         }
         .compose();

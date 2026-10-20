@@ -242,6 +242,8 @@ pub enum Command {
     Inbox,
     /// Start a task: new worktrees with an agent and a prompt.
     NewTask,
+    /// Show the review of this worktree.
+    Review,
     Focus(Side),
     Resize(Side),
     Swap(Side),
@@ -303,6 +305,7 @@ impl Command {
             Command::Integrations => "install-integrations".to_owned(),
             Command::Inbox => "inbox".to_owned(),
             Command::NewTask => "new-task".to_owned(),
+            Command::Review => "review".to_owned(),
             Command::Focus(s) => format!("focus-{}", side(s)),
             Command::Resize(s) => format!("resize-{}", side(s)),
             Command::Swap(s) => format!("swap-{}", side(s)),
@@ -357,6 +360,7 @@ impl Command {
             Command::Integrations => "integrations".to_owned(),
             Command::Inbox => "inbox".to_owned(),
             Command::NewTask => "task".to_owned(),
+            Command::Review => "review".to_owned(),
             Command::Focus(_) => "focus".to_owned(),
             Command::Resize(_) => "resize".to_owned(),
             Command::Swap(_) => "move".to_owned(),
@@ -406,6 +410,7 @@ impl Command {
             Command::Integrations,
             Command::Inbox,
             Command::NewTask,
+            Command::Review,
             Command::ToggleZoom,
             Command::ToggleFloating,
             Command::NextTab,
@@ -516,6 +521,7 @@ impl Default for Keymap {
             key('s', C::Switcher),
             key('b', C::ToggleSidebar),
             key('i', C::Inbox),
+            key('v', C::Review),
         ];
         command.extend(arrows(C::Focus));
         command.extend((1..=9).map(|n| key(char::from(b'0' + n), C::GoToTab(n))));

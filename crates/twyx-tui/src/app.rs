@@ -18,7 +18,7 @@ use crossterm::{execute, terminal};
 
 use twyx_core::config::{Config, ConfigError, ThemeConfig};
 use twyx_core::keys::{Command, Mode, Outcome};
-use twyx_core::layout::LeafId;
+use twyx_core::layout::{Content, LeafId};
 use twyx_core::theme::Rgb;
 use twyx_protocol::client::{
     FromDaemon, Launch, PaneInfo, Place, ToDaemon, WorkspaceInfo, request,
@@ -165,7 +165,35 @@ impl Follow {
             .tabs
             .iter()
             .find(|tab| Some(tab.tab) == self.tab)?;
-        Some(tab.layout.leaf(self.leaf?)?.pane.raw())
+        Some(tab.layout.leaf(self.leaf?)?.terminal()?.raw())
+    }
+
+    /// The focused leaf when it is a review: its leaf and worktree.
+    fn focused_review(&self) -> Option<(LeafId, u64)> {
+        let tab = self
+            .workspace
+            .as_ref()?
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.tab) == self.tab)?;
+        match tab.layout.leaf(self.leaf?)?.content {
+            Content::Review(worktree) => Some((self.leaf?, worktree)),
+            Content::Pane(_) => None,
+        }
+    }
+
+    /// The worktrees of the review leaves in the shown tab.
+    fn shown_reviews(&self) -> Vec<u64> {
+        self.workspace
+            .iter()
+            .flat_map(|workspace| &workspace.tabs)
+            .filter(|tab| Some(tab.tab) == self.tab)
+            .flat_map(|tab| tab.layout.leaves())
+            .filter_map(|leaf| match leaf.content {
+                Content::Review(worktree) => Some(worktree),
+                Content::Pane(_) => None,
+            })
+            .collect()
     }
 
     fn is_empty(&self) -> bool {
@@ -219,6 +247,7 @@ fn run(
     // The first client to start offers the agent integrations.
     let mut overlay: Option<Overlay> = crate::agents::first_run(paths);
     let mut workspaces = Workspaces::default();
+    let mut reviews = crate::review::Reviews::default();
     let _ = daemon.outgoing.send(ToDaemon::WatchOverview);
     // What the daemon was last told about this client's sidebar.
     let mut sidebar_told = false;
@@ -241,6 +270,7 @@ fn run(
                 notice: workspaces.message.as_deref().or(notice.as_deref()),
                 overview: workspaces.overview.as_ref(),
                 inbox: &workspaces.inbox,
+                reviews: &reviews,
                 sidebar: (workspaces.docked || keymap.mode() == Mode::Workspace).then_some(
                     SidebarScene {
                         rows: &workspaces.rows,
@@ -322,6 +352,7 @@ fn run(
                     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
                     screen.write(&format!("\x1b]52;c;{encoded}\x1b\\"))?;
                 }
+                FromDaemon::Review(info) => reviews.answer(info),
                 FromDaemon::Notify { title, body, sound } => {
                     if let Some(form) = screen.notice {
                         screen.write(&form.encode(&title, &body))?;
@@ -352,7 +383,6 @@ fn run(
                 | FromDaemon::Overview(_)
                 | FromDaemon::Inbox(_)
                 | FromDaemon::TaskStarted { .. }
-                | FromDaemon::Review(_)
                 | FromDaemon::WorktreeAdded { .. }
                 | FromDaemon::RemovalPlan(_)
                 | FromDaemon::WorktreeRemoved { .. }
@@ -431,6 +461,10 @@ fn run(
                 Err(error) => notice = Some(error.to_string()),
             }
             dirty = true;
+        }
+
+        for request in reviews.wanted(&follow.shown_reviews(), workspaces.overview.as_ref()) {
+            let _ = daemon.outgoing.send(request);
         }
 
         if dirty {
@@ -599,10 +633,21 @@ fn run(
                         workspaces.focus_current();
                     }
                     match outcome {
-                        Outcome::ToPane => {
-                            let _ = daemon.outgoing.send(ToDaemon::Input(event));
-                            None
-                        }
+                        // A review leaf takes its keys itself.
+                        Outcome::ToPane => match (follow.focused_review(), chord) {
+                            (Some((leaf, worktree)), Some(chord)) => {
+                                if let Some(request) = reviews.key(leaf, worktree, chord) {
+                                    let _ = daemon.outgoing.send(request);
+                                }
+                                dirty = true;
+                                None
+                            }
+                            (Some(_), None) => None,
+                            (None, _) => {
+                                let _ = daemon.outgoing.send(ToDaemon::Input(event));
+                                None
+                            }
+                        },
                         Outcome::Consumed => None,
                         Outcome::Run(command) => Some(command),
                     }

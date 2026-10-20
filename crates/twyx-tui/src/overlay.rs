@@ -545,7 +545,7 @@ fn lines(scene: &Scene<'_>, switcher: bool) -> Vec<Line> {
             for tab in &workspace.tabs {
                 for leaf in tab.layout.leaves() {
                     lines.push(Line {
-                        label: scene.title(leaf.pane.raw()),
+                        label: scene.leaf_title(&leaf),
                         kind: "pane".to_owned(),
                         choice: Choice::Leaf(leaf.id),
                     });

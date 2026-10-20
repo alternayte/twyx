@@ -145,7 +145,9 @@ impl Mouse {
         let Some(local) = local(target, col, row) else {
             return actions;
         };
-        let pane = target.leaf.pane.raw();
+        let Some(pane) = target.leaf.terminal().map(|pane| pane.raw()) else {
+            return actions;
+        };
         if wants_mouse(scene, pane) && !mouse.modifiers.contains(KeyModifiers::SHIFT) {
             self.drag = Some(Drag::Pane);
             actions.extend(to_focused(scene, mouse));
@@ -207,7 +209,10 @@ impl Mouse {
             }
             Drag::Select(selection) => {
                 let placed = scene.placed();
-                if let Some(target) = placed.iter().find(|p| p.leaf.pane.raw() == selection.pane) {
+                if let Some(target) = placed
+                    .iter()
+                    .find(|p| p.leaf.terminal().map(|pane| pane.raw()) == Some(selection.pane))
+                {
                     let inner = target.inner;
                     let col = at.0.clamp(inner.x, inner.right().saturating_sub(1)) - inner.x;
                     let row = at.1.clamp(inner.y, inner.bottom().saturating_sub(1)) - inner.y;
@@ -248,7 +253,9 @@ fn wheel(scene: &Scene<'_>, mouse: MouseEvent) -> Vec<Action> {
     if Some(target.leaf.id) != scene.focus {
         return Vec::new();
     }
-    let pane = target.leaf.pane.raw();
+    let Some(pane) = target.leaf.terminal().map(|pane| pane.raw()) else {
+        return Vec::new();
+    };
     if wants_mouse(scene, pane) {
         return to_focused(scene, mouse).into_iter().collect();
     }

@@ -244,7 +244,9 @@ impl Daemon {
                 };
             }
         }
-        self.end_pane(removed.pane);
+        if let Some(pane) = removed.terminal() {
+            self.end_pane(pane);
+        }
         self.drop_empty_tab(tab);
         self.apply_size(tab);
         self.broadcast_workspace();

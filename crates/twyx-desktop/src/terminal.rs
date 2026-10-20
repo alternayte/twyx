@@ -493,7 +493,7 @@ fn focused_pane(state: &Shared) -> Option<u64> {
         .tabs
         .iter()
         .find(|tab| Some(tab.tab) == state.tab)?;
-    Some(tab.layout.leaf(state.leaf?)?.pane.raw())
+    Some(tab.layout.leaf(state.leaf?)?.terminal()?.raw())
 }
 
 fn working_directory() -> String {

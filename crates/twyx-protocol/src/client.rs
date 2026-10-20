@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 6;
+pub const MINOR: u16 = 7;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -583,6 +583,11 @@ pub enum ToDaemon {
         path: String,
         hunks: Option<Vec<u64>>,
     },
+    /// Shows a worktree's review leaf, or opens one in a new tab; the
+    /// worktree of the client's workspace when `None`. Since minor 7.
+    OpenReview {
+        worktree: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -711,6 +716,7 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
         Command::RunAgain => ToDaemon::RunAgain {
             pane: focused?.pane,
         },
+        Command::Review => ToDaemon::OpenReview { worktree: None },
         Command::Focus(side) => ToDaemon::Focus { side },
         Command::Resize(side) => ToDaemon::ResizePane { side },
         Command::Swap(side) => ToDaemon::SwapPane { side },
