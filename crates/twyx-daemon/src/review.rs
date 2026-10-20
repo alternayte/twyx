@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use twyx_core::layout::Content;
-use twyx_protocol::client::{ReviewFile, ReviewInfo, Reviewed};
+use twyx_protocol::client::{IndexState, ReviewFile, ReviewInfo, Reviewed, ShipReport};
 
 use crate::daemon::Daemon;
 use crate::git;
@@ -60,14 +60,8 @@ impl Daemon {
         self.broadcast_workspace();
     }
 
-    /// Sends a worktree's review, after marking `mark` reviewed: a path and
-    /// its hunks, or all of it.
-    pub(crate) fn review(
-        &mut self,
-        client: u64,
-        worktree: u64,
-        mark: Option<(String, Option<Vec<u64>>)>,
-    ) {
+    /// Sends a worktree's review, after `change`.
+    pub(crate) fn review(&mut self, client: u64, worktree: u64, change: Option<Change>) {
         let Some(entry) = self.worktrees.get(&worktree) else {
             self.refuse(client, format!("no worktree {worktree}"));
             return;
@@ -85,15 +79,12 @@ impl Daemon {
         );
         self.job(move || {
             let _one_at_a_time = lock.lock();
-            let marked = match &mark {
-                Some((file, hunks)) => {
-                    git::review::mark(&path, &name, base_branch.as_deref(), file, hunks.as_deref())
-                        .err()
-                }
-                None => None,
+            let (failed, shipped) = match change {
+                Some(change) => apply(&path, &name, base_branch.as_deref(), worktree, change),
+                None => (None, None),
             };
             let mut review = match git::review::state(&path, &name, base_branch.as_deref()) {
-                Ok(state) => info(worktree, state),
+                Ok(state) => info(worktree, state, git::ship::index_paths(&path).ok()),
                 Err(error) => ReviewInfo {
                     worktree,
                     base_ref: String::new(),
@@ -102,15 +93,129 @@ impl Daemon {
                     error: Some(format!("{error:#}")),
                 },
             };
-            if let Some(error) = marked {
+            if let Some(error) = failed {
                 review.error = Some(format!("{error:#}"));
             }
-            Done::Reviewed { client, review }
+            Done::Reviewed {
+                client,
+                review,
+                shipped,
+            }
         });
     }
 }
 
-fn info(worktree: u64, state: git::review::State) -> ReviewInfo {
+/// A change to make before a review is read.
+#[derive(Debug)]
+pub(crate) enum Change {
+    /// Mark a file's hunks reviewed, or all of it.
+    Mark(String, Option<Vec<u64>>),
+    /// Stage or unstage a file's hunks, a file, or everything.
+    Stage {
+        path: Option<String>,
+        hunks: Option<Vec<u64>>,
+        unstage: bool,
+    },
+    /// Stage the files whose changes are all reviewed.
+    StageReviewed,
+}
+
+/// Makes `change`: a marking that failed, or what a staging step ran.
+fn apply(
+    path: &std::path::Path,
+    name: &str,
+    base_branch: Option<&str>,
+    worktree: u64,
+    change: Change,
+) -> (Option<anyhow::Error>, Option<ShipReport>) {
+    let staged = match change {
+        Change::Mark(file, hunks) => {
+            return (
+                git::review::mark(path, name, base_branch, &file, hunks.as_deref()).err(),
+                None,
+            );
+        }
+        Change::Stage {
+            path: Some(file),
+            hunks: Some(hunks),
+            unstage,
+        } => git::review::state(path, name, base_branch).and_then(|state| {
+            let chosen: Vec<_> = state
+                .unreviewed
+                .iter()
+                .filter(|diff| diff.path == file)
+                .flat_map(|diff| &diff.hunks)
+                .filter(|hunk| hunks.contains(&hunk.id()))
+                .cloned()
+                .collect();
+            if chosen.is_empty() {
+                anyhow::bail!("those hunks of {file} changed; look again");
+            }
+            git::ship::stage_hunks(path, &file, &chosen, unstage)
+        }),
+        Change::Stage {
+            path: file,
+            unstage,
+            ..
+        } => git::ship::stage_paths(path, &file.into_iter().collect::<Vec<_>>(), unstage),
+        Change::StageReviewed => git::review::state(path, name, base_branch).and_then(|state| {
+            let done: Vec<String> = state
+                .reviewed
+                .into_iter()
+                .filter(|file| !state.unreviewed.iter().any(|diff| &diff.path == file))
+                .collect();
+            if done.is_empty() {
+                anyhow::bail!("no file has all its changes reviewed");
+            }
+            git::ship::stage_paths(path, &done, false)
+        }),
+    };
+    let report = match staged {
+        Ok(shown) => ShipReport {
+            worktree,
+            command: shown.command,
+            output: shown.output,
+            result: Some(Ok(())),
+            pane: None,
+        },
+        Err(error) => ShipReport {
+            worktree,
+            command: String::new(),
+            output: String::new(),
+            result: Some(Err(format!("{error:#}"))),
+            pane: None,
+        },
+    };
+    (None, Some(report))
+}
+
+fn index_state(
+    path: &str,
+    paths: Option<&(
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+    )>,
+) -> IndexState {
+    let Some((staged, unstaged)) = paths else {
+        return IndexState::Unstaged;
+    };
+    match (staged.contains(path), unstaged.contains(path)) {
+        (false, false) => IndexState::Committed,
+        (false, true) => IndexState::Unstaged,
+        (true, false) => IndexState::Staged,
+        (true, true) => IndexState::Partly,
+    }
+}
+
+fn info(
+    worktree: u64,
+    state: git::review::State,
+    paths: Option<(
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+    )>,
+) -> ReviewInfo {
+    let paths = paths.as_ref();
     let mut files: Vec<ReviewFile> = state
         .unreviewed
         .into_iter()
@@ -121,10 +226,12 @@ fn info(worktree: u64, state: git::review::State) -> ReviewInfo {
             } else {
                 Reviewed::No
             },
+            index: index_state(&diff.path, paths),
             diff: Some(diff),
         })
         .collect();
     files.extend(state.too_large.into_iter().map(|path| ReviewFile {
+        index: index_state(&path, paths),
         path,
         reviewed: Reviewed::TooLarge,
         diff: None,
@@ -134,6 +241,7 @@ fn info(worktree: u64, state: git::review::State) -> ReviewInfo {
         .into_iter()
         .filter(|path| !files.iter().any(|file| &file.path == path))
         .map(|path| ReviewFile {
+            index: index_state(&path, paths),
             path,
             reviewed: Reviewed::Yes,
             diff: None,

@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use twyx_core::check::Outcome;
 use twyx_protocol::client::{
-    CheckRun, ChecksInfo, FromDaemon, Overview, Place, RemovalPlan, ReviewInfo, Reviewed,
-    SetupReport, ToDaemon,
+    CheckRun, ChecksInfo, FromDaemon, IndexState, Overview, Place, RemovalPlan, ReviewInfo,
+    Reviewed, SetupReport, ShipReport, ToDaemon,
 };
 
 use support::{Client, Sandbox, new_pane_at, sh};
@@ -1005,4 +1005,137 @@ command = "sleep 30"
     );
     std::fs::write(main.join("later.txt"), "later\n").unwrap();
     assert!(shown(&checks(&mut client, worktree), "repo").stale);
+}
+
+fn shipped(client: &mut Client, done: bool) -> ShipReport {
+    client.expect("a shipping step", |message| match message {
+        FromDaemon::Shipped(report) if report.result.is_some() == done => Some(report.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn staging_follows_review_hunks_and_commit_and_push_run_in_panes() {
+    let mut sandbox = Sandbox::new("ship");
+    sandbox.start();
+    let main = repo(&sandbox, "app");
+    let lines: Vec<String> = (1..=20).map(|n| format!("line {n}")).collect();
+    std::fs::write(main.join("a.txt"), lines.join("\n") + "\n").unwrap();
+    git(&main, &["add", "a.txt"]);
+    git(&main, &["commit", "--quiet", "-m", "lines"]);
+    let mut changed = lines.clone();
+    changed[1] = "line two".to_owned();
+    changed[14] = "line fifteen".to_owned();
+    std::fs::write(main.join("a.txt"), changed.join("\n") + "\n").unwrap();
+    std::fs::write(main.join("new.txt"), "new\n").unwrap();
+
+    let mut client = Client::command(&sandbox.socket());
+    open(&mut client, &main);
+    let worktree = overview(&mut client).projects[0].worktrees[0].worktree;
+    let file = |review: &ReviewInfo, path: &str| {
+        review
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .cloned()
+            .unwrap()
+    };
+    let first = review(&mut client, ToDaemon::Review { worktree });
+    let hunks = file(&first, "a.txt").diff.unwrap().hunks;
+    assert_eq!(hunks.len(), 2, "two changes far apart");
+    assert_eq!(file(&first, "a.txt").index, IndexState::Unstaged);
+
+    client
+        .send(&ToDaemon::Stage {
+            worktree,
+            path: Some("a.txt".to_owned()),
+            hunks: Some(vec![hunks[1].id()]),
+            unstage: false,
+        })
+        .unwrap();
+    let report = shipped(&mut client, true);
+    assert_eq!(report.result, Some(Ok(())), "{report:?}");
+    assert!(
+        report.command.starts_with("git apply --cached"),
+        "{}",
+        report.command
+    );
+    let after = client.expect("a review", |message| match message {
+        FromDaemon::Review(review) => Some(review.clone()),
+        _ => None,
+    });
+    assert_eq!(file(&after, "a.txt").index, IndexState::Partly);
+    let cached = git(&main, &["diff", "--cached"]);
+    assert!(
+        cached.contains("+line fifteen") && !cached.contains("+line two"),
+        "{cached}"
+    );
+
+    client
+        .send(&ToDaemon::Stage {
+            worktree,
+            path: Some("a.txt".to_owned()),
+            hunks: Some(vec![hunks[1].id()]),
+            unstage: true,
+        })
+        .unwrap();
+    assert_eq!(shipped(&mut client, true).result, Some(Ok(())));
+    assert_eq!(git(&main, &["diff", "--cached"]), "");
+
+    // A new file stages whole; only fully reviewed files go with "stage reviewed".
+    review(
+        &mut client,
+        ToDaemon::MarkReviewed {
+            worktree,
+            path: "new.txt".to_owned(),
+            hunks: None,
+        },
+    );
+    client.send(&ToDaemon::StageReviewed { worktree }).unwrap();
+    assert_eq!(shipped(&mut client, true).result, Some(Ok(())));
+    assert_eq!(
+        git(&main, &["diff", "--cached", "--name-only"]),
+        "new.txt\n"
+    );
+
+    std::fs::write(
+        main.join(".git/hooks/pre-commit"),
+        "#!/bin/sh\necho hook ran\n",
+    )
+    .unwrap();
+    Command::new("chmod")
+        .args(["+x", ".git/hooks/pre-commit"])
+        .current_dir(&main)
+        .status()
+        .unwrap();
+    client
+        .send(&ToDaemon::Commit {
+            worktree,
+            message: "add new".to_owned(),
+        })
+        .unwrap();
+    let running = shipped(&mut client, false);
+    assert!(running.pane.is_some());
+    let done = shipped(&mut client, true);
+    assert_eq!(done.result, Some(Ok(())), "{done:?}");
+    assert!(done.output.contains("hook ran"), "{:?}", done.output);
+    assert_eq!(git(&main, &["log", "-1", "--format=%s"]), "add new\n");
+
+    let remote = sandbox.root.join("remote.git");
+    git(
+        &main,
+        &["init", "--quiet", "--bare", remote.to_str().unwrap()],
+    );
+    git(
+        &main,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    client.send(&ToDaemon::Push { worktree }).unwrap();
+    let running = shipped(&mut client, false);
+    assert_eq!(running.command, "git push --set-upstream origin main");
+    assert_eq!(shipped(&mut client, true).result, Some(Ok(())));
+    assert_eq!(
+        git(&main, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "origin/main\n"
+    );
 }

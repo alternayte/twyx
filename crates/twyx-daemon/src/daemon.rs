@@ -176,6 +176,8 @@ pub struct Daemon {
     pub(crate) check_runs: BTreeMap<PaneId, crate::checks::Running>,
     /// Checks whose source key is being taken before their pane starts.
     pub(crate) checks_starting: std::collections::BTreeSet<(u64, String)>,
+    /// Commit, push and pull request steps running in panes.
+    pub(crate) ships: BTreeMap<PaneId, crate::ship::Ship>,
 }
 
 /// Starts the daemon and serves it until the socket closes.
@@ -224,6 +226,7 @@ pub fn run(paths: Paths) -> Result<()> {
         next_injection: 0,
         check_runs: BTreeMap::new(),
         checks_starting: std::collections::BTreeSet::new(),
+        ships: BTreeMap::new(),
         legacy: Vec::new(),
         config: twyx_core::config::load(&config_file).unwrap_or_else(|error| {
             eprintln!("twyx daemon: {error}");
@@ -744,11 +747,35 @@ impl Daemon {
             ToDaemon::CancelCheck { worktree, name } => self.cancel_check(id, worktree, &name),
             ToDaemon::TrustChecks { worktree, hash } => self.trust_checks(id, worktree, hash),
             ToDaemon::ShowPane { pane } => self.show_pane(id, PaneId::from_raw(pane)),
+            ToDaemon::Stage {
+                worktree,
+                path,
+                hunks,
+                unstage,
+            } => self.review(
+                id,
+                worktree,
+                Some(crate::review::Change::Stage {
+                    path,
+                    hunks,
+                    unstage,
+                }),
+            ),
+            ToDaemon::StageReviewed { worktree } => {
+                self.review(id, worktree, Some(crate::review::Change::StageReviewed));
+            }
+            ToDaemon::Commit { worktree, message } => self.commit(id, worktree, message),
+            ToDaemon::Push { worktree } => self.push(id, worktree),
+            ToDaemon::OpenPullRequest {
+                worktree,
+                title,
+                body,
+            } => self.open_pull_request(id, worktree, title, body),
             ToDaemon::MarkReviewed {
                 worktree,
                 path,
                 hunks,
-            } => self.review(id, worktree, Some((path, hunks))),
+            } => self.review(id, worktree, Some(crate::review::Change::Mark(path, hunks))),
             ToDaemon::NewTask {
                 workspace,
                 name,
@@ -1115,6 +1142,7 @@ impl Daemon {
                 });
             }
             FromHolder::Injected { id, result } => self.injected(id, result),
+            FromHolder::Tail(tail) if self.ships(pane) => self.ship_tail(pane, tail),
             FromHolder::Tail(tail) => self.check_tail(pane, tail),
             FromHolder::Unsupported { .. } | FromHolder::Pong => {}
         }
@@ -1140,7 +1168,8 @@ impl Daemon {
         };
         // The daemon has the exit status, so the holder may go; a check's
         // holder first sends the output's tail.
-        if let Some(link) = self.check_exited(pane, exit, link) {
+        let link = self.check_exited(pane, exit, link);
+        if let Some(link) = self.ship_exited(pane, exit, link) {
             link.send(ToHolder::AckExit);
         }
         // Process exit always ends the agent session.
@@ -1168,6 +1197,7 @@ impl Daemon {
             entry.link = None;
             self.pane_ended(pane);
             self.check_gone(pane);
+            self.ship_gone(pane);
             self.broadcast_pane(pane);
         }
     }

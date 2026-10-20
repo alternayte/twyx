@@ -55,6 +55,38 @@ impl Hunk {
 
     /// An id that names this hunk's content wherever it sits in the file:
     /// FNV-1a over its lines, not its line numbers.
+    /// The lines the hunk changes on one side, without its context, on a
+    /// doubled scale: line `n` is `2n` and the gap before it `2n - 1`, so a
+    /// change that only adds or only removes has a place on the other side.
+    pub fn span(&self, new: bool) -> (u64, u64) {
+        let (start, mine, theirs) = if new {
+            (self.new_start, LineKind::Added, LineKind::Removed)
+        } else {
+            (self.old_start, LineKind::Removed, LineKind::Added)
+        };
+        let has_lines = self
+            .lines
+            .iter()
+            .any(|line| matches!(line.kind, LineKind::Context) || line.kind == mine);
+        // A side with no lines names the line the change comes after.
+        let mut at = u64::from(start) + u64::from(!has_lines);
+        let mut span: Option<(u64, u64)> = None;
+        let mut take = |pos: u64| {
+            span = Some(span.map_or((pos, pos), |(low, high)| (low.min(pos), high.max(pos))));
+        };
+        for line in &self.lines {
+            if line.kind == LineKind::Context {
+                at += 1;
+            } else if line.kind == mine {
+                take(2 * at);
+                at += 1;
+            } else if line.kind == theirs {
+                take((2 * at).saturating_sub(1));
+            }
+        }
+        span.unwrap_or((2 * at, 2 * at))
+    }
+
     pub fn id(&self) -> u64 {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         for line in &self.lines {
@@ -213,6 +245,28 @@ pub fn move_lines(first: u32, last: u32, hunks: &[Hunk]) -> Option<(u32, u32)> {
     }
     let moved = |line: u32| u32::try_from(i64::from(line) + shift).ok();
     Some((moved(first)?, moved(last)?))
+}
+
+/// Whether two spans from `Hunk::span` share a line or a gap.
+pub fn overlaps(a: (u64, u64), b: (u64, u64)) -> bool {
+    a.0 <= b.1 && b.0 <= a.1
+}
+
+/// Where an old-side span of a `-U0` diff's preimage lies in its postimage:
+/// shifted past the hunks wholly before it.
+pub fn carry_span(span: (u64, u64), hunks: &[Hunk]) -> (u64, u64) {
+    let mut shift: i64 = 0;
+    for hunk in hunks {
+        if hunk.span(false).1 < span.0 {
+            let count = |kind: LineKind| {
+                i64::try_from(hunk.lines.iter().filter(|line| line.kind == kind).count())
+                    .unwrap_or(0)
+            };
+            shift += 2 * (count(LineKind::Added) - count(LineKind::Removed));
+        }
+    }
+    let carry = |pos: u64| u64::try_from(i64::try_from(pos).unwrap_or(0) + shift).unwrap_or(0);
+    (carry(span.0), carry(span.1))
 }
 
 fn ranges(header: &str) -> (u32, u32) {
@@ -374,5 +428,30 @@ Ic${M2000H80RR91
         assert_eq!(move_lines(4, 4, &changed), None);
         assert_eq!(move_lines(10, 11, &changed), Some((9, 10)));
         assert_eq!(move_lines(5, 8, &changed), Some((5, 8)));
+    }
+
+    #[test]
+    fn spans_place_changes_on_either_side_and_carry_past_earlier_hunks() {
+        let context = &parse(DIFF)[0].hunks;
+        // `-two +TWO` at line 2 on both sides; the removal sits before line 2.
+        assert_eq!(context[0].span(true), (3, 4));
+        assert_eq!(context[0].span(false), (4, 5));
+        // An addition after old line 10 is new line 11, and a gap at old 11.
+        assert_eq!(context[1].span(true), (22, 22));
+        assert_eq!(context[1].span(false), (21, 21));
+
+        let zero = parse(
+            "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -2,0 +3,2 @@\n+x\n+y\n@@ -5 +6,0 @@\n-gone\n@@ -9 +9 @@\n-old\n+new\n",
+        );
+        let hunks = &zero[0].hunks;
+        assert_eq!(hunks[0].span(true), (6, 8), "two lines added at 3 and 4");
+        assert_eq!(hunks[0].span(false), (5, 5), "after old line 2");
+        assert_eq!(hunks[1].span(true), (13, 13), "removed after new line 6");
+        assert_eq!(hunks[1].span(false), (10, 10));
+        // Old line 7 is past +2 and -1: new line 8.
+        assert_eq!(carry_span((14, 14), hunks), (16, 16));
+        assert_eq!(carry_span((2, 2), hunks), (2, 2), "before every hunk");
+        assert!(overlaps((3, 4), (4, 8)));
+        assert!(!overlaps((3, 4), (5, 8)));
     }
 }

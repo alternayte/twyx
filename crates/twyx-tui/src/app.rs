@@ -397,7 +397,8 @@ fn run(
                 | FromDaemon::SetupDone { .. }
                 | FromDaemon::Checks(_)
                 | FromDaemon::CheckStarted { .. }
-                | FromDaemon::CheckEnded(_)) => apply!(workspaces.answer(&answer)),
+                | FromDaemon::CheckEnded(_)
+                | FromDaemon::Shipped(_)) => apply!(workspaces.answer(&answer)),
             }
         }
 

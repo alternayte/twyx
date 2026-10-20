@@ -15,6 +15,7 @@ pub mod peer;
 mod recipes;
 mod review;
 mod setup;
+mod ship;
 mod store;
 mod tabs;
 mod tasks;

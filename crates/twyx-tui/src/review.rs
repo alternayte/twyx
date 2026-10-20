@@ -525,11 +525,13 @@ mod tests {
                     path: "a.txt".to_owned(),
                     reviewed: Reviewed::Partly,
                     diff: diff.into_iter().next(),
+                    index: twyx_protocol::client::IndexState::Unstaged,
                 },
                 ReviewFile {
                     path: "b.txt".to_owned(),
                     reviewed: Reviewed::Yes,
                     diff: None,
+                    index: twyx_protocol::client::IndexState::Committed,
                 },
             ],
             error: None,

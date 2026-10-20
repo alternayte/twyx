@@ -148,6 +148,7 @@ pub(crate) enum Done {
     Reviewed {
         client: u64,
         review: twyx_protocol::client::ReviewInfo,
+        shipped: Option<twyx_protocol::client::ShipReport>,
     },
     NotesMoved {
         client: u64,
@@ -172,6 +173,11 @@ pub(crate) enum Done {
     CheckEnded {
         pane: PaneId,
         key: Result<String, String>,
+    },
+    ShipReady {
+        client: u64,
+        worktree: u64,
+        argv: Result<Vec<String>, String>,
     },
 }
 
@@ -382,7 +388,14 @@ impl Daemon {
                 script,
                 after,
             } => self.prepared(worktree, report, script, after),
-            Done::Reviewed { client, review } => {
+            Done::Reviewed {
+                client,
+                review,
+                shipped,
+            } => {
+                if let Some(shipped) = shipped {
+                    self.reply(client, FromDaemon::Shipped(shipped));
+                }
                 self.reply(client, FromDaemon::Review(review));
             }
             Done::NotesMoved {
@@ -405,6 +418,11 @@ impl Daemon {
                 key,
             } => self.check_keyed(client, worktree, check, key),
             Done::CheckEnded { pane, key } => self.end_check(pane, Some(key)),
+            Done::ShipReady {
+                client,
+                worktree,
+                argv,
+            } => self.ship_ready(client, worktree, argv),
         }
     }
 

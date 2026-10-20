@@ -280,6 +280,7 @@ impl Terminal {
                         | FromDaemon::Checks(_)
                         | FromDaemon::CheckStarted { .. }
                         | FromDaemon::CheckEnded(_)
+                        | FromDaemon::Shipped(_)
                         | FromDaemon::WorktreeAdded { .. }
                         | FromDaemon::RemovalPlan(_)
                         | FromDaemon::WorktreeRemoved { .. }

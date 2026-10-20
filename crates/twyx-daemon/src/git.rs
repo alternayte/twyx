@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 
 pub(crate) mod checks;
 pub(crate) mod review;
+pub(crate) mod ship;
 
 /// Variables a daemon may inherit that would point Git at another
 /// repository or index.

@@ -282,7 +282,8 @@ impl Client {
             | FromDaemon::SetupDone { .. }
             | FromDaemon::Checks(_)
             | FromDaemon::CheckStarted { .. }
-            | FromDaemon::CheckEnded(_) => {}
+            | FromDaemon::CheckEnded(_)
+            | FromDaemon::Shipped(_) => {}
         }
     }
 

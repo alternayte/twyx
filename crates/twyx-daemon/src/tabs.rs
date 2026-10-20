@@ -292,6 +292,7 @@ impl Daemon {
         let _ = std::fs::remove_dir_all(self.paths.pane_history(pane));
         let entry = self.panes.remove(&pane);
         self.check_gone(pane);
+        self.ship_gone(pane);
         if let Some(entry) = entry
             && let Some(link) = entry.link
         {

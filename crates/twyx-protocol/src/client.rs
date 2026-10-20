@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 9;
+pub const MINOR: u16 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -209,6 +209,33 @@ pub struct ReviewFile {
     pub reviewed: Reviewed,
     /// The unreviewed changes.
     pub diff: Option<twyx_core::diff::FileDiff>,
+    /// Where its changes are against the main index. Since minor 10.
+    pub index: IndexState,
+}
+
+/// Where a file's changes since the base are against the main index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IndexState {
+    /// All in commits.
+    Committed,
+    /// Some in the working tree, none staged.
+    Unstaged,
+    /// Some staged, none left in the working tree.
+    Staged,
+    /// Some staged, some not.
+    Partly,
+}
+
+/// What one shipping step ran and printed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShipReport {
+    pub worktree: u64,
+    /// The Git or `gh` command, as the user would type it.
+    pub command: String,
+    pub output: String,
+    /// `None` while it runs in `pane`.
+    pub result: Option<Result<(), String>>,
+    pub pane: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -651,6 +678,37 @@ pub enum ToDaemon {
     ShowPane {
         pane: u64,
     },
+    /// Stages or unstages on the main index: the changes under review
+    /// hunks of a file, a whole file without `hunks`, or every change
+    /// without `path`. Sends `Shipped`, then the `Review`. Since minor 10.
+    Stage {
+        worktree: u64,
+        path: Option<String>,
+        hunks: Option<Vec<u64>>,
+        unstage: bool,
+    },
+    /// Stages the files whose changes are all reviewed. Since minor 10.
+    StageReviewed {
+        worktree: u64,
+    },
+    /// Commits the staged changes in a pane, where the hooks run.
+    /// Since minor 10.
+    Commit {
+        worktree: u64,
+        message: String,
+    },
+    /// Pushes the worktree's branch in a pane, setting the upstream on the
+    /// first push. Since minor 10.
+    Push {
+        worktree: u64,
+    },
+    /// Runs `gh pr create` for the worktree's branch in a pane.
+    /// Since minor 10.
+    OpenPullRequest {
+        worktree: u64,
+        title: String,
+        body: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -778,6 +836,8 @@ pub enum FromDaemon {
     },
     /// A check run ended; every client gets it. Since minor 9.
     CheckEnded(CheckRun),
+    /// A shipping step started in a pane, or ended. Since minor 10.
+    Shipped(ShipReport),
 }
 
 /// A worktree's checks: the user's, then the repository's.
