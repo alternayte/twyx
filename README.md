@@ -9,6 +9,8 @@ no account, no cloud, no model and no credentials.
 Status: pre-release. Version 0.1.0 is in development and no release exists yet.
 The terminal client works. The desktop client is not ready for use.
 
+![twyx with Claude Code at work in a task worktree, Neovim on the file it changes, a test pane, and the sidebar with each agent's state](docs/images/workspace.png)
+
 ## Install
 
 You need these on PATH:
@@ -54,7 +56,33 @@ A workspace is the tabs of one Git worktree or one plain directory. twyx starts 
 - `twyx worktree new <branch>` makes a worktree. `twyx worktree rm <branch>` removes one. Before it removes anything, it shows the changes and commits that you lose and the panes that it ends.
 - `twyx recipe list` lists the recipes. `twyx recipe run <name>` opens the tabs and panes of a recipe.
 
-Every command takes `--help`. Most take `--json`.
+Every command takes `--help` and `--json`.
+
+## Agents and the inbox
+
+twyx knows Claude Code, Codex, Cursor CLI, OpenCode and Pi. It reads each agent's state from its screen, and from its hooks when you install the integration that twyx offers on the first run. The sidebar, the tabs and the status bar mark each agent: `●` working, `!` needs you, `✓` done, `○` idle, `✗` failed.
+
+- `twyx task new --agent claude --prompt "..."` makes a worktree on a new branch and starts the agent there with the prompt. `ctrl-g w t` does the same from the TUI.
+- `ctrl-g i` opens the inbox: the agents that need you, finished turns, failed panes and check results. `twyx inbox` lists it.
+- twyx notifies you through your terminal when an agent needs you, except for a pane you can see.
+
+![The inbox over a workspace: a failed check, a passed check, an agent that needs approval and an idle agent](docs/images/inbox.png)
+
+## Review and ship
+
+`ctrl-g v` opens the review of the worktree: every change since the branch left its base, file by file and hunk by hunk. Mark hunks reviewed, leave notes on lines, and send the notes to an agent as one paste. Then stage, commit, push and open a pull request from the same view. Commit hooks and pushes run in a pane you can watch.
+
+![The review view: a note on a hunk, one file reviewed, and the diff side by side](docs/images/review.png)
+
+`twyx review status` prints the review state, and `twyx review stage|commit|push|pr` ship from a shell.
+
+## Checks
+
+A check is a command, such as your tests, whose result twyx ties to the exact files it ran on. Add checks to `config.toml`, or to `.twyx/checks.toml` in a repository, which runs only after you trust it. `ctrl-g e` lists them and runs one. A result turns `stale` when the files change after it. [docs/config.md](docs/config.md) has the details.
+
+## Automation
+
+The daemon takes JSON requests on its socket, and `twyx events` streams changes. [docs/api.md](docs/api.md) documents the API with examples. `twyx skill` prints a skill file that teaches an agent to drive twyx.
 
 ## Configure
 
