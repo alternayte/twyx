@@ -115,6 +115,8 @@ pub struct Client {
     pub tab: Option<u64>,
     /// The inbox, once the daemon sent it.
     pub inbox: Vec<twyx_protocol::client::InboxItem>,
+    /// The notifications the daemon sent this client: body and sound.
+    pub notices: Vec<(String, bool)>,
 }
 
 impl Client {
@@ -159,6 +161,7 @@ impl Client {
             workspace: None,
             tab: None,
             inbox: Vec::new(),
+            notices: Vec::new(),
         };
         client
             .send(&ToDaemon::Hello(ClientHello {
@@ -257,6 +260,7 @@ impl Client {
             }
             FromDaemon::Inbox(items) => self.inbox = items.clone(),
             FromDaemon::Refused { .. } => {}
+            FromDaemon::Notify { body, sound, .. } => self.notices.push((body.clone(), *sound)),
             FromDaemon::Clipboard { .. }
             | FromDaemon::Unsupported { .. }
             | FromDaemon::Welcome(_)

@@ -62,3 +62,21 @@ A recipe pane with `agent = true` starts the default agent.
 [agents]
 default = "claude"
 ```
+
+## `[notifications]`
+
+Each kind of inbox item can be `off` (no inbox item), `inbox` (an inbox item only), `notify` (an inbox item and a notification) or `sound` (a notification with a sound).
+
+| Key | Values | Default |
+|---|---|---|
+| `needs-approval` | `off`, `inbox`, `notify`, `sound` | `sound` |
+| `turn-finished` | `off`, `inbox`, `notify`, `sound` | `notify` |
+| `failed` | `off`, `inbox`, `notify`, `sound` | `notify` |
+| `sound` | a path to a sound file for the desktop client | its own sound |
+
+No notification fires for a pane you can see in a focused client. When several clients are attached, the focused one notifies; when none is focused, the one you used last does. The TUI sends OSC 9 to Ghostty, iTerm2, WezTerm and kitty, and OSC 777 to foot and urxvt. Inside tmux it wraps OSC 9 in tmux's passthrough, which reaches your terminal only with `set -g allow-passthrough on`. With `sound`, the TUI also rings the bell.
+
+```toml
+[notifications]
+turn-finished = "inbox"
+```

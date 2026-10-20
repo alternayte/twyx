@@ -10,6 +10,7 @@ pub mod compositor;
 pub mod emitter;
 pub mod input;
 pub mod mouse;
+pub mod notify;
 pub mod overlay;
 pub mod probe;
 pub mod specimen;

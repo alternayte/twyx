@@ -89,3 +89,13 @@ pub const SCREEN_READ_MAX: Duration = Duration::from_secs(1);
 
 /// How often the holder looks at the pane's foreground process.
 pub const FOREGROUND_POLL: Duration = Duration::from_millis(500);
+
+/// The shortest time between two notifications for one pane; one that
+/// comes sooner stays in the inbox only.
+pub const NOTIFY_PANE_GAP: Duration = Duration::from_secs(5);
+
+/// The shortest time between any two notifications.
+pub const NOTIFY_GAP: Duration = Duration::from_secs(1);
+
+/// The most characters of a notification's text.
+pub const NOTIFY_TEXT_MAX: usize = 120;

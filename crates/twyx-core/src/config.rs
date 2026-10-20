@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use toml::Spanned;
 
+use crate::inbox::Reason;
 use crate::keys::{Chord, Command, Keymap, Mode};
 use crate::theme::{Rgb, Theme, Variant};
 
@@ -23,6 +24,51 @@ pub struct Config {
     pub worktree_location: Option<String>,
     /// `[agents] default`: the agent kind an agent pane starts.
     pub default_agent: Option<String>,
+    /// `[notifications]`: what each kind of inbox item does.
+    pub notifications: Notifications,
+}
+
+/// What an inbox item of one kind does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Notice {
+    /// No inbox item at all.
+    Off,
+    Inbox,
+    /// An inbox item and a notification.
+    Notify,
+    /// An inbox item and a notification with a sound.
+    Sound,
+}
+
+/// `[notifications]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notifications {
+    pub needs_approval: Notice,
+    pub turn_finished: Notice,
+    pub failed: Notice,
+    /// A sound file the desktop client plays in place of its own.
+    pub sound: Option<String>,
+}
+
+impl Default for Notifications {
+    fn default() -> Self {
+        Self {
+            needs_approval: Notice::Sound,
+            turn_finished: Notice::Notify,
+            failed: Notice::Notify,
+            sound: None,
+        }
+    }
+}
+
+impl Notifications {
+    pub fn for_reason(&self, reason: Reason) -> Notice {
+        match reason {
+            Reason::NeedsApproval => self.needs_approval,
+            Reason::TurnFinished => self.turn_finished,
+            Reason::Failed => self.failed,
+        }
+    }
 }
 
 impl Default for Config {
@@ -33,6 +79,7 @@ impl Default for Config {
             history: true,
             worktree_location: None,
             default_agent: None,
+            notifications: Notifications::default(),
         }
     }
 }
@@ -86,6 +133,16 @@ struct Raw {
     history: Option<RawHistory>,
     worktrees: Option<RawWorktrees>,
     agents: Option<RawAgents>,
+    notifications: Option<RawNotifications>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct RawNotifications {
+    needs_approval: Option<Spanned<String>>,
+    turn_finished: Option<Spanned<String>>,
+    failed: Option<Spanned<String>>,
+    sound: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,6 +274,31 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         Some(kind) => Some(kind.into_inner()),
         None => None,
     };
+    let mut notifications = Notifications::default();
+    if let Some(raw_notifications) = raw.notifications {
+        let notice = |value: Option<Spanned<String>>, default: Notice| match value {
+            None => Ok(default),
+            Some(value) => match value.get_ref().as_str() {
+                "off" => Ok(Notice::Off),
+                "inbox" => Ok(Notice::Inbox),
+                "notify" => Ok(Notice::Notify),
+                "sound" => Ok(Notice::Sound),
+                other => Err(fail(
+                    Some(value.span()),
+                    format!("{other:?} is not off, inbox, notify or sound"),
+                )),
+            },
+        };
+        notifications = Notifications {
+            needs_approval: notice(
+                raw_notifications.needs_approval,
+                notifications.needs_approval,
+            )?,
+            turn_finished: notice(raw_notifications.turn_finished, notifications.turn_finished)?,
+            failed: notice(raw_notifications.failed, notifications.failed)?,
+            sound: raw_notifications.sound,
+        };
+    }
     let mut keymap = Keymap::default();
     let Some(keys) = raw.keys else {
         return Ok(Config {
@@ -225,6 +307,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
             history,
             worktree_location,
             default_agent,
+            notifications,
         });
     };
     if let Some(prefix) = keys.prefix {
@@ -272,6 +355,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         history,
         worktree_location,
         default_agent,
+        notifications,
     })
 }
 
@@ -329,6 +413,8 @@ mod tests {
         assert_eq!(error.line, 2);
         let error = read("[agents]\ndefault = \"gpt\"\n").expect_err("an unknown agent");
         assert_eq!(error.line, 2);
+        let error = read("[notifications]\n\nfailed = \"loud\"\n").expect_err("an unknown notice");
+        assert_eq!(error.line, 3);
     }
 
     #[test]

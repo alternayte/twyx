@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 3;
+pub const MINOR: u16 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -620,6 +620,13 @@ pub enum FromDaemon {
     },
     /// The inbox, newest first. Since minor 3.
     Inbox(Vec<InboxItem>),
+    /// Show a notification for an inbox item: the daemon chose this client.
+    /// The text is plain and short. Since minor 4.
+    Notify {
+        title: String,
+        body: String,
+        sound: bool,
+    },
 }
 
 /// The request a keymap command makes of the daemon, for a client whose

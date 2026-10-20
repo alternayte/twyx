@@ -61,6 +61,20 @@ impl Turn {
     }
 }
 
+/// Text from a pane or an agent made fit for a notification: control
+/// characters become spaces, and it is cut to `max` characters.
+pub fn plain(text: &str, max: usize) -> String {
+    let text: String = text
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect();
+    let text = text.trim();
+    match text.char_indices().nth(max) {
+        Some((at, _)) => format!("{}…", &text[..at]),
+        None => text.to_owned(),
+    }
+}
+
 /// A pane's mark: `failed` when it exited with an error, else from its agent
 /// state. A finished turn shows as done until the user sees the pane.
 pub fn mark(failed: bool, agent: Option<AgentState>, unread: bool) -> Option<Mark> {

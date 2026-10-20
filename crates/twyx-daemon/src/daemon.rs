@@ -162,6 +162,9 @@ pub struct Daemon {
     pub(crate) inbox: BTreeMap<u64, crate::inbox::Item>,
     /// Whether watching clients have yet to get the inbox's last change.
     pub(crate) inbox_changed: bool,
+    /// When each pane last notified, and when any did, for the rate limits.
+    pub(crate) notified: BTreeMap<PaneId, std::time::Instant>,
+    pub(crate) last_notice: Option<std::time::Instant>,
 }
 
 /// Starts the daemon and serves it until the socket closes.
@@ -202,6 +205,8 @@ pub fn run(paths: Paths) -> Result<()> {
         outbox: RefCell::new(Vec::new()),
         inbox: BTreeMap::new(),
         inbox_changed: false,
+        notified: BTreeMap::new(),
+        last_notice: None,
         legacy: Vec::new(),
         config: twyx_core::config::load(&config_file).unwrap_or_else(|error| {
             eprintln!("twyx daemon: {error}");

@@ -321,6 +321,14 @@ fn run(
                     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
                     screen.write(&format!("\x1b]52;c;{encoded}\x1b\\"))?;
                 }
+                FromDaemon::Notify { title, body, sound } => {
+                    if let Some(form) = screen.notice {
+                        screen.write(&form.encode(&title, &body))?;
+                    }
+                    if sound {
+                        screen.write("\x07")?;
+                    }
+                }
                 FromDaemon::Unsupported { major, minor, .. } => {
                     anyhow::bail!("the daemon speaks client protocol {major}.{minor}");
                 }
@@ -766,6 +774,8 @@ pub struct Screen {
     /// What the terminal said its paper and ink are, for a theme reload.
     paper: (Option<Rgb>, Option<Rgb>, Depth),
     active: bool,
+    /// How the terminal takes a notification, if it does.
+    notice: Option<crate::notify::Form>,
 }
 
 impl std::fmt::Debug for Screen {
@@ -816,6 +826,11 @@ impl Screen {
             pen,
             paper: (answers.paper, answers.ink, depth),
             active: true,
+            notice: crate::notify::Form::of(
+                answers.name.as_deref(),
+                std::env::var("TERM_PROGRAM").ok().as_deref(),
+                std::env::var_os("TMUX").is_some(),
+            ),
         })
     }
 

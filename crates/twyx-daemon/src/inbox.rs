@@ -3,10 +3,13 @@
 //! client; "mark unread" holds until the pane comes into view again.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
-use twyx_core::inbox::{Reason, mark};
+use twyx_core::config::Notice;
+use twyx_core::inbox::{Reason, mark, plain};
 use twyx_core::pane::PaneId;
 use twyx_core::theme::AgentState as Mark;
+use twyx_core::tuning;
 use twyx_protocol::client::{FromDaemon, InboxItem, PaneState};
 
 use crate::agents::now_ms;
@@ -36,6 +39,10 @@ impl Daemon {
     /// A pane needs the user: its item comes back unread with this reason,
     /// or a new one appears. A pane in view in a focused client is seen.
     pub(crate) fn raise(&mut self, pane: PaneId, reason: Reason) {
+        let notice = self.config.notifications.for_reason(reason);
+        if notice == Notice::Off {
+            return;
+        }
         let existing = self
             .inbox
             .iter()
@@ -67,10 +74,70 @@ impl Daemon {
                 read: false,
             },
         );
+        // Invariant 23: a pane in view in a focused client is seen, and
+        // never notifies.
         if self.in_view().contains(&pane) {
             self.set_read(id, true);
+        } else if matches!(notice, Notice::Notify | Notice::Sound) {
+            self.send_notice(pane, reason, notice == Notice::Sound);
         }
         self.inbox_changed = true;
+    }
+
+    /// Sends a notification to one client: the focused one with the latest
+    /// input, else any with the latest input. Too soon after the last one,
+    /// for the pane or at all, the item stays in the inbox only.
+    fn send_notice(&mut self, pane: PaneId, reason: Reason, sound: bool) {
+        let now = Instant::now();
+        if self
+            .notified
+            .get(&pane)
+            .is_some_and(|last| now.duration_since(*last) < tuning::NOTIFY_PANE_GAP)
+            || self
+                .last_notice
+                .is_some_and(|last| now.duration_since(last) < tuning::NOTIFY_GAP)
+        {
+            return;
+        }
+        let Some(client) = self
+            .clients
+            .values()
+            .filter(|client| client.interactive)
+            .max_by_key(|client| (client.focused, client.used))
+        else {
+            return;
+        };
+        let Some(entry) = self.panes.get(&pane) else {
+            return;
+        };
+        let agent = entry
+            .agent
+            .session
+            .as_ref()
+            .or(entry.agent.ended.as_ref())
+            .map(|session| session.kind.clone());
+        let what = match reason {
+            Reason::NeedsApproval => "needs approval",
+            Reason::TurnFinished => "is done",
+            Reason::Failed => "failed",
+        };
+        let place = self
+            .workspaces
+            .get(&entry.workspace)
+            .map(|workspace| workspace.name.clone())
+            .unwrap_or_default();
+        let who = agent.unwrap_or_else(|| format!("pane {pane}"));
+        let body = plain(&format!("{who} {what} · {place}"), tuning::NOTIFY_TEXT_MAX);
+        self.post(
+            &client.out,
+            FromDaemon::Notify {
+                title: "twyx".to_owned(),
+                body,
+                sound,
+            },
+        );
+        self.notified.insert(pane, now);
+        self.last_notice = Some(now);
     }
 
     pub(crate) fn set_read(&mut self, id: u64, read: bool) {

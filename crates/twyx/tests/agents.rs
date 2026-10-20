@@ -365,3 +365,44 @@ fn an_inbox_item_is_read_once_its_pane_comes_into_view_in_a_focused_client() {
         .expect("dismiss");
     client.wait_until("no item", |client| client.inbox.is_empty());
 }
+
+#[test]
+fn invariant_23_a_notification_never_fires_for_a_pane_in_view_in_a_focused_client() {
+    let mut sandbox = Sandbox::new("anotice");
+    let agent = install(&sandbox, "fakeagent", FAKE_RULES, FAKE_AGENT);
+    sandbox.start();
+    let mut client = sandbox.connect(60, 10);
+    client.send(&ToDaemon::WatchOverview).expect("watch");
+    let pane = start(&sandbox, &mut client, &agent);
+    wait_for_state(
+        &mut client,
+        pane,
+        AgentState::AwaitingPrompt,
+        Source::Screen,
+    );
+
+    client.type_text("ask\r");
+    client.wait_until("an approval item, read", |client| {
+        item(client, pane).is_some_and(|(item, _)| item.read)
+    });
+    assert!(client.notices.is_empty(), "notified: {:?}", client.notices);
+
+    // Out of focus, the same pane notifies, with the sound the default
+    // config gives an approval.
+    client
+        .send(&ToDaemon::Input(InputEvent::Focus(false)))
+        .expect("focus out");
+    client.type_text("y\r");
+    wait_for_state(
+        &mut client,
+        pane,
+        AgentState::AwaitingPrompt,
+        Source::Screen,
+    );
+    client.type_text("ask\r");
+    client.wait_until("a notification", |client| !client.notices.is_empty());
+    assert_eq!(
+        client.notices,
+        vec![("fakeagent needs approval · default".to_owned(), true)]
+    );
+}
