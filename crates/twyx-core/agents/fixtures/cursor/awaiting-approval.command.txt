@@ -1,0 +1,30 @@
+
+
+  Cursor Agent
+  v2026.10.19-6bbf2c4
+  Tip: Hit shift+tab to enable Plan Mode for large or complex changes.
+
+
+  Write the numbers 1 to 150, one per line. Then run the shell command `touch
+  cursor-probe.txt`.
+
+
+  Writing 1–150, then creating cursor-probe.txt.
+
+  $ touch cursor-probe.txt && printf '%s\n' $(seq 1 150) | head -5 && ls -la cursor-probe.txt &&
+    wc -l <<< "$(seq 1 150)" Waiting for approval...
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ $  touch cursor-probe.txt && printf '%s\n' $(seq 1 150) | head -5 && ls -la cursor-probe.txt && wc
+    -l <<< "$(seq 1 150)" in .
+
+ Run this command?
+ Not in allowlist: head, ls, printf, seq, touch, wc
+  → Run (once) (y)
+    Run Everything (shift+tab)
+    Skip & tell the agent what to do instead (esc or n)
+
+
+
+
+

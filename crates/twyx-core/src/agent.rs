@@ -20,6 +20,7 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("pi", include_str!("../agents/pi.toml")),
     ("opencode", include_str!("../agents/opencode.toml")),
     ("codex", include_str!("../agents/codex.toml")),
+    ("cursor", include_str!("../agents/cursor.toml")),
 ];
 
 const PROMPT: &str = "{prompt}";

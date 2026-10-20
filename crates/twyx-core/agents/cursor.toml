@@ -1,0 +1,29 @@
+title = "Cursor CLI"
+processes = ["cursor-agent", "agent"]
+command = ["cursor-agent"]
+launch_with_prompt = ["cursor-agent", "{prompt}"]
+resume = ["cursor-agent", "--resume", "{session}"]
+
+[[screen]]
+name = "approval dialog"
+state = "awaiting-approval"
+rows = 12
+all = ['(Run this command|Write to this file|Delete this file)\?']
+any = ['\(y\)', 'esc or n']
+
+[[screen]]
+name = "workspace trust"
+state = "awaiting-approval"
+all = ['Workspace Trust Required', 'Trust this workspace']
+
+[[screen]]
+name = "stop hint"
+state = "working"
+rows = 4
+all = ['ctrl\+c to stop']
+
+[[screen]]
+name = "composer"
+state = "awaiting-prompt"
+rows = 4
+all = ['^\s*→ ']
