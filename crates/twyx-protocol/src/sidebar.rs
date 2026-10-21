@@ -37,8 +37,8 @@ pub struct Row {
     /// How far the row is indented: 0 for a project or a loose workspace.
     pub depth: u8,
     pub label: String,
-    /// The branch of a worktree, `detached` when HEAD is; the worktree or
-    /// workspace of an agent session.
+    /// The branch of a worktree, `detached` when HEAD is; the workspace of
+    /// an agent session.
     pub detail: String,
     pub dirty: bool,
     /// The row of the workspace the client shows, or of its focused pane.
@@ -209,7 +209,7 @@ fn heading(label: &str) -> Row {
 }
 
 /// One row per agent session, in the order of the spaces rows: the agent's
-/// kind, and the worktree or workspace it runs in.
+/// kind, and the workspace it runs in.
 fn agents(
     overview: &Overview,
     spaces: &[Row],
@@ -234,23 +234,13 @@ fn agents(
     summaries.sort_by_key(|summary| rank(summary));
     let mut rows = Vec::new();
     for summary in summaries {
-        let place = summary
-            .worktree
-            .and_then(|id| {
-                overview
-                    .projects
-                    .iter()
-                    .flat_map(|project| &project.worktrees)
-                    .find(|worktree| worktree.worktree == id)
-            })
-            .map_or_else(|| summary.name.clone(), |worktree| worktree.name.clone());
         for pane in &summary.panes {
             let Some(agent) = &pane.agent else { continue };
             rows.push(Row {
                 kind: Kind::Pane,
                 depth: 0,
                 label: agent.clone(),
-                detail: place.clone(),
+                detail: summary.name.clone(),
                 dirty: false,
                 current: shown == Some(summary.workspace) && focused == Some(pane.leaf),
                 target: Some(Target::Pane(pane.leaf)),
@@ -397,7 +387,7 @@ mod tests {
                 (Kind::Pane, 1, "p7", "", false, false),
                 (Kind::Heading, 0, "", "", false, false),
                 (Kind::Heading, 0, "agents", "", false, false),
-                (Kind::Pane, 0, "claude", "main", false, true),
+                (Kind::Pane, 0, "claude", "twyx/main", false, true),
             ]
         );
         assert_eq!(rows[4].target, Some(Target::Open("/src/fix".to_owned())));

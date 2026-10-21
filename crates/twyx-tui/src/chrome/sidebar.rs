@@ -89,7 +89,8 @@ impl Widget for Sidebar<'_> {
                 }
             };
             if bar {
-                for x in area.x..edge {
+                // The pad on the right stays blank, so the bar never meets a pane.
+                for x in area.x..right {
                     buf[(x, y)].set_style(ground(pen.paper()));
                 }
             }
@@ -121,16 +122,19 @@ impl Widget for Sidebar<'_> {
             } else {
                 row.detail.as_str()
             };
-            let tail = format!("{detail}{}", if row.dirty { "*" } else { "" });
             let label_width = text_width(&row.label);
-            let tail_width = text_width(&tail);
-            // The name keeps its room; the detail shows only beside it whole.
-            let fits = x + label_width + 2 * SPACE.gap + tail_width <= right;
-            let label_room = if fits || tail.is_empty() {
-                right
+            let dirty = u16::from(row.dirty);
+            // The name keeps its room; the detail takes what is left, cut,
+            // and goes when too little is left to read.
+            let room = right.saturating_sub(x + label_width + 2 * SPACE.gap + dirty);
+            let detail = if text_width(detail) <= room {
+                detail.to_owned()
+            } else if room > MIN_DETAIL {
+                cut(detail, room)
             } else {
-                right.saturating_sub(u16::from(row.dirty) + SPACE.gap)
+                String::new()
             };
+            let label_room = right.saturating_sub(if row.dirty { dirty + SPACE.gap } else { 0 });
             put(
                 buf,
                 x,
@@ -139,30 +143,24 @@ impl Widget for Sidebar<'_> {
                 &cut(&row.label, label_room.saturating_sub(x)),
                 ground(style),
             );
-            let shown = if fits {
-                tail.as_str()
-            } else if row.dirty {
-                "*"
-            } else {
-                ""
-            };
-            if !shown.is_empty() {
-                let start = right.saturating_sub(text_width(shown));
-                let next = put(
-                    buf,
-                    start,
-                    y,
-                    right,
-                    shown.trim_end_matches('*'),
-                    ground(pen.face(kind.caption)),
-                );
-                if row.dirty {
-                    put(buf, next, y, right, "*", ground(pen.face(kind.label)));
-                }
+            let start = right.saturating_sub(text_width(&detail) + dirty);
+            let next = put(
+                buf,
+                start,
+                y,
+                right,
+                &detail,
+                ground(pen.face(kind.caption)),
+            );
+            if row.dirty {
+                put(buf, next, y, right, "*", ground(pen.face(kind.label)));
             }
         }
     }
 }
+
+/// The fewest cells a cut detail keeps, its `…` included.
+const MIN_DETAIL: u16 = 4;
 
 fn text_width(text: &str) -> u16 {
     ratatui::text::Span::raw(text).width() as u16
@@ -227,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn a_long_name_drops_its_branch_and_a_branch_named_like_it_shows_once() {
+    fn a_name_keeps_its_room_the_branch_is_cut_into_the_rest_and_shows_once() {
         let mut agent = row(Kind::Worktree, 1, "sign-in-form", "sign-in-form", false);
         agent.mark = Some(AgentState::NeedsApproval);
         let rows = [
@@ -241,6 +239,7 @@ mod tests {
                 "topic/session",
                 true,
             ),
+            row(Kind::Worktree, 1, "fix", "topic/session-expiry", false),
             agent,
             row(Kind::Worktree, 1, "a-very-long-worktree-name", "", false),
         ];
@@ -251,6 +250,7 @@ mod tests {
                 "   acme",
                 "     main             *",
                 "     fix-session-exp… *",
+                "     fix  topic/sessio…",
                 " !   sign-in-form",
                 "     a-very-long-workt…",
             ]
