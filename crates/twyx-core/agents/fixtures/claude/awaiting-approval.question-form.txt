@@ -1,0 +1,15 @@
+←  ☐ Bad TTL  ☐ Stack rules  ✔ Submit  →
+ What should login do when ACME_SESSION_TTL is set but is not a
+ positive whole number (for example "12h", "abc", "0")?
+❯ 1. Use 12h default
+     Ignore the bad value and use 43200 seconds. A typo goes
+     unnoticed.
+  2. Fail login
+     Return a new LoginError variant (for example
+     BadSessionTtl). A typo shows at the first sign-in.
+  3. Accept 0
+     Only non-numeric values fall back to 12h; 0 is allowed and
+     makes sessions expire at once.
+  4. Type something.
+  5. Chat about this
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

@@ -22,7 +22,7 @@ all = ['Yes, I trust this folder', 'Enter to confirm']
 name = "question"
 state = "awaiting-approval"
 rows = 6
-all = ['Enter to select · ↑/↓ to navigate']
+all = ['Enter to select · .* to navigate']
 
 [[screen]]
 name = "spinner"
