@@ -18,7 +18,7 @@ use twyx_protocol::input::InputEvent;
 
 mod support;
 
-use support::{Client, Sandbox, new_pane_at};
+use support::{Client, Sandbox, new_pane_at, sh};
 
 /// A fake agent that answers each line it reads. `TWYX` is the binary its
 /// `notify` lines run. `hook-` lines report as a hook does, with the
@@ -153,6 +153,28 @@ fn an_agent_session_starts_with_its_process_follows_its_screen_and_ends_with_it(
             .get(&pane)
             .is_some_and(|info| info.agent.is_none())
     });
+}
+
+#[test]
+fn an_agent_that_a_shell_execs_starts_a_session_in_the_same_process() {
+    let mut sandbox = Sandbox::new("aexec");
+    let agent = install(&sandbox, "fakeagent", FAKE_RULES, FAKE_AGENT);
+    sandbox.start();
+    let mut client = sandbox.connect(60, 10);
+    // The shell is the foreground process first; exec keeps its pid.
+    let pane = new_pane_at(
+        &mut client,
+        &sandbox.cwd(),
+        sh(&format!("sleep 1; exec '{}'", agent.display())),
+        Place::Split(Axis::Row),
+    );
+    wait_for_state(
+        &mut client,
+        pane,
+        AgentState::AwaitingPrompt,
+        Source::Screen,
+    );
+    assert_eq!(agent_of(&client, pane).unwrap().0, "fakeagent");
 }
 
 #[test]

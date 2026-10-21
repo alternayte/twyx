@@ -283,21 +283,27 @@ impl Core<'_> {
         if self.watch.polled.elapsed() < tuning::FOREGROUND_POLL {
             return;
         }
+        let wrote = self.watch.output > self.watch.polled;
         self.watch.polled = Instant::now();
         let Some(pid) = self.master.foreground() else {
             return;
         };
-        if self
+        let seen = self
             .watch
             .foreground
             .as_ref()
-            .is_some_and(|(seen, _)| *seen == pid)
-        {
+            .filter(|(seen, _)| *seen == pid);
+        // `exec` keeps the pid and changes the program; the new program
+        // draws, so the name is read again only after output.
+        if seen.is_some() && !wrote {
             return;
         }
         let Some(name) = crate::process::name(pid) else {
             return;
         };
+        if seen.is_some_and(|(_, known)| *known == name) {
+            return;
+        }
         self.watch.foreground = Some((pid, name.clone()));
         send(out, FromHolder::Signal(Signal::Foreground { pid, name }));
     }
