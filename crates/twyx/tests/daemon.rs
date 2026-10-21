@@ -174,9 +174,9 @@ fn a_split_sizes_every_pane_to_its_place_in_the_leaseholders_area() {
     let left = new_pane_at(&mut client, &cwd, sh("exec cat"), Place::Split(Axis::Row));
     client.wait_until("one pane in its frame", |c| c.size(left) == Some((79, 8)));
     let right = new_pane_at(&mut client, &cwd, sh("exec cat"), Place::Split(Axis::Row));
-    // 81 columns hold three rules and 78 inner columns, half each.
+    // 81 columns hold four rules, one blank and 76 inner columns, half each.
     client.wait_until("two panes side by side", |c| {
-        c.size(left) == Some((39, 8)) && c.size(right) == Some((39, 8))
+        c.size(left) == Some((38, 8)) && c.size(right) == Some((38, 8))
     });
     let below = new_pane_at(
         &mut client,
@@ -184,9 +184,10 @@ fn a_split_sizes_every_pane_to_its_place_in_the_leaseholders_area() {
         sh("exec cat"),
         Place::Split(Axis::Column),
     );
-    // The right pane splits in two: 10 rows hold three rules and 7 inner rows.
+    // The right pane splits in two: 10 rows hold two boxes a blank apart and
+    // 5 inner rows.
     client.wait_until("the right pane split", |c| {
-        c.size(right) == Some((39, 4)) && c.size(below) == Some((39, 3))
+        c.size(right) == Some((38, 3)) && c.size(below) == Some((38, 2))
     });
 }
 

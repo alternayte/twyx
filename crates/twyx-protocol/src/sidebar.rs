@@ -1,5 +1,7 @@
-//! The rows both clients' sidebars show, from the daemon's overview:
-//! projects, their worktrees and workspaces, and the panes of each.
+//! The rows both clients' sidebars show, from the daemon's overview, in two
+//! sections: spaces (projects, their worktrees and workspaces, and the plain
+//! panes of each) and agents (one row per agent session). Every pane shows
+//! once.
 
 use serde::{Deserialize, Serialize};
 use twyx_core::inbox::most_urgent;
@@ -21,6 +23,8 @@ pub enum Target {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
+    /// A section's name, or the blank line before it. Nothing to choose.
+    Heading,
     Project,
     Worktree,
     Workspace,
@@ -33,7 +37,8 @@ pub struct Row {
     /// How far the row is indented: 0 for a project or a loose workspace.
     pub depth: u8,
     pub label: String,
-    /// The branch of a worktree, `detached` when HEAD is.
+    /// The branch of a worktree, `detached` when HEAD is; the worktree or
+    /// workspace of an agent session.
     pub detail: String,
     pub dirty: bool,
     /// The row of the workspace the client shows, or of its focused pane.
@@ -56,7 +61,7 @@ pub fn rows(
     focused: Option<LeafId>,
     title: impl Fn(u64) -> String,
 ) -> Vec<Row> {
-    let mut rows = Vec::new();
+    let mut rows = vec![heading("spaces")];
     let workspace = |id: u64| {
         overview
             .workspaces
@@ -65,7 +70,7 @@ pub fn rows(
     };
     let panes =
         |rows: &mut Vec<Row>, summary: &WorkspaceSummary, depth: u8, project: Option<u64>| {
-            for pane in &summary.panes {
+            for pane in summary.panes.iter().filter(|pane| pane.agent.is_none()) {
                 rows.push(Row {
                     kind: Kind::Pane,
                     depth,
@@ -179,6 +184,82 @@ pub fn rows(
         });
         panes(&mut rows, summary, 1, summary.project);
     }
+    let agents = agents(overview, &rows, shown, focused);
+    if !agents.is_empty() {
+        rows.push(heading(""));
+        rows.push(heading("agents"));
+        rows.extend(agents);
+    }
+    rows
+}
+
+fn heading(label: &str) -> Row {
+    Row {
+        kind: Kind::Heading,
+        depth: 0,
+        label: label.to_owned(),
+        detail: String::new(),
+        dirty: false,
+        current: false,
+        target: None,
+        worktree: None,
+        project: None,
+        mark: None,
+    }
+}
+
+/// One row per agent session, in the order of the spaces rows: the agent's
+/// kind, and the worktree or workspace it runs in.
+fn agents(
+    overview: &Overview,
+    spaces: &[Row],
+    shown: Option<u64>,
+    focused: Option<LeafId>,
+) -> Vec<Row> {
+    let mut order: Vec<u64> = Vec::new();
+    for row in spaces {
+        if let Some(Target::Workspace(workspace)) = row.target
+            && !order.contains(&workspace)
+        {
+            order.push(workspace);
+        }
+    }
+    let rank = |summary: &WorkspaceSummary| {
+        order
+            .iter()
+            .position(|id| *id == summary.workspace)
+            .unwrap_or(order.len())
+    };
+    let mut summaries: Vec<&WorkspaceSummary> = overview.workspaces.iter().collect();
+    summaries.sort_by_key(|summary| rank(summary));
+    let mut rows = Vec::new();
+    for summary in summaries {
+        let place = summary
+            .worktree
+            .and_then(|id| {
+                overview
+                    .projects
+                    .iter()
+                    .flat_map(|project| &project.worktrees)
+                    .find(|worktree| worktree.worktree == id)
+            })
+            .map_or_else(|| summary.name.clone(), |worktree| worktree.name.clone());
+        for pane in &summary.panes {
+            let Some(agent) = &pane.agent else { continue };
+            rows.push(Row {
+                kind: Kind::Pane,
+                depth: 0,
+                label: agent.clone(),
+                detail: place.clone(),
+                dirty: false,
+                current: shown == Some(summary.workspace) && focused == Some(pane.leaf),
+                target: Some(Target::Pane(pane.leaf)),
+                worktree: summary.worktree,
+                project: summary.project,
+                mark: pane.mark,
+            });
+        }
+    }
     rows
 }
 
@@ -252,7 +333,7 @@ mod tests {
                         6 => Some(Mark::NeedsApproval),
                         _ => None,
                     },
-                    agent: None,
+                    agent: (*pane == 6).then(|| "claude".to_owned()),
                 })
                 .collect(),
             clients: 0,
@@ -260,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn projects_list_worktrees_with_their_panes_then_the_loose_workspaces() {
+    fn spaces_list_worktrees_with_their_plain_panes_and_agents_list_each_session_once() {
         let overview = Overview {
             projects: vec![
                 ProjectInfo {
@@ -306,31 +387,38 @@ mod tests {
         assert_eq!(
             lines,
             vec![
+                (Kind::Heading, 0, "spaces", "", false, false),
                 (Kind::Project, 0, "twyx", "", false, false),
                 (Kind::Worktree, 1, "main", "main", true, true),
                 (Kind::Pane, 2, "p5", "", false, false),
-                (Kind::Pane, 2, "p6", "", false, true),
                 (Kind::Worktree, 1, "fix", "fix", false, false),
                 (Kind::Project, 0, "notes", "", false, false),
                 (Kind::Workspace, 0, "default", "", false, false),
                 (Kind::Pane, 1, "p7", "", false, false),
+                (Kind::Heading, 0, "", "", false, false),
+                (Kind::Heading, 0, "agents", "", false, false),
+                (Kind::Pane, 0, "claude", "main", false, true),
             ]
         );
         assert_eq!(rows[4].target, Some(Target::Open("/src/fix".to_owned())));
-        assert_eq!(rows[0].target, Some(Target::Workspace(2)));
+        assert_eq!(rows[1].target, Some(Target::Workspace(2)));
         assert_eq!(rows[5].target, Some(Target::Workspace(3)));
+        assert_eq!(rows[10].target, Some(Target::Pane(LeafId(6))));
         let marks: Vec<Option<Mark>> = rows.iter().map(|row| row.mark).collect();
         assert_eq!(
             marks,
             vec![
+                None,
                 Some(Mark::NeedsApproval),
                 Some(Mark::NeedsApproval),
                 Some(Mark::Working),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 Some(Mark::NeedsApproval),
-                None,
-                None,
-                None,
-                None,
             ],
             "each row rolls up the most urgent mark of its panes"
         );

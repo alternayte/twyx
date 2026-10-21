@@ -2,9 +2,8 @@
 //! the chosen file, unified or side by side, with keys to move and to mark
 //! hunks and files reviewed.
 //!
-//! The diff carries no hues: the TUI keeps colour for agent states. An added
-//! line is in ink, a removed line and context in grey, and the `+` and `-`
-//! column says which is which.
+//! An added line is in a muted green, a removed line in a muted red and
+//! context in ink. The `+` and `-` column says which is which without colour.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -513,39 +512,40 @@ impl ReviewView<'_> {
                 .set_style(gutter);
             let x = area.x + 1;
             let ink = pen.fg(Tone::Ink);
-            let grey = pen.fg(Tone::Rgb(pen.theme.graphite));
+            let added = pen.fg(Tone::Rgb(pen.theme.added));
+            let removed = pen.fg(Tone::Rgb(pen.theme.removed));
             match row {
                 Row::Header(header) => {
                     put(buf, x, y, area.right(), header, pen.rule());
                 }
                 Row::Line(kind, text) => {
                     let (mark, style) = match kind {
-                        LineKind::Added => ("+", ink),
-                        LineKind::Removed => ("-", grey),
-                        LineKind::Context => (" ", grey),
+                        LineKind::Added => ("+", added),
+                        LineKind::Removed => ("-", removed),
+                        LineKind::Context => (" ", ink),
                         LineKind::NoNewline => ("\\", pen.rule()),
                     };
                     let after = put(buf, x, y, area.right(), mark, style);
                     put(buf, after, y, area.right(), text, style);
                 }
                 Row::Same(text) => {
-                    put(buf, x + 1, y, x + 1 + half, text, grey);
+                    put(buf, x + 1, y, x + 1 + half, text, ink);
                     buf[(x + 1 + half, y)]
                         .set_char(RULES.vertical)
                         .set_style(pen.rule());
-                    put(buf, x + 3 + half, y, area.right(), text, grey);
+                    put(buf, x + 3 + half, y, area.right(), text, ink);
                 }
                 Row::Pair(old, new) => {
                     if let Some(old) = old {
-                        let after = put(buf, x, y, x + 1 + half, "-", grey);
-                        put(buf, after, y, x + 1 + half, old, grey);
+                        let after = put(buf, x, y, x + 1 + half, "-", removed);
+                        put(buf, after, y, x + 1 + half, old, removed);
                     }
                     buf[(x + 1 + half, y)]
                         .set_char(RULES.vertical)
                         .set_style(pen.rule());
                     if let Some(new) = new {
-                        let after = put(buf, x + 1 + half + 1, y, area.right(), "+", ink);
-                        put(buf, after, y, area.right(), new, ink);
+                        let after = put(buf, x + 1 + half + 1, y, area.right(), "+", added);
+                        put(buf, after, y, area.right(), new, added);
                     }
                 }
             }

@@ -151,7 +151,8 @@ pub struct Type {
     pub matched: Face,
 }
 
-/// Hairlines, square corners. Neighbouring panes share one rule.
+/// Hairlines, rounded corners. Each tiled pane is its own box; the panes of
+/// a stack share their rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rules {
     pub horizontal: char,
@@ -170,10 +171,10 @@ pub struct Rules {
 pub const RULES: Rules = Rules {
     horizontal: '─',
     vertical: '│',
-    top_left: '┌',
-    top_right: '┐',
-    bottom_left: '└',
-    bottom_right: '┘',
+    top_left: '╭',
+    top_right: '╮',
+    bottom_left: '╰',
+    bottom_right: '╯',
     tee_down: '┬',
     tee_up: '┴',
     tee_right: '├',
@@ -189,12 +190,15 @@ pub struct Space {
     pub gap: u16,
     /// The sidebar's width, its rule included.
     pub sidebar: u16,
+    /// The blank cells between two tiled pane boxes.
+    pub panes: u16,
 }
 
 pub const SPACE: Space = Space {
     pad: 1,
     gap: 1,
     sidebar: 30,
+    panes: 1,
 };
 
 /// The desktop client's measures, in logical pixels, and its one motion.
@@ -407,11 +411,19 @@ impl Sheet {
 /// How far each grey of the ramp sits from the paper toward the ink.
 const GRAPHITE: f32 = 0.68;
 const RULE: f32 = 0.40;
+/// How far the selection bar sits from the paper toward the accent.
+const SELECTION: f32 = 0.16;
+/// How far a diff line's hue is moved toward the graphite grey, to mute it.
+const DIFF: f32 = 0.25;
 
 /// The resolved tokens for one paper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     pub variant: Variant,
+    /// The paper: lettering on the active tab chip.
+    pub paper: Rgb,
+    /// The tint under the selected sidebar row.
+    pub selection: Rgb,
     /// Secondary text.
     pub graphite: Rgb,
     /// Unfocused borders and separators.
@@ -421,6 +433,9 @@ pub struct Theme {
     pub needs_approval: Rgb,
     pub failed: Rgb,
     pub done: Rgb,
+    /// Added and removed lines of a diff.
+    pub added: Rgb,
+    pub removed: Rgb,
     pub type_: Type,
 }
 
@@ -473,12 +488,16 @@ impl Theme {
         let accent = ansi[4];
         Self {
             variant,
+            paper,
+            selection: paper.mix(accent, SELECTION),
             graphite,
             rule: paper.mix(ink, RULE),
             accent,
             needs_approval: ansi[3],
             failed: ansi[1],
             done: ansi[2],
+            added: ansi[2].mix(graphite, DIFF),
+            removed: ansi[1].mix(graphite, DIFF),
             type_: Type {
                 title: Face::bold(Tone::Ink),
                 label: Face::plain(Tone::Ink),
@@ -539,12 +558,35 @@ mod tests {
                 ("needs approval", theme.needs_approval, 4.5),
                 ("failed", theme.failed, 4.5),
                 ("done", theme.done, 4.5),
+                ("added", theme.added, 4.5),
+                ("removed", theme.removed, 4.5),
                 ("rule", theme.rule, 2.0),
             ] {
                 let ratio = contrast(colour, paper);
                 assert!(
                     ratio >= minimum,
                     "{name} on {variant:?} paper: {ratio:.2} < {minimum}"
+                );
+            }
+            for (name, colour, ground, minimum) in [
+                (
+                    "ink on the selection",
+                    Sheet::of(variant).ink,
+                    theme.selection,
+                    4.5,
+                ),
+                (
+                    "accent on the selection",
+                    theme.accent,
+                    theme.selection,
+                    3.0,
+                ),
+                ("paper on the accent chip", paper, theme.accent, 4.5),
+            ] {
+                let ratio = contrast(colour, ground);
+                assert!(
+                    ratio >= minimum,
+                    "{name} on {variant:?}: {ratio:.2} < {minimum}"
                 );
             }
         }

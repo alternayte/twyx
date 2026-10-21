@@ -1,11 +1,14 @@
-//! The sidebar: projects, their worktrees and workspaces, and the panes of
-//! each, down the left edge with one rule on its right.
+//! The sidebar: the spaces section (projects, their worktrees and
+//! workspaces, and the plain panes of each) and the agents section, down the
+//! left edge.
 //!
-//! No fills. The client's own workspace and focused pane are lettered in
-//! the accent; the workspace mode cursor is the palette's `›`.
+//! The selected row sits on a tinted bar: the workspace mode cursor while
+//! the mode is open, else the client's own workspace. The focused pane is
+//! lettered in the accent. A state glyph leads each row that has one.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Widget;
 use twyx_core::theme::{RULES, SPACE};
 use twyx_protocol::sidebar::{Kind, Row};
@@ -59,10 +62,14 @@ impl Widget for Sidebar<'_> {
                     .set_style(pen.rule());
             }
         }
+        let edge = area.right().saturating_sub(u16::from(self.rule));
         let left = area.x + SPACE.pad;
-        let right = area
-            .right()
-            .saturating_sub(u16::from(self.rule) + SPACE.pad);
+        let right = edge.saturating_sub(SPACE.pad);
+        let selected = self.cursor.or_else(|| {
+            self.rows
+                .iter()
+                .position(|row| row.current && row.kind != Kind::Pane)
+        });
         let first = Self::first(self.cursor, area.height);
         for (line, (index, row)) in self
             .rows
@@ -73,63 +80,180 @@ impl Widget for Sidebar<'_> {
             .enumerate()
         {
             let y = area.y + line as u16;
-            let at_cursor = self.cursor == Some(index);
-            let marker = if at_cursor { "›" } else { " " };
-            let mut x = put(buf, left, y, right, marker, pen.accent());
-            x = put(
-                buf,
-                x,
-                y,
-                right,
-                &" ".repeat(1 + 2 * usize::from(row.depth)),
-                pen.paper(),
-            );
-            let style = match (row.current, at_cursor, row.kind) {
+            let bar = selected == Some(index);
+            let ground = |style: Style| {
+                if bar {
+                    style.bg(pen.rgb(pen.theme.selection))
+                } else {
+                    style
+                }
+            };
+            if bar {
+                for x in area.x..edge {
+                    buf[(x, y)].set_style(ground(pen.paper()));
+                }
+            }
+            if row.kind == Kind::Heading {
+                put(
+                    buf,
+                    left,
+                    y,
+                    right,
+                    &row.label,
+                    pen.face(kind.caption).add_modifier(Modifier::BOLD),
+                );
+                continue;
+            }
+            if let Some(mark) = row.mark {
+                let tone = ground(pen.fg(pen.theme.agent(mark)));
+                put(buf, left, y, right, &mark.glyph().to_string(), tone);
+            }
+            let x = left + 2 + 2 * u16::from(row.depth);
+            let style = match (row.current && row.kind == Kind::Pane, bar, row.kind) {
                 (true, _, _) => pen.accent(),
-                (false, true, _) => pen.face(kind.title),
+                (false, true, _) | (false, false, Kind::Project) => pen.face(kind.title),
                 (false, false, Kind::Pane) => pen.face(kind.caption),
                 (false, false, _) => pen.face(kind.label),
             };
-            // The branch goes at the right end while the name keeps room.
-            let detail = if row.dirty {
-                format!("{}*", row.detail)
+            // A branch named like its worktree says nothing new.
+            let detail = if row.detail == row.label {
+                ""
             } else {
-                row.detail.clone()
+                row.detail.as_str()
             };
-            let detail_width = detail.chars().count() as u16;
-            let label_limit = if detail.is_empty() {
+            let tail = format!("{detail}{}", if row.dirty { "*" } else { "" });
+            let label_width = text_width(&row.label);
+            let tail_width = text_width(&tail);
+            // The name keeps its room; the detail shows only beside it whole.
+            let fits = x + label_width + 2 * SPACE.gap + tail_width <= right;
+            let label_room = if fits || tail.is_empty() {
                 right
             } else {
-                right.saturating_sub(detail_width + 2 * SPACE.gap)
+                right.saturating_sub(u16::from(row.dirty) + SPACE.gap)
             };
-            // A long label gives way to the mark.
-            let mark_width = if row.mark.is_some() { 2 } else { 0 };
-            let mut end = put(
+            put(
                 buf,
                 x,
                 y,
-                label_limit.saturating_sub(mark_width),
-                &row.label,
-                style,
+                label_room,
+                &cut(&row.label, label_room.saturating_sub(x)),
+                ground(style),
             );
-            if let Some(mark) = row.mark {
-                let tone = pen.fg(pen.theme.agent(mark));
-                end = put(
+            let shown = if fits {
+                tail.as_str()
+            } else if row.dirty {
+                "*"
+            } else {
+                ""
+            };
+            if !shown.is_empty() {
+                let start = right.saturating_sub(text_width(shown));
+                let next = put(
                     buf,
-                    end,
+                    start,
                     y,
-                    label_limit,
-                    &format!(" {}", mark.glyph()),
-                    tone,
+                    right,
+                    shown.trim_end_matches('*'),
+                    ground(pen.face(kind.caption)),
                 );
-            }
-            if !detail.is_empty() && end + 2 * SPACE.gap <= right.saturating_sub(detail_width) {
-                let start = right - detail_width;
-                let next = put(buf, start, y, right, &row.detail, pen.face(kind.caption));
                 if row.dirty {
-                    put(buf, next, y, right + 1, "*", pen.face(kind.label));
+                    put(buf, next, y, right, "*", ground(pen.face(kind.label)));
                 }
             }
         }
+    }
+}
+
+fn text_width(text: &str) -> u16 {
+    ratatui::text::Span::raw(text).width() as u16
+}
+
+/// `text` in `room` cells, ending in `…` when it is cut.
+fn cut(text: &str, room: u16) -> String {
+    if text_width(text) <= room {
+        return text.to_owned();
+    }
+    let mut kept = String::new();
+    for character in text.chars() {
+        if text_width(&kept) + text_width(&character.to_string()) + 1 > room {
+            break;
+        }
+        kept.push(character);
+    }
+    format!("{kept}…")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chrome::Depth;
+    use twyx_core::theme::{AgentState, Theme, Variant};
+
+    fn row(kind: Kind, depth: u8, label: &str, detail: &str, dirty: bool) -> Row {
+        Row {
+            kind,
+            depth,
+            label: label.to_owned(),
+            detail: detail.to_owned(),
+            dirty,
+            current: false,
+            target: None,
+            worktree: None,
+            project: None,
+            mark: None,
+        }
+    }
+
+    fn draw(rows: &[Row], width: u16) -> Vec<String> {
+        let pen = Pen::on_paper(Theme::sheet(Variant::Dark), Depth::Truecolor);
+        let area = Rect::new(0, 0, width, rows.len() as u16);
+        let mut buf = Buffer::empty(area);
+        Sidebar {
+            pen: &pen,
+            rows,
+            cursor: None,
+            rule: false,
+        }
+        .render(area, &mut buf);
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol().to_owned())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_long_name_drops_its_branch_and_a_branch_named_like_it_shows_once() {
+        let mut agent = row(Kind::Worktree, 1, "sign-in-form", "sign-in-form", false);
+        agent.mark = Some(AgentState::NeedsApproval);
+        let rows = [
+            row(Kind::Heading, 0, "spaces", "", false),
+            row(Kind::Project, 0, "acme", "", false),
+            row(Kind::Worktree, 1, "main", "main", true),
+            row(
+                Kind::Worktree,
+                1,
+                "fix-session-expiry",
+                "topic/session",
+                true,
+            ),
+            agent,
+            row(Kind::Worktree, 1, "a-very-long-worktree-name", "", false),
+        ];
+        assert_eq!(
+            draw(&rows, 24),
+            [
+                " spaces",
+                "   acme",
+                "     main             *",
+                "     fix-session-exp… *",
+                " !   sign-in-form",
+                "     a-very-long-workt…",
+            ]
+        );
     }
 }

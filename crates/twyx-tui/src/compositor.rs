@@ -170,13 +170,15 @@ impl<'a> Scene<'a> {
     }
 
     /// Where the sidebar is on this screen, when it shows.
+    /// A docked sidebar runs from the top row, beside the tab bar; one over
+    /// the panes starts below it.
     pub fn sidebar_area(&self) -> Option<Rect> {
-        self.sidebar?;
+        let top = u16::from(!self.sidebar?.docked);
         Some(Rect::new(
             0,
-            1,
+            top,
             sidebar_width(self.cols),
-            self.rows.saturating_sub(CHROME_ROWS),
+            self.rows.saturating_sub(CHROME_ROWS) + 1 - top,
         ))
     }
 
@@ -366,7 +368,7 @@ impl<'a> Scene<'a> {
                 .map(|(key, word)| (key.as_str(), word.as_str()))
                 .collect();
             HintBar { pen, hints: &hints }.render(
-                Rect::new(0, panes_area.bottom() - 1, self.cols, 1),
+                Rect::new(origin, panes_area.bottom() - 1, self.cols - origin, 1),
                 &mut layer,
             );
             overlay_cells(&mut grid, &layer);
@@ -437,7 +439,10 @@ impl<'a> Scene<'a> {
                 .unwrap_or(0),
             workspace: &workspace.name,
         }
-        .render(Rect::new(0, 0, self.cols, 1), buf);
+        .render(
+            Rect::new(self.origin(), 0, self.cols - self.origin(), 1),
+            buf,
+        );
     }
 
     fn status_bar(&self, buf: &mut Buffer) {
@@ -810,14 +815,15 @@ mod tests {
     #[test]
     fn panes_sit_inside_their_frames_between_the_bars() {
         let rows = screen(20, 6, 20, 1, [PaneState::Running, PaneState::Running]);
-        // 20 columns: three rules and 17 inner, the spare one on the left.
+        // 20 columns: two boxes a blank apart and 15 inner, the spare one
+        // on the left.
         assert_eq!(
             rows[1..5],
             [
-                "┌─ p1 ────┬─ p2 ───┐",
-                "│left     │right   │",
-                "│wide     │        │",
-                "└─────────┴────────┘",
+                "╭─ p1 ───╮ ╭─ p2 ──╮",
+                "│left    │ │right  │",
+                "│wide    │ │       │",
+                "╰────────╯ ╰───────╯",
             ]
         );
         assert!(rows[0].contains("1 main"), "{:?}", rows[0]);
@@ -827,8 +833,8 @@ mod tests {
     #[test]
     fn a_client_without_the_lease_shows_the_tab_cropped_and_says_so() {
         let rows = screen(12, 5, 20, 99, [PaneState::Running, PaneState::Running]);
-        assert_eq!(rows[1], "┌─ p1 ────┬─");
-        assert_eq!(rows[3], "│wide     │ ");
+        assert_eq!(rows[1], "╭─ p1 ───╮ ╭");
+        assert_eq!(rows[3], "│wide    │ │");
         assert!(rows[4].contains("NORMAL"), "{:?}", rows[4]);
         let wide = screen(60, 6, 20, 99, [PaneState::Running, PaneState::Running]);
         assert!(wide[5].contains("sized by another client"), "{:?}", wide[5]);
@@ -844,7 +850,7 @@ mod tests {
             [PaneState::Exited { code: 3 }, PaneState::Running],
         );
         assert!(
-            rows[4].starts_with("└─ exited 3  ctrl-g p a run again"),
+            rows[4].starts_with("╰─ exited 3  ctrl-g p a run again"),
             "{:?}",
             rows[4]
         );

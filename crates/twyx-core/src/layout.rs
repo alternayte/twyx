@@ -2,12 +2,14 @@
 //!
 //! The daemon owns every layout and both clients place it with the same
 //! geometry, in cells. Every pane has a one-cell frame, and neighbouring
-//! tiled panes share the rule between them, so the leaseholder's tab area
-//! decides each pane's size exactly.
+//! tiled panes sit `SPACE.panes` blank cells apart, so the leaseholder's tab
+//! area decides each pane's size exactly. The children of a stack share
+//! their rules: a stack is one box.
 
 use serde::{Deserialize, Serialize};
 
 use crate::pane::PaneId;
+use crate::theme::SPACE;
 use crate::tuning;
 
 /// One leaf of a layout. Unique across the daemon, so a client's focus names
@@ -424,7 +426,7 @@ impl Layout {
             Axis::Row => split.width,
             Axis::Column => split.height,
         };
-        let inner = length.saturating_sub(children.len() as u16 + 1).max(1);
+        let inner = length.saturating_sub(frames(children.len() as u16)).max(1);
         let sign = if side.forward() { 1.0 } else { -1.0 };
         shift(
             root,
@@ -589,10 +591,7 @@ fn node_area(node: &Node, path: &[usize], area: Cells) -> Option<Cells> {
         Axis::Column => area.height,
     };
     let sizes = share(length, ratios);
-    let start: u16 = sizes[..index]
-        .iter()
-        .map(|size| size.saturating_sub(1))
-        .sum();
+    let start: u16 = sizes[..index].iter().map(|size| size + SPACE.panes).sum();
     let child = match axis {
         Axis::Row => Cells {
             x: area.x + start,
@@ -822,8 +821,7 @@ fn place_node(node: &Node, area: Cells, placed: &mut Vec<Placed>) {
                     },
                 };
                 place_node(child, rect, placed);
-                // Neighbours share one rule.
-                start = start.saturating_add(outer.saturating_sub(1));
+                start = start.saturating_add(outer + SPACE.panes);
             }
         }
         Node::Stack { children, expanded } => {
@@ -861,12 +859,18 @@ fn place_node(node: &Node, area: Cells, placed: &mut Vec<Placed>) {
     }
 }
 
-/// Outer lengths for children sharing `length` cells with one rule between
-/// each pair: the inner lengths follow the ratios, and leftover cells go to
-/// the largest remainders.
+/// The cells that `count` frames side by side take besides their insides:
+/// two rules each and the blanks between them.
+fn frames(count: u16) -> u16 {
+    2 * count + count.saturating_sub(1) * SPACE.panes
+}
+
+/// Outer lengths for children sharing `length` cells, each in its own frame
+/// with blanks between: the inner lengths follow the ratios, and leftover
+/// cells go to the largest remainders.
 fn share(length: u16, ratios: &[f32]) -> Vec<u16> {
     let count = ratios.len() as u16;
-    let inner_total = length.saturating_sub(count + 1);
+    let inner_total = length.saturating_sub(frames(count));
     let total: f32 = ratios.iter().sum::<f32>().max(f32::EPSILON);
     let exact: Vec<f32> = ratios
         .iter()
@@ -915,7 +919,7 @@ fn clamp_fractions(geometry: Fractions) -> Fractions {
 }
 
 /// How far `to` lies beyond `from` on `side`, and how much they overlap
-/// across it. Frames that share a rule are adjacent, at distance zero.
+/// across it. Frames with only the blanks between them are adjacent.
 fn beyond(from: Cells, to: Cells, side: Side) -> Option<(u16, u16)> {
     let overlap = |a0: u16, a1: u16, b0: u16, b1: u16| a1.min(b1).saturating_sub(a0.max(b0));
     match side {
@@ -996,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn neighbours_share_a_rule_and_the_inner_cells_add_up() {
+    fn each_pane_is_its_own_box_and_the_inner_cells_add_up() {
         let layout = Layout {
             root: Some(Node::Split {
                 axis: Axis::Row,
@@ -1011,10 +1015,10 @@ mod tests {
         };
         let placed = layout.place(area(21, 5));
         let rects: Vec<_> = placed.iter().map(|p| (p.outer.x, p.outer.width)).collect();
-        // 21 cells: four rules and 17 inner cells; the two spare cells go to
-        // the first two panes.
-        assert_eq!(rects, [(0, 8), (7, 8), (14, 7)]);
-        assert_eq!(placed.iter().map(|p| p.inner.width).sum::<u16>(), 21 - 4);
+        // 21 cells: six rules, two blanks and 13 inner cells; the spare cell
+        // goes to the first pane.
+        assert_eq!(rects, [(0, 7), (8, 6), (15, 6)]);
+        assert_eq!(placed.iter().map(|p| p.inner.width).sum::<u16>(), 21 - 8);
         assert_eq!(placed[2].outer.right(), 21);
     }
 
@@ -1035,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_moves_to_the_frame_beyond_the_shared_rule() {
+    fn focus_moves_to_the_frame_beyond_the_blanks() {
         let layout = three();
         let tab = area(40, 20);
         assert_eq!(
@@ -1093,25 +1097,25 @@ mod tests {
     #[test]
     fn dragging_a_rule_moves_it_by_whole_cells() {
         let mut layout = three();
-        let tab = area(42, 20);
-        // 42 columns: three rules and 39 inner, 20 and 19.
-        assert_eq!(outer(&layout, tab, 2).0, 21);
+        let tab = area(43, 21);
+        // 43 columns: four rules, one blank and 38 inner, 19 each.
+        assert_eq!(outer(&layout, tab, 2).0, 22);
         layout.drag_rule(LeafId(1), Side::Right, 5, tab);
-        assert_eq!(outer(&layout, tab, 2).0, 26);
-        // The rule below leaf 2 lives in the right column's split; it starts
-        // at row 10 and goes up three.
-        assert_eq!(outer(&layout, tab, 3).1, 10);
+        assert_eq!(outer(&layout, tab, 2).0, 27);
+        // The rule below leaf 2 lives in the right column's split; leaf 3
+        // starts at row 11 and goes up three.
+        assert_eq!(outer(&layout, tab, 3).1, 11);
         layout.drag_rule(LeafId(2), Side::Down, -3, tab);
         let (_, y, _, height) = outer(&layout, tab, 3);
-        assert_eq!((y, height), (7, 13));
+        assert_eq!((y, height), (8, 13));
     }
 
     #[test]
     fn swap_exchanges_two_leaves_and_keeps_the_shape() {
         let mut layout = three();
         layout.swap(LeafId(1), Side::Right, area(40, 20));
-        assert_eq!(outer(&layout, area(40, 20), 2), (0, 0, 21, 20));
-        assert_eq!(outer(&layout, area(40, 20), 1), (20, 0, 20, 11));
+        assert_eq!(outer(&layout, area(40, 20), 2), (0, 0, 20, 20));
+        assert_eq!(outer(&layout, area(40, 20), 1), (21, 0, 19, 10));
     }
 
     #[test]

@@ -8,6 +8,7 @@
 
 use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use twyx_core::layout::{Fractions, LeafId, Placed, Side};
+use twyx_core::theme::SPACE;
 use twyx_protocol::client::ToDaemon;
 use twyx_protocol::grid::MouseMode;
 use twyx_protocol::holder::CopyAction;
@@ -358,11 +359,14 @@ fn under(placed: &[Placed], col: u16, row: u16) -> Option<&Placed> {
         })
 }
 
-/// A rule two tiled panes share: the leaf on its left or above, and the
-/// side the rule is on. The tab's own edges are not rules to drag.
+/// The rules between two tiled panes: a pane's right or bottom rule, the
+/// blanks after it and the neighbour's rule across them all drag the leaf on
+/// the left or above, on that side. The tab's own edges are not rules to
+/// drag.
 fn rule_at(scene: &Scene<'_>, placed: &[Placed], col: u16, row: u16) -> Option<(LeafId, Side)> {
     let (cols, rows) = scene.tab_size()?;
     let (right_edge, bottom_edge) = ((scene.origin() + cols).saturating_sub(1), rows);
+    let reach = SPACE.panes + 1;
     placed
         .iter()
         .filter(|p| !p.floating && p.frame && p.content)
@@ -370,9 +374,17 @@ fn rule_at(scene: &Scene<'_>, placed: &[Placed], col: u16, row: u16) -> Option<(
             let outer = p.outer;
             let right = outer.right().saturating_sub(1);
             let bottom = outer.bottom().saturating_sub(1);
-            if col == right && col < right_edge && row > outer.y && row < bottom {
+            if (right..=right + reach).contains(&col)
+                && right < right_edge
+                && row > outer.y
+                && row < bottom
+            {
                 Some((p.leaf.id, Side::Right))
-            } else if row == bottom && row < bottom_edge && col > outer.x && col < right {
+            } else if (bottom..=bottom + reach).contains(&row)
+                && bottom < bottom_edge
+                && col > outer.x
+                && col < right
+            {
                 Some((p.leaf.id, Side::Down))
             } else {
                 None

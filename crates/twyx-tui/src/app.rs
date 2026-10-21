@@ -972,8 +972,8 @@ fn run(
                         && let Some(row) =
                             Sidebar::row_at(workspaces.rows.len(), cursor, area, event.row)
                     {
-                        workspaces.cursor = row;
                         if let Some(request) = workspaces.open(row) {
+                            workspaces.cursor = row;
                             let _ = daemon.outgoing.send(request);
                         }
                         keymap.reset();

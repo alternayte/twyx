@@ -1,8 +1,8 @@
-//! Pane frames: one hairline around each pane, shared between neighbours.
+//! Pane frames: one hairline box around each pane.
 //!
-//! Each frame is the pane's rectangle grown by one cell. Neighbours overlap on
-//! the shared rule, and each rule cell takes its glyph from the directions it
-//! connects, so junctions are exact at every size.
+//! Each frame is the pane's rectangle grown by one cell. Tiled panes sit apart;
+//! the panes of a stack overlap on a shared rule, and each rule cell takes its
+//! glyph from the directions it connects, so junctions are exact at every size.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -169,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn neighbours_share_one_rule_and_meet_in_exact_junctions() {
+    fn stacked_frames_share_one_rule_and_meet_in_exact_junctions() {
         let frames = [
             Frame {
                 outer: Rect::new(0, 0, 5, 5),
@@ -187,11 +187,11 @@ mod tests {
         assert_eq!(
             draw(&frames, Rect::new(0, 0, 9, 5)),
             [
-                "┌───┬───┐",
+                "╭───┬───╮",
                 "│   │   │",
                 "│   ├───┤",
                 "│   │   │",
-                "└───┴───┘",
+                "╰───┴───╯",
             ]
         );
     }
@@ -202,6 +202,6 @@ mod tests {
             outer: Rect::new(0, 0, 10, 2),
             title: "a-long-title",
         }];
-        assert_eq!(draw(&frames, Rect::new(0, 0, 10, 2))[0], "┌─ a-lo ─┐");
+        assert_eq!(draw(&frames, Rect::new(0, 0, 10, 2))[0], "╭─ a-lo ─╮");
     }
 }

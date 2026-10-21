@@ -1,7 +1,8 @@
 //! Chrome widgets: tab bar, pane frames, status bar, hint bar, palette.
 //!
 //! Every colour and glyph comes from the theme tokens in `twyx_core::theme`.
-//! Nothing here fills a background, except on a sheet twyx paints itself.
+//! Only the active tab chip and the sidebar's selection bar fill a
+//! background, besides a sheet twyx paints itself.
 
 pub mod bars;
 pub mod dialog;

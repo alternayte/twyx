@@ -1,13 +1,14 @@
 //! The tab bar, the status bar and the hint bar.
 //!
-//! The status bar is the sheet's title block: fields kept apart by rules.
+//! The active tab is a filled chip in the accent. The status bar is the
+//! sheet's title block: fields kept apart by rules.
 //! The hint bar is lettered over the bottom rule of the panes, so it comes and
 //! goes without resizing a pane. A bar that runs out of room drops whole
 //! fields; it never cuts a word.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::Widget;
 use twyx_core::theme::{AgentState, RULES, SPACE, Tone};
@@ -88,31 +89,36 @@ impl Widget for TabBar<'_> {
         let pen = self.pen;
         let kind = pen.theme.type_;
         buf.set_style(area, pen.paper());
+        // The active tab is a filled chip in the accent; the others are
+        // lettered in grey with the same padding, so nothing moves.
+        let chip = pen
+            .paper()
+            .bg(pen.rgb(pen.theme.accent))
+            .fg(pen.rgb(pen.theme.paper))
+            .add_modifier(Modifier::BOLD);
         let fields: Vec<Field> = self
             .tabs
             .iter()
             .enumerate()
             .map(|(number, tab)| {
                 let active = number == self.active;
-                let (number_face, name_face) = if active {
-                    (kind.mode, kind.title)
+                let (text, glyph) = if active {
+                    (chip, chip)
                 } else {
-                    (kind.caption, kind.caption)
+                    let tone = tab
+                        .agent
+                        .map_or(pen.paper(), |state| pen.fg(pen.theme.agent(state)));
+                    (pen.face(kind.caption), tone)
                 };
-                let mut field = vec![
-                    (format!("{} ", number + 1), pen.face(number_face)),
-                    (tab.name.to_owned(), pen.face(name_face)),
-                ];
+                let mut field = vec![(format!(" {} {}", number + 1, tab.name), text)];
                 if let Some(state) = tab.agent {
-                    field.push((
-                        format!(" {}", state.glyph()),
-                        pen.fg(pen.theme.agent(state)),
-                    ));
+                    field.push((format!(" {}", state.glyph()), glyph));
                 }
+                field.push((" ".to_owned(), text));
                 field
             })
             .collect();
-        let between = vec![(separator(), pen.rule())];
+        let between = vec![(blank(SPACE.gap), pen.paper())];
         let more = |count: usize| vec![(format!("+{count}"), pen.face(kind.caption))];
         let room = area.width.saturating_sub(2 * SPACE.pad);
 

@@ -64,6 +64,23 @@ impl Workspaces {
             |pane| pane_title(panes, pane),
         );
         self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
+        if self
+            .rows
+            .get(self.cursor)
+            .is_some_and(|row| row.kind == Kind::Heading)
+        {
+            self.cursor = self.step(self.cursor, true).unwrap_or(self.cursor);
+        }
+    }
+
+    /// The next row the cursor can stand on, past headings.
+    fn step(&self, from: usize, down: bool) -> Option<usize> {
+        let choosable = |index: &usize| self.rows[*index].kind != Kind::Heading;
+        if down {
+            (from + 1..self.rows.len()).find(choosable)
+        } else {
+            (0..from).rev().find(choosable)
+        }
     }
 
     /// Puts the cursor on the client's own workspace.
@@ -148,9 +165,9 @@ impl Workspaces {
                 effect.overlay = Some(Overlay::switcher());
                 effect.leave = true;
             }
-            Command::SidebarUp => self.cursor = self.cursor.saturating_sub(1),
-            Command::SidebarDown => {
-                self.cursor = (self.cursor + 1).min(self.rows.len().saturating_sub(1));
+            Command::SidebarUp | Command::SidebarDown => {
+                let down = command == Command::SidebarDown;
+                self.cursor = self.step(self.cursor, down).unwrap_or(self.cursor);
             }
             Command::SidebarOpen => {
                 effect.requests.extend(self.open(self.cursor));
@@ -607,35 +624,38 @@ mod tests {
     #[test]
     fn the_cursor_opens_worktrees_workspaces_and_panes() {
         let mut workspaces = workspaces();
-        // app, main, its pane, fix, default, its pane
-        assert_eq!(workspaces.rows.len(), 6);
+        // spaces, app, main, its pane, fix, default, its pane
+        assert_eq!(workspaces.rows.len(), 7);
         assert_eq!(
-            workspaces.open(1),
+            workspaces.open(2),
             Some(ToDaemon::SwitchWorkspace { workspace: 2 })
         );
         assert_eq!(
-            workspaces.open(3),
+            workspaces.open(4),
             Some(ToDaemon::Open {
                 path: "/src/fix".to_owned(),
                 switch: true
             })
         );
         assert_eq!(
-            workspaces.open(5),
+            workspaces.open(6),
             Some(ToDaemon::FocusLeaf { leaf: LeafId(1) })
         );
-        workspaces.cursor = 4;
+        workspaces.cursor = 5;
         let effect = workspaces.command(Command::SidebarDown, true, None);
-        assert_eq!(workspaces.cursor, 5);
+        assert_eq!(workspaces.cursor, 6);
         assert!(effect.requests.is_empty());
         workspaces.command(Command::SidebarDown, true, None);
-        assert_eq!(workspaces.cursor, 5, "the cursor stops at the last row");
+        assert_eq!(workspaces.cursor, 6, "the cursor stops at the last row");
+        workspaces.cursor = 1;
+        workspaces.command(Command::SidebarUp, true, None);
+        assert_eq!(workspaces.cursor, 1, "the cursor never stands on a heading");
     }
 
     #[test]
     fn a_new_worktree_asks_for_a_branch_then_shows_it() {
         let mut workspaces = workspaces();
-        workspaces.cursor = 3;
+        workspaces.cursor = 4;
         let effect = workspaces.command(Command::NewWorktree, true, None);
         let Some(Overlay::Prompt { purpose, .. }) = effect.overlay else {
             panic!("no prompt");
@@ -660,7 +680,7 @@ mod tests {
             vec![ToDaemon::SwitchWorkspace { workspace: 9 }]
         );
         // A plain directory's workspace has no worktree to make.
-        workspaces.cursor = 4;
+        workspaces.cursor = 5;
         let effect = workspaces.command(Command::NewWorktree, true, None);
         assert!(effect.overlay.is_none());
     }
@@ -668,7 +688,7 @@ mod tests {
     #[test]
     fn removal_asks_with_the_plan_and_deletes_the_branch_only_on_d() {
         let mut workspaces = workspaces();
-        workspaces.cursor = 3;
+        workspaces.cursor = 4;
         let effect = workspaces.command(Command::RemoveWorktree, true, None);
         assert_eq!(
             effect.requests,
