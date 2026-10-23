@@ -7,14 +7,14 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    Bounds, ClipboardItem, Context, FocusHandle, KeyDownEvent, MouseButton, Pixels, Render,
-    ScrollWheelEvent, Window, canvas, div, px,
+    AnyElement, Bounds, ClipboardItem, Context, FocusHandle, FontWeight, KeyDownEvent, MouseButton,
+    Pixels, Render, ScrollWheelEvent, Window, canvas, div, px,
 };
 
 use twyx_core::keys::{Command, Keymap, Mode, Outcome};
 use twyx_core::layout::LeafId;
 use twyx_core::paths::Paths;
-use twyx_core::theme::DESKTOP;
+use twyx_core::theme::{DESKTOP, Sheet, Theme};
 use twyx_protocol::client::{
     FromDaemon, Launch, PaneInfo, Place, ToDaemon, WorkspaceInfo, request,
 };
@@ -54,6 +54,8 @@ pub struct Terminal {
     grid: (u16, u16),
     bounds: Bounds<Pixels>,
     keymap: Keymap,
+    /// Whether the key sheet shows over the pane.
+    keys: bool,
     focused_once: bool,
     connected: bool,
 }
@@ -103,6 +105,7 @@ impl Terminal {
             grid: (80, 24),
             bounds: Bounds::new(gpui::point(px(0.0), px(0.0)), gpui::size(px(0.0), px(0.0))),
             keymap,
+            keys: false,
             focused_once: false,
             connected: false,
         };
@@ -372,6 +375,18 @@ impl Terminal {
         let Some(key) = keys::key_event(event) else {
             return;
         };
+        // The key sheet takes every key while it shows; these close it.
+        if self.keys {
+            if matches!(
+                event.keystroke.key.as_str(),
+                "escape" | "enter" | "return" | "?" | "q"
+            ) || event.keystroke.key_char.as_deref() == Some("?")
+            {
+                self.keys = false;
+                cx.notify();
+            }
+            return;
+        }
 
         let before = self.keymap.mode();
         let outcome = match key.chord() {
@@ -401,6 +416,10 @@ impl Terminal {
             Outcome::ToPane => self.send(InputEvent::Key(key)),
             Outcome::Consumed => {}
             Outcome::Run(Command::Detach) => cx.quit(),
+            Outcome::Run(Command::Help) => {
+                self.keys = true;
+                cx.notify();
+            }
             Outcome::Run(command) => {
                 let request = {
                     let shared = self.shared();
@@ -493,6 +512,91 @@ impl Terminal {
     }
 }
 
+impl Terminal {
+    /// Every bound key by mode, in columns on a sheet over the pane. The
+    /// wheel scrolls it when it is taller than the window.
+    fn key_sheet(&self, window: &Window) -> AnyElement {
+        let variant = paint::variant(window.appearance());
+        let (sheet, theme) = (Sheet::of(variant), Theme::sheet(variant));
+        let (paper, ink) = (paint::hsla(sheet.paper), paint::hsla(sheet.ink));
+        let graphite = paint::hsla(theme.graphite);
+        let size = window.viewport_size();
+        let margin = DESKTOP.unit * 8.0;
+        let column = DESKTOP.unit * 64.0;
+        let mut columns = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap(px(DESKTOP.gap * 4.0));
+        for section in self.keymap.sheet() {
+            let mut title = div()
+                .flex()
+                .flex_row()
+                .gap(px(DESKTOP.gap))
+                .pb(px(DESKTOP.unit))
+                .child(
+                    div()
+                        .text_size(px(DESKTOP.size.caption))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(graphite)
+                        .child(section.mode.to_uppercase()),
+                );
+            if let Some(opens) = section.opens {
+                title = title.child(
+                    div()
+                        .text_size(px(DESKTOP.size.caption))
+                        .text_color(graphite)
+                        .child(opens),
+                );
+            }
+            let mut rows = div().w(px(column)).flex().flex_col().child(title);
+            for (keys, what) in section.rows {
+                rows = rows.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(DESKTOP.gap))
+                        .child(
+                            div()
+                                .w(px(column * 0.35))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(keys),
+                        )
+                        .child(div().child(what)),
+                );
+            }
+            columns = columns.child(rows);
+        }
+        let width = (f32::from(size.width) - 2.0 * margin).max(column);
+        div()
+            .id("key-sheet")
+            .absolute()
+            .top(px(margin))
+            .left(px(margin))
+            .w(px(width))
+            .max_h(px((f32::from(size.height) - 2.0 * margin).max(margin)))
+            .overflow_y_scroll()
+            .p(px(DESKTOP.pad * 2.0))
+            .bg(paper)
+            .text_color(ink)
+            .text_size(px(DESKTOP.size.body))
+            .font_family(paint::family(window.text_system()))
+            .border(px(DESKTOP.rule))
+            .border_color(graphite)
+            .flex()
+            .flex_col()
+            .gap(px(DESKTOP.gap * 2.0))
+            .child(
+                div()
+                    .text_color(graphite)
+                    .text_size(px(DESKTOP.size.caption))
+                    .child("Keys · esc closes"),
+            )
+            .child(columns)
+            .into_any_element()
+    }
+}
+
 fn focused_pane(state: &Shared) -> Option<u64> {
     let tab = state
         .workspace
@@ -524,6 +628,7 @@ impl Render for Terminal {
         let metrics = self.metrics.clone();
         let palette = paint::Palette::of(paint::variant(window.appearance()));
         let focused = self.focus.clone();
+        let sheet = self.keys.then(|| self.key_sheet(window));
 
         div()
             .size_full()
@@ -544,7 +649,9 @@ impl Render for Terminal {
                 }),
             )
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                this.on_scroll(event);
+                if !this.keys {
+                    this.on_scroll(event);
+                }
                 cx.stop_propagation();
             }))
             .child(
@@ -563,5 +670,6 @@ impl Render for Terminal {
                 )
                 .size_full(),
             )
+            .children(sheet)
     }
 }

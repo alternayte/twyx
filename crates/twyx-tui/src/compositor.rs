@@ -288,6 +288,18 @@ impl<'a> Scene<'a> {
         None
     }
 
+    /// The screen between the tab bar and the status bar, beside a docked
+    /// sidebar: where the panes and the overlays go.
+    pub fn panes_area(&self) -> Rect {
+        let origin = self.origin();
+        Rect::new(
+            origin,
+            1,
+            self.cols.saturating_sub(origin),
+            self.rows.saturating_sub(CHROME_ROWS),
+        )
+    }
+
     pub fn compose(&self) -> Grid {
         let mut grid = Grid::blank(self.cols, self.rows);
         let screen = Rect::new(0, 0, self.cols, self.rows);
@@ -296,12 +308,7 @@ impl<'a> Scene<'a> {
         }
         let pen = self.pen;
         let origin = self.origin();
-        let panes_area = Rect::new(
-            origin,
-            1,
-            self.cols - origin,
-            self.rows.saturating_sub(CHROME_ROWS),
-        );
+        let panes_area = self.panes_area();
         let mut links = Links::default();
 
         let mut chrome = sentinel(screen);

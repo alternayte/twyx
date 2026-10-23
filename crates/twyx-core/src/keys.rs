@@ -258,6 +258,8 @@ pub enum Command {
     CloseTab,
     RenameTab,
     Palette,
+    /// Show every bound key, by mode.
+    Help,
     Detach,
     Enter(Mode),
     CopyMove(CopyMotion),
@@ -321,6 +323,7 @@ impl Command {
             Command::CloseTab => "close-tab".to_owned(),
             Command::RenameTab => "rename-tab".to_owned(),
             Command::Palette => "palette".to_owned(),
+            Command::Help => "help".to_owned(),
             Command::Detach => "detach".to_owned(),
             Command::Enter(mode) => format!("mode-{}", mode.name()),
             Command::CopyMove(motion) => format!(
@@ -376,6 +379,7 @@ impl Command {
             Command::GoToTab(_) => "tab".to_owned(),
             Command::RenameTab => "rename".to_owned(),
             Command::Palette => "palette".to_owned(),
+            Command::Help => "keys".to_owned(),
             Command::Detach => "detach".to_owned(),
             Command::Enter(mode) => mode.name().to_owned(),
             Command::CopyMove(CopyMotion::WordForward | CopyMotion::WordBack) => "word".to_owned(),
@@ -423,6 +427,7 @@ impl Command {
             Command::CloseTab,
             Command::RenameTab,
             Command::Palette,
+            Command::Help,
             Command::Detach,
             Command::ToggleSidebar,
             Command::Switcher,
@@ -484,6 +489,16 @@ pub enum Outcome {
     Run(Command),
 }
 
+/// One mode's part of the key sheet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SheetSection {
+    pub mode: &'static str,
+    /// The keys that open the mode, as `ctrl-g p`, when any do.
+    pub opens: Option<String>,
+    /// Keys and what they do.
+    pub rows: Vec<(String, String)>,
+}
+
 /// The bindings, and the mode one client is in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keymap {
@@ -521,6 +536,7 @@ impl Default for Keymap {
             key('x', C::ClosePane),
             key('z', C::ToggleZoom),
             key(':', C::Palette),
+            key('?', C::Help),
             key('d', C::Detach),
             key('w', C::Enter(Mode::Workspace)),
             key('s', C::Switcher),
@@ -729,6 +745,73 @@ impl Keymap {
         hints
     }
 
+    /// Every bound key, one section per mode, for the key sheet. The keys of
+    /// one command share a row, and the nine tab digits share one.
+    pub fn sheet(&self) -> Vec<SheetSection> {
+        let prefix = self.prefix.to_string();
+        Mode::BOUND
+            .iter()
+            .map(|(mode, name)| {
+                let bindings = self.bindings(*mode);
+                let opens = if *mode == Mode::Command {
+                    Some(prefix.clone())
+                } else {
+                    self.bindings(Mode::Command)
+                        .iter()
+                        .find(|(_, command)| *command == Command::Enter(*mode))
+                        .map(|(chord, _)| format!("{prefix} {chord}"))
+                };
+                let digit = |chord: &Chord, command: &Command| match command {
+                    Command::GoToTab(n) => *chord == Chord::plain(Key::Char(char::from(b'0' + n))),
+                    _ => false,
+                };
+                let digits = bindings
+                    .iter()
+                    .filter(|(chord, command)| digit(chord, command))
+                    .count()
+                    == 9;
+                let mut rows: Vec<(String, String)> = Vec::new();
+                let mut commands: Vec<Command> = Vec::new();
+                for (chord, command) in bindings {
+                    if digits && digit(chord, command) {
+                        if !commands
+                            .iter()
+                            .any(|seen| matches!(seen, Command::GoToTab(_)))
+                        {
+                            commands.push(*command);
+                            rows.push(("1-9".to_owned(), "go to tab".to_owned()));
+                        }
+                        continue;
+                    }
+                    match commands.iter().position(|seen| seen == command) {
+                        Some(at) => {
+                            rows[at].0.push(' ');
+                            rows[at].0.push_str(&chord.to_string());
+                        }
+                        None => {
+                            commands.push(*command);
+                            let label = match command {
+                                Command::Enter(mode) => format!("{} mode", mode.name()),
+                                command => command.name().replace('-', " "),
+                            };
+                            rows.push((chord.to_string(), label));
+                        }
+                    }
+                }
+                if *mode == Mode::Command {
+                    rows.push((prefix.clone(), "send the prefix to the pane".to_owned()));
+                } else {
+                    rows.push(("esc".to_owned(), "leave the mode".to_owned()));
+                }
+                SheetSection {
+                    mode: name,
+                    opens,
+                    rows,
+                }
+            })
+            .collect()
+    }
+
     /// Takes one key and says what to do with it.
     pub fn press(&mut self, chord: Chord) -> Outcome {
         match self.mode {
@@ -882,6 +965,42 @@ mod tests {
                 ("esc".to_owned(), "back".to_owned())
             ]
         );
+    }
+
+    #[test]
+    fn the_sheet_shows_the_users_bindings_with_one_row_per_command() {
+        let mut keymap = Keymap::default();
+        keymap.bind(
+            Mode::Pane,
+            Chord::plain(Key::Char('v')),
+            Some(Command::SplitRight),
+        );
+        keymap.bind(Mode::Command, Chord::plain(Key::Char('p')), None);
+        let sheet = keymap.sheet();
+        let command = &sheet[0];
+        assert_eq!(command.opens.as_deref(), Some("ctrl-g"));
+        assert!(
+            command
+                .rows
+                .contains(&("h left".to_owned(), "focus left".to_owned()))
+        );
+        assert!(
+            command
+                .rows
+                .contains(&("1-9".to_owned(), "go to tab".to_owned()))
+        );
+        assert!(command.rows.contains(&("?".to_owned(), "help".to_owned())));
+        assert_eq!(
+            command.rows.last(),
+            Some(&(
+                "ctrl-g".to_owned(),
+                "send the prefix to the pane".to_owned()
+            ))
+        );
+        let pane = &sheet[1];
+        assert_eq!(pane.opens, None, "no command mode key opens it now");
+        assert_eq!(pane.rows[0], ("r v".to_owned(), "split right".to_owned()));
+        assert_eq!(sheet[2].opens.as_deref(), Some("ctrl-g t"));
     }
 
     /// The binding tables of `docs/keys.md`, from the defaults.

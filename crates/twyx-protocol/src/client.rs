@@ -978,6 +978,7 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
         | Command::SetupWorktree
         | Command::Enter(_)
         | Command::Palette
+        | Command::Help
         | Command::RenameTab
         | Command::CopySearch => {
             return None;

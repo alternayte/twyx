@@ -65,6 +65,7 @@ pub fn attach(paths: &twyx_core::paths::Paths, workspace: Option<u64>) -> Result
         config,
         &config_file,
         config_error,
+        workspace.is_none(),
     );
     screen.stop();
     result
@@ -259,6 +260,7 @@ fn ask_to_replace(others: u32) -> bool {
     matches!(answer.trim(), "y" | "Y" | "yes")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     paths: &twyx_core::paths::Paths,
     connection: client::Connection,
@@ -267,6 +269,9 @@ fn run(
     config: Config,
     config_file: &std::path::Path,
     config_error: Option<String>,
+    // Whether the first workspace shown starts its first pane here; a
+    // workspace opened by path starts in its own directory.
+    here: bool,
 ) -> Result<()> {
     let mut keymap = config.keymap;
     let default_agent = config.default_agent;
@@ -381,7 +386,9 @@ fn run(
                         follow.had_panes = false;
                         follow.asked = false;
                     }
-                    follow.first.get_or_insert(id);
+                    if here {
+                        follow.first.get_or_insert(id);
+                    }
                     follow.workspace = Some(workspace);
                 }
                 FromDaemon::Focus { tab, leaf } => {
@@ -846,6 +853,10 @@ fn run(
                     Some(Command::Palette) => {
                         keymap.reset();
                         overlay = Some(Overlay::palette());
+                    }
+                    Some(Command::Help) => {
+                        keymap.reset();
+                        overlay = Some(Overlay::Keys { scroll: 0 });
                     }
                     Some(Command::Resume) => {
                         keymap.reset();

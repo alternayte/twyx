@@ -55,7 +55,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Open the project a path is in and show its workspace.
+    /// Open the project a path is in and show its workspace: outside twyx,
+    /// attach this terminal to it; inside a pane, show it in the client that
+    /// last had input.
     Open {
         /// A path in a repository, or a plain directory.
         #[arg(default_value = ".")]

@@ -147,12 +147,16 @@ struct Opened<'a> {
     client: Option<u64>,
 }
 
-/// Opens a path's project and shows its workspace in the client that last
-/// had input. With no client attached, this terminal attaches to it.
+/// Opens a path's project and shows its workspace. A terminal outside twyx
+/// attaches to it and leaves the other clients where they are; inside a
+/// pane, the client that last had input shows it, and with no client
+/// attached this terminal attaches.
 pub fn open(path: &Path, no_switch: bool, json: bool) -> Result<()> {
     let paths = Paths::discover()?;
     let mut connection = connect(&paths)?;
-    let (workspace, client) = open_path(&mut connection, path, !no_switch)?;
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let here = !no_switch && !json && interactive && std::env::var_os("TWYX_PANE_ID").is_none();
+    let (workspace, client) = open_path(&mut connection, path, !no_switch && !here)?;
     let overview = overview(&mut connection, false)?;
     let summary = overview
         .workspaces
@@ -165,8 +169,7 @@ pub fn open(path: &Path, no_switch: bool, json: bool) -> Result<()> {
             client,
         });
     }
-    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    if client.is_none() && !no_switch && interactive {
+    if here || (client.is_none() && !no_switch && interactive) {
         drop(connection);
         return twyx_tui::app::attach(&paths, Some(workspace));
     }

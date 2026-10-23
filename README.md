@@ -39,6 +39,7 @@ The prefix is `ctrl-g`. Every other key goes to the focused pane.
 - `ctrl-g h`, `j`, `k`, `l` move the focus.
 - `ctrl-g t` then `n` opens a new tab. `ctrl-g 1` to `9` go to a tab.
 - `ctrl-g :` opens the palette, which finds panes and commands.
+- `ctrl-g ?` shows every key, by mode. It reads your own bindings.
 - `ctrl-g d` detaches. The panes keep running. Run `twyx` again to attach.
 - `ctrl-g ctrl-g` sends `ctrl-g` to the pane.
 
@@ -48,7 +49,7 @@ The prefix is `ctrl-g`. Every other key goes to the focused pane.
 
 A workspace is the tabs of one Git worktree or one plain directory. twyx starts in a default workspace at your home directory.
 
-- `twyx open <path>` opens the project that the path is in and shows its workspace.
+- `twyx open <path>` opens the project that the path is in and attaches this terminal to its workspace. If the workspace is already open, it attaches to it. In a twyx pane, it shows the workspace in the client that last had input.
 - `ctrl-g b` shows the sidebar: projects, worktrees, workspaces and their panes.
 - `ctrl-g s` opens the workspace switcher.
 - `ctrl-g w` opens workspace mode. In it, `n` makes a worktree and `x` removes one.

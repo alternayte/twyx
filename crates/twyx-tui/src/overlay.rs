@@ -1,5 +1,5 @@
 //! Overlays that take every key while they are open: the command palette,
-//! the workspace switcher, the prompts and the confirmations.
+//! the workspace switcher, the key sheet, the prompts and the confirmations.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -11,6 +11,7 @@ use twyx_core::palette::search;
 use twyx_protocol::sidebar::Target;
 
 use crate::chrome::dialog::Dialog;
+use crate::chrome::keys::KeySheet;
 use crate::chrome::palette::{Entry, Palette};
 use crate::compositor::Scene;
 
@@ -145,6 +146,10 @@ pub enum Overlay {
     Inbox {
         selected: usize,
     },
+    /// Every bound key, by mode.
+    Keys {
+        scroll: usize,
+    },
     /// A worktree's checks with their last results.
     Checks {
         worktree: u64,
@@ -232,6 +237,27 @@ impl Overlay {
                     }
                     _ => Outcome::Stay,
                 }
+            }
+            Overlay::Keys { scroll } => {
+                let sections = scene.keymap.sheet();
+                let sheet = KeySheet {
+                    pen: scene.pen,
+                    sections: &sections,
+                    scroll: *scroll,
+                };
+                let (end, page) = sheet.reach(scene.panes_area());
+                *scroll = match (chord.key, typed) {
+                    (Key::Escape | Key::Enter, _) | (_, Some('?' | 'q')) => return Outcome::Close,
+                    (Key::Down, _) | (_, Some('j')) => *scroll + 1,
+                    (Key::Up, _) | (_, Some('k')) => scroll.saturating_sub(1),
+                    (Key::PageDown, _) | (_, Some(' ')) => *scroll + page,
+                    (Key::PageUp, _) => scroll.saturating_sub(page),
+                    (Key::Home, _) | (_, Some('g')) => 0,
+                    (Key::End, _) | (_, Some('G')) => end,
+                    _ => *scroll,
+                }
+                .min(end);
+                Outcome::Stay
             }
             Overlay::Search(needle) => match (chord.key, typed) {
                 (Key::Escape, _) => Outcome::Close,
@@ -405,7 +431,10 @@ impl Overlay {
                     value.push_str(&text);
                 }
             }
-            Overlay::Confirm { .. } | Overlay::Inbox { .. } | Overlay::Checks { .. } => {}
+            Overlay::Confirm { .. }
+            | Overlay::Inbox { .. }
+            | Overlay::Checks { .. }
+            | Overlay::Keys { .. } => {}
         }
     }
 
@@ -571,6 +600,12 @@ impl Overlay {
                 }
                 .render(area, buf);
             }
+            Overlay::Keys { scroll } => KeySheet {
+                pen: scene.pen,
+                sections: &scene.keymap.sheet(),
+                scroll: *scroll,
+            }
+            .render(area, buf),
             Overlay::Rename { name, .. } => Palette {
                 pen: scene.pen,
                 title: "rename tab",

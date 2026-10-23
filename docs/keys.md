@@ -8,6 +8,7 @@ Every key goes to the focused pane, except the prefix. The prefix is `ctrl-g`.
 - The prefix twice sends the prefix to the pane.
 - A key with no binding in a mode does nothing.
 - The TUI and the desktop client use the same keymap.
+- `ctrl-g ?` shows every bound key, by mode, with your own bindings. `j` and `k` scroll it. `esc` or `?` closes it.
 
 Copy mode (`ctrl-g c`) moves a cursor over the pane and its scrollback. `v` starts a selection, and `y` or `enter` copies it to the clipboard and leaves copy mode. `/` searches from the newest output toward the oldest, and `n` and `N` move between the matches. Every client of the pane sees the same copy cursor. The mouse wheel over a shell opens copy mode too.
 
@@ -48,6 +49,7 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 | `x` | `close-pane` |
 | `z` | `toggle-zoom` |
 | `:` | `palette` |
+| `?` | `help` |
 | `d` | `detach` |
 | `w` | `mode-workspace` |
 | `s` | `switcher` |
