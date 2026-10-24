@@ -312,21 +312,7 @@ pub fn workspace(command: WorkspaceCommand) -> Result<()> {
             Ok(())
         }
         WorkspaceCommand::Switch { target, json } => {
-            let overview = overview(&mut connection, false)?;
-            let (workspace, client) = match find_workspace(&overview, &target)? {
-                Some(workspace) => {
-                    let shown: Shown =
-                        connection.call("workspace.switch", &api::WorkspaceRef { workspace })?;
-                    (shown.workspace, shown.client)
-                }
-                None => match find_worktree(&overview, None, &target)? {
-                    Some(worktree) => open_path(&mut connection, Path::new(&worktree.path), true)?,
-                    None if Path::new(&target).is_dir() => {
-                        open_path(&mut connection, Path::new(&target), true)?
-                    }
-                    None => bail!("no workspace, worktree or directory {target}"),
-                },
-            };
+            let (workspace, client) = resolve(&mut connection, &target, true)?;
             if json {
                 return print_json(&json!({
                     "workspace": workspace,
@@ -343,6 +329,57 @@ pub fn workspace(command: WorkspaceCommand) -> Result<()> {
 }
 
 /// A workspace by id or name.
+/// The workspace `target` names: a workspace id or name, else a worktree
+/// name, branch or path, a repository's main worktree by project name, or a
+/// directory, opened when it has no workspace.
+/// With `switch`, the client that last had input shows it.
+fn resolve(connection: &mut Connection, target: &str, switch: bool) -> Result<(u64, Option<u64>)> {
+    let overview = overview(connection, false)?;
+    Ok(match find_workspace(&overview, target)? {
+        Some(workspace) if switch => {
+            let shown: Shown =
+                connection.call("workspace.switch", &api::WorkspaceRef { workspace })?;
+            (shown.workspace, shown.client)
+        }
+        Some(workspace) => (workspace, None),
+        None => match find_worktree(&overview, None, target)? {
+            Some(worktree) => open_path(connection, Path::new(&worktree.path), switch)?,
+            None => match main_worktree(&overview, target) {
+                Some(worktree) => open_path(connection, Path::new(&worktree.path), switch)?,
+                None if Path::new(target).is_dir() => {
+                    open_path(connection, Path::new(target), switch)?
+                }
+                None => bail!("no workspace, project, worktree or directory {target}"),
+            },
+        },
+    })
+}
+
+/// The main worktree of the repository project named `name`.
+fn main_worktree<'a>(overview: &'a Overview, name: &str) -> Option<&'a WorktreeInfo> {
+    overview
+        .projects
+        .iter()
+        .find(|project| project.git && project.name == name)?
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.name == "main")
+}
+
+/// Attaches this terminal to the workspace `target` names, or to the active
+/// workspace. Other clients stay where they are.
+pub fn attach(target: Option<&str>) -> Result<()> {
+    if std::env::var_os("TWYX_PANE_ID").is_some() {
+        bail!("this terminal is a twyx pane; twyx workspace switch shows a workspace here");
+    }
+    let paths = Paths::discover()?;
+    let workspace = match target {
+        Some(target) => Some(resolve(&mut connect(&paths)?, target, false)?.0),
+        None => None,
+    };
+    twyx_tui::app::attach(&paths, workspace)
+}
+
 fn find_workspace(overview: &Overview, target: &str) -> Result<Option<u64>> {
     let found: Vec<&WorkspaceSummary> = overview
         .workspaces

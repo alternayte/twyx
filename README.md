@@ -41,6 +41,7 @@ The prefix is `ctrl-g`. Every other key goes to the focused pane.
 - `ctrl-g :` opens the palette, which finds panes and commands.
 - `ctrl-g ?` shows every key, by mode. It reads your own bindings.
 - `ctrl-g d` detaches. The panes keep running. Run `twyx` again to attach.
+- `twyx attach <name>` attaches this terminal to a workspace by workspace name, project name, worktree, branch or path. Other clients stay where they are.
 - `ctrl-g ctrl-g` sends `ctrl-g` to the pane.
 
 [docs/keys.md](docs/keys.md) lists every key and tells you how to change them.
@@ -57,7 +58,7 @@ A workspace is the tabs of one Git worktree or one plain directory. twyx starts 
 - `twyx worktree new <branch>` makes a worktree. `twyx worktree rm <branch>` removes one. Before it removes anything, it shows the changes and commits that you lose and the panes that it ends.
 - `twyx recipe list` lists the recipes. `twyx recipe run <name>` opens the tabs and panes of a recipe.
 
-Every command takes `--help` and `--json`.
+Every command takes `--help`. Every command except `twyx attach` takes `--json`.
 
 ## Agents and the inbox
 

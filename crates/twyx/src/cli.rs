@@ -55,6 +55,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Attach this terminal to a workspace; the active one when left out.
+    Attach {
+        /// A workspace id or name, a project name, a worktree name or
+        /// branch, or a path.
+        target: Option<String>,
+    },
     /// Open the project a path is in and show its workspace: outside twyx,
     /// attach this terminal to it; inside a pane, show it in the client that
     /// last had input.
@@ -329,6 +335,7 @@ pub fn run() -> Result<()> {
     match command {
         Command::Daemon { command } => daemon(command),
         Command::Pane { command } => pane(command),
+        Command::Attach { target } => crate::projects::attach(target.as_deref()),
         Command::Open {
             path,
             no_switch,
