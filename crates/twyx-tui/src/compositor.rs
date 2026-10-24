@@ -322,7 +322,15 @@ impl<'a> Scene<'a> {
 
         let placed = self.placed();
         let tiled: Vec<&Placed> = placed.iter().filter(|p| !p.floating && p.frame).collect();
-        let titles: Vec<String> = tiled.iter().map(|p| self.leaf_title(&p.leaf)).collect();
+        // Only a zoom hides a tiled frame.
+        let hidden = placed.iter().filter(|p| !p.floating && !p.frame).count();
+        let titles: Vec<String> = tiled
+            .iter()
+            .map(|p| match hidden {
+                0 => self.leaf_title(&p.leaf),
+                _ => format!("zoom · {hidden} hidden · {}", self.leaf_title(&p.leaf)),
+            })
+            .collect();
         let frames: Vec<Frame<'_>> = tiled
             .iter()
             .zip(&titles)
