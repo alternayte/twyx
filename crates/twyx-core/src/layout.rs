@@ -378,9 +378,18 @@ impl Layout {
             .or_else(|| self.floating.last().map(|floating| floating.leaf.id))
     }
 
-    /// The visible leaf next to `from` on `side`, by geometry in `area`.
+    /// The leaf next to `from` on `side`, by geometry in `area`. Under a
+    /// zoom, the leaves keep the places they have without it.
     pub fn neighbour(&self, from: LeafId, side: Side, area: Cells) -> Option<LeafId> {
-        let placed = self.place(area);
+        let placed = if self.zoomed.is_some() {
+            Layout {
+                zoomed: None,
+                ..self.clone()
+            }
+            .place(area)
+        } else {
+            self.place(area)
+        };
         let origin = placed.iter().find(|placed| placed.leaf.id == from)?;
         if origin.floating {
             return None;
@@ -496,8 +505,9 @@ impl Layout {
         }
     }
 
-    /// Shows a leaf: expands it in its stack and raises it in the floating
-    /// layer. Called whenever a client focuses it.
+    /// Shows a leaf: expands it in its stack, raises it in the floating
+    /// layer, and takes the zoom when another tiled leaf has it. Called
+    /// whenever a client focuses it.
     pub fn reveal(&mut self, id: LeafId) {
         if let Some(index) = self
             .floating
@@ -507,6 +517,9 @@ impl Layout {
             let floating = self.floating.remove(index);
             self.floating.push(floating);
             return;
+        }
+        if self.zoomed.is_some() && self.contains(id) {
+            self.zoomed = Some(id);
         }
         if let Some(root) = &mut self.root
             && let Some(path) = path_to(root, id)
@@ -1153,6 +1166,22 @@ mod tests {
         assert_eq!(outer(&layout, area(40, 20), 3), (0, 0, 40, 20));
         layout.split(Some(LeafId(3)), leaf(4), Axis::Row);
         assert_eq!(layout.zoomed, None);
+    }
+
+    #[test]
+    fn focus_moves_under_a_zoom_and_the_zoom_follows_it() {
+        let mut layout = three();
+        let plain: Vec<_> = [Side::Left, Side::Right, Side::Up, Side::Down]
+            .map(|side| layout.neighbour(LeafId(3), side, area(40, 20)))
+            .into();
+        layout.toggle_zoom(LeafId(3));
+        let zoomed: Vec<_> = [Side::Left, Side::Right, Side::Up, Side::Down]
+            .map(|side| layout.neighbour(LeafId(3), side, area(40, 20)))
+            .into();
+        assert_eq!(zoomed, plain, "the hidden leaves keep their places");
+        let next = zoomed.into_iter().flatten().next().expect("a neighbour");
+        layout.reveal(next);
+        assert_eq!(layout.zoomed, Some(next));
     }
 
     #[test]

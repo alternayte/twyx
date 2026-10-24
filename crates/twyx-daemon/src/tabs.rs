@@ -440,6 +440,8 @@ impl Daemon {
         let before = entry.layout.clone();
         entry.layout.reveal(leaf);
         if entry.layout != before {
+            // A zoom that moved changes two panes' sizes.
+            self.apply_size(tab);
             self.broadcast_workspace();
         }
         self.send_focus(id);
