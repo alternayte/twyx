@@ -1,7 +1,9 @@
-//! The window: the client's tab with every shown pane, the tab bar and the
-//! status bar, drawn with GPUI, talking to the daemon.
+//! The window: the sidebar, the client's tab with every shown pane, the tab
+//! bar and the status bar, drawn with GPUI, talking to the daemon.
 
 mod chrome;
+mod dialog;
+mod sidebar;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Sender, TryRecvError};
@@ -25,11 +27,13 @@ use twyx_protocol::client::{
     FromDaemon, Launch, PaneInfo, Place, TabInfo, ToDaemon, WorkspaceInfo, request,
 };
 use twyx_protocol::connection;
+use twyx_protocol::dialog::{Answer, Dialog, Purpose};
 use twyx_protocol::grid::{Frame, Snapshot};
 use twyx_protocol::holder::CopyAction;
 use twyx_protocol::input::{InputEvent, Modifiers, MouseAction, MouseEvent};
 use twyx_protocol::view::View;
 use twyx_protocol::wire;
+use twyx_protocol::workspaces::{Effect, Workspaces};
 
 use crate::keys;
 use crate::paint::{self, Metrics, Tones};
@@ -53,6 +57,10 @@ struct Shared {
     /// the app's own directory.
     first: Option<u64>,
     clipboard: Option<String>,
+    /// The sidebar's rows and the worktree actions.
+    workspaces: Workspaces,
+    /// The question open over the panes, if any.
+    dialog: Option<Dialog>,
 }
 
 impl Shared {
@@ -126,6 +134,8 @@ pub struct Terminal {
     drop: Option<Drop>,
     mark: Option<FocusMark>,
     tab_mark: Option<panes::Travel<u64>>,
+    /// The agent a new task starts, from config.
+    default_agent: Option<String>,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -144,7 +154,12 @@ impl Terminal {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    pub fn new(window: &mut Window, cx: &mut Context<Self>, keymap: Keymap) -> Self {
+    pub fn new(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        keymap: Keymap,
+        default_agent: Option<String>,
+    ) -> Self {
         let family = paint::family(window.text_system());
         let metrics = Metrics::measure(window.text_system(), family, px(DESKTOP.size.body));
         cx.observe_window_appearance(window, |_, _, cx| cx.notify())
@@ -161,6 +176,8 @@ impl Terminal {
             asked: false,
             first: None,
             clipboard: None,
+            workspaces: Workspaces::new(true, None),
+            dialog: None,
         }));
         // The task that reads the daemon needs the entity to be registered,
         // so the connection starts on the first render.
@@ -180,6 +197,7 @@ impl Terminal {
             drop: None,
             mark: None,
             tab_mark: None,
+            default_agent,
         }
     }
 
@@ -219,6 +237,7 @@ impl Terminal {
         self.outgoing = Some(outgoing.clone());
         self.keymap.reset();
         self.drag = None;
+        let _ = outgoing.send(ToDaemon::WatchOverview);
 
         // The daemon says what to show. A reconnect keeps this window's own
         // focus: the new daemon keeps the leaves.
@@ -249,6 +268,7 @@ impl Terminal {
                     .timer(Duration::from_millis(8))
                     .await;
                 let mut dirty = false;
+                let mut effects = Vec::new();
                 loop {
                     let message = match incoming.try_recv() {
                         Ok(message) => message,
@@ -265,7 +285,7 @@ impl Terminal {
                     };
                     dirty = true;
                     let mut state = shared.lock().unwrap_or_else(|poison| poison.into_inner());
-                    receive(&mut state, message);
+                    effects.extend(receive(&mut state, message));
                 }
                 let mut state = shared.lock().unwrap_or_else(|poison| poison.into_inner());
                 let empty = state
@@ -312,7 +332,15 @@ impl Terminal {
                     }
                 }
                 drop(state);
-                if dirty && this.update(cx, |_, cx| cx.notify()).is_err() {
+                let updated = this.update(cx, |terminal, cx| {
+                    for effect in effects {
+                        terminal.apply(effect);
+                    }
+                    if dirty {
+                        cx.notify();
+                    }
+                });
+                if updated.is_err() {
                     break;
                 }
             }
@@ -331,6 +359,50 @@ impl Terminal {
         .detach();
     }
 
+    /// Sends a workspace action's requests and opens its dialog.
+    fn apply(&mut self, effect: Effect) {
+        for request in effect.requests {
+            self.request(request);
+        }
+        if let Some(dialog) = effect.dialog {
+            self.keymap.reset();
+            self.shared().dialog = Some(dialog);
+        }
+        if effect.leave {
+            self.keymap.reset();
+        }
+    }
+
+    /// Takes one key for the open dialog.
+    fn dialog_key(&mut self, chord: twyx_core::keys::Chord) {
+        let answer = {
+            let mut shared = self.shared();
+            let Some(dialog) = shared.dialog.as_mut() else {
+                return;
+            };
+            let answer = dialog.key(chord);
+            if answer != Answer::Stay {
+                shared.dialog = None;
+            }
+            answer
+        };
+        let effect = {
+            let mut shared = self.shared();
+            let workspaces = &mut shared.workspaces;
+            match answer {
+                Answer::Stay | Answer::Close => return,
+                Answer::Prompted { purpose, text } => workspaces.prompted(purpose, text),
+                Answer::Submitted { purpose, values } => workspaces.submitted(purpose, values),
+                Answer::Confirmed {
+                    purpose: Purpose::Integrations,
+                    ..
+                } => return,
+                Answer::Confirmed { purpose, key } => workspaces.confirmed(purpose, key),
+            }
+        };
+        self.apply(effect);
+    }
+
     fn request(&self, message: ToDaemon) {
         if let Some(outgoing) = &self.outgoing {
             let _ = outgoing.send(message);
@@ -346,7 +418,18 @@ impl Terminal {
             if let Some(item) = cx.read_from_clipboard()
                 && let Some(text) = item.text()
             {
-                self.send(InputEvent::Paste(text));
+                let mut shared = self.shared();
+                match shared.dialog.as_mut() {
+                    Some(dialog) => {
+                        let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
+                        dialog.paste(&text);
+                        cx.notify();
+                    }
+                    None => {
+                        drop(shared);
+                        self.send(InputEvent::Paste(text));
+                    }
+                }
             }
             return;
         }
@@ -354,6 +437,14 @@ impl Terminal {
         let Some(key) = keys::key_event(event) else {
             return;
         };
+        self.shared().workspaces.message = None;
+        if self.shared().dialog.is_some() {
+            if let Some(chord) = key.chord() {
+                self.dialog_key(chord);
+            }
+            cx.notify();
+            return;
+        }
         // The key sheet takes every key while it shows; these close it.
         if self.keys {
             if matches!(
@@ -387,6 +478,9 @@ impl Terminal {
             // The holder leaves copy mode once it has copied.
             self.keymap.reset();
         }
+        if before != after && after == Mode::Workspace {
+            self.shared().workspaces.focus_current();
+        }
         if before != after {
             cx.notify();
         }
@@ -396,6 +490,38 @@ impl Terminal {
             Outcome::Run(Command::Detach) => cx.quit(),
             Outcome::Run(Command::Help) => {
                 self.keys = true;
+                cx.notify();
+            }
+            Outcome::Run(
+                command @ (Command::ToggleSidebar
+                | Command::SidebarUp
+                | Command::SidebarDown
+                | Command::SidebarOpen
+                | Command::NextWorkspace
+                | Command::PreviousWorkspace
+                | Command::NewWorktree
+                | Command::RemoveWorktree
+                | Command::SetupWorktree),
+            ) => {
+                let in_mode = self.keymap.mode() == Mode::Workspace;
+                let effect = {
+                    let mut shared = self.shared();
+                    let shown = shared.workspace.clone();
+                    shared.workspaces.command(command, in_mode, shown.as_ref())
+                };
+                self.apply(effect);
+                cx.notify();
+            }
+            Outcome::Run(Command::NewTask) => {
+                self.keymap.reset();
+                let effect = {
+                    let mut shared = self.shared();
+                    let shown = shared.workspace.clone();
+                    shared
+                        .workspaces
+                        .new_task(shown.as_ref(), self.default_agent.as_deref())
+                };
+                self.apply(effect);
                 cx.notify();
             }
             Outcome::Run(command) => {
@@ -825,8 +951,9 @@ impl Terminal {
     }
 }
 
-/// Takes one message from the daemon into the shared state.
-fn receive(state: &mut Shared, message: FromDaemon) {
+/// Takes one message from the daemon into the shared state; an answer to a
+/// workspace action can ask for more.
+fn receive(state: &mut Shared, message: FromDaemon) -> Option<Effect> {
     match message {
         FromDaemon::Workspace(workspace) => {
             let id = workspace.workspace;
@@ -867,7 +994,21 @@ fn receive(state: &mut Shared, message: FromDaemon) {
             }
         }
         FromDaemon::Clipboard { text, .. } => state.clipboard = Some(text),
-        FromDaemon::Refused { reason } => eprintln!("twyx-desktop: {reason}"),
+        answer @ (FromDaemon::Refused { .. }
+        | FromDaemon::Overview(_)
+        | FromDaemon::Inbox(_)
+        | FromDaemon::TaskStarted { .. }
+        | FromDaemon::Delivered { .. }
+        | FromDaemon::WorktreeAdded { .. }
+        | FromDaemon::RemovalPlan(_)
+        | FromDaemon::WorktreeRemoved { .. }
+        | FromDaemon::SetupFile(_)
+        | FromDaemon::SetupTrusted { .. }
+        | FromDaemon::SetupDone { .. }
+        | FromDaemon::Checks(_)
+        | FromDaemon::CheckStarted { .. }
+        | FromDaemon::CheckEnded(_)
+        | FromDaemon::Shipped(_)) => return Some(state.workspaces.answer(&answer)),
         FromDaemon::Pane(info) => {
             state.panes.insert(info.pane, info);
         }
@@ -879,29 +1020,16 @@ fn receive(state: &mut Shared, message: FromDaemon) {
         FromDaemon::Welcome(_)
         | FromDaemon::Opened { .. }
         | FromDaemon::Switched { .. }
-        | FromDaemon::Overview(_)
-        | FromDaemon::Inbox(_)
         | FromDaemon::Notify { .. }
-        | FromDaemon::TaskStarted { .. }
         | FromDaemon::Review(_)
-        | FromDaemon::Delivered { .. }
         | FromDaemon::Notes { .. }
-        | FromDaemon::Checks(_)
-        | FromDaemon::CheckStarted { .. }
-        | FromDaemon::CheckEnded(_)
-        | FromDaemon::Shipped(_)
         | FromDaemon::Synced { .. }
-        | FromDaemon::WorktreeAdded { .. }
-        | FromDaemon::RemovalPlan(_)
-        | FromDaemon::WorktreeRemoved { .. }
         | FromDaemon::Recipes(_)
         | FromDaemon::RecipeOpened { .. }
         | FromDaemon::RecipeTrusted { .. }
-        | FromDaemon::SetupFile(_)
-        | FromDaemon::SetupTrusted { .. }
-        | FromDaemon::SetupDone { .. }
         | FromDaemon::Unsupported { .. } => {}
     }
+    None
 }
 
 fn focused_pane(state: &Shared) -> Option<u64> {
@@ -932,16 +1060,25 @@ fn working_directory() -> String {
 
 impl Render for Terminal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (docked, overlaid) = {
+            let mut shared = self.shared();
+            let (workspace, leaf, panes) =
+                (shared.workspace.clone(), shared.leaf, shared.panes.clone());
+            shared.workspaces.refresh(workspace.as_ref(), leaf, &panes);
+            let docked = shared.workspaces.docked;
+            (docked, !docked && self.keymap.mode() == Mode::Workspace)
+        };
         let viewport = window.viewport_size();
+        let left = if docked { px(DESKTOP.sidebar) } else { px(0.0) };
         let area = size(
-            viewport.width,
+            (viewport.width - left).max(px(0.0)),
             (viewport.height - px(DESKTOP.tab_bar + DESKTOP.status_bar)).max(px(0.0)),
         );
         self.sync(area, window, cx);
 
         let tones = Tones::of(paint::variant(window.appearance()));
         let reduced = cx.reduce_motion();
-        let origin = point(px(0.0), px(DESKTOP.tab_bar));
+        let origin = point(left, px(DESKTOP.tab_bar));
         let grid = Grid {
             origin,
             metrics: self.metrics.clone(),
@@ -955,18 +1092,19 @@ impl Render for Terminal {
             window.request_animation_frame();
         }
         let sheet = self.keys.then(|| self.key_sheet(tones, window));
+        let dialog = self
+            .shared()
+            .dialog
+            .clone()
+            .map(|dialog| self.dialog_sheet(&dialog, tones, window));
+        let sidebar = (docked || overlaid).then(|| self.sidebar(tones, cx));
 
-        div()
-            .size_full()
-            .relative()
+        let main = div()
+            .flex_1()
+            .h_full()
+            .min_w(px(0.0))
             .flex()
             .flex_col()
-            .bg(tones.paper)
-            .text_color(tones.ink)
-            .font_family(self.family)
-            .text_size(px(DESKTOP.size.body))
-            .track_focus(&self.focus)
-            .on_key_down(cx.listener(Self::on_key))
             .child(tab_bar)
             .child(
                 div()
@@ -989,6 +1127,16 @@ impl Render for Terminal {
                             cx.stop_propagation();
                         }),
                     )
+                    // A drag let go outside the panes lands nowhere.
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                            if this.drag.take().is_some() {
+                                this.drop = None;
+                                cx.notify();
+                            }
+                        }),
+                    )
                     .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
                         if !this.keys {
                             this.on_scroll(event);
@@ -1003,7 +1151,34 @@ impl Render for Terminal {
                         .size_full(),
                     ),
             )
-            .child(status_bar)
-            .children(sheet)
+            .child(status_bar);
+
+        let mut root = div()
+            .size_full()
+            .relative()
+            .flex()
+            .flex_row()
+            .bg(tones.paper)
+            .text_color(tones.ink)
+            .font_family(self.family)
+            .text_size(px(DESKTOP.size.body))
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_key));
+        match sidebar {
+            Some(sidebar) if docked => root = root.child(sidebar).child(main),
+            Some(sidebar) => {
+                // In workspace mode an undocked sidebar shows over the panes.
+                root = root.child(main).child(
+                    div()
+                        .absolute()
+                        .left(px(0.0))
+                        .top(px(DESKTOP.tab_bar))
+                        .bottom(px(DESKTOP.status_bar))
+                        .child(sidebar.h_full()),
+                );
+            }
+            None => root = root.child(main),
+        }
+        root.children(sheet).children(dialog)
     }
 }

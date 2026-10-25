@@ -37,9 +37,10 @@ use crate::mouse::{Action, Mouse};
 use crate::overlay::{Choice, Outcome as OverlayOutcome, Overlay, Purpose};
 use crate::probe;
 use crate::review::Action as ReviewAction;
-use crate::workspace::{Effect, Workspaces};
 use twyx_protocol::connection as client;
+use twyx_protocol::dialog::Dialog;
 use twyx_protocol::view::View;
+use twyx_protocol::workspaces::{Effect, Workspaces};
 
 /// Attaches the terminal client to the daemon, showing `workspace` when
 /// given and else the one a new client shows.
@@ -302,7 +303,7 @@ fn run(
     let mut mouse = Mouse::default();
     // The first client to start offers the agent integrations.
     let mut overlay: Option<Overlay> = crate::agents::first_run(paths);
-    let mut workspaces = Workspaces::default();
+    let mut workspaces = Workspaces::new(false, Some(crate::chrome::dialog::fits));
     let mut reviews = crate::review::Reviews::default();
     let _ = daemon.outgoing.send(ToDaemon::WatchOverview);
     // What the daemon was last told about this client's sidebar.
@@ -345,9 +346,13 @@ fn run(
             for request in effect.requests {
                 let _ = daemon.outgoing.send(request);
             }
-            if effect.overlay.is_some() {
+            let opened = match effect.dialog {
+                Some(dialog) => Some(Overlay::Dialog(dialog)),
+                None => effect.switcher.then(Overlay::switcher),
+            };
+            if opened.is_some() {
                 keymap.reset();
-                overlay = effect.overlay;
+                overlay = opened;
             }
             if effect.leave {
                 keymap.reset();
@@ -615,27 +620,11 @@ fn run(
                             None
                         }
                         OverlayOutcome::Submitted {
-                            purpose: Purpose::NewTask { workspace },
+                            purpose: purpose @ Purpose::NewTask { .. },
                             values,
                         } => {
                             overlay = None;
-                            let field = |at: usize| values.get(at).cloned().unwrap_or_default();
-                            let named: Vec<String> =
-                                field(2).split(',').map(str::to_owned).collect();
-                            let count = field(3).parse().unwrap_or(1);
-                            let agents = twyx_core::task::per_worktree(&named, count, None);
-                            workspaces.message = Some(format!(
-                                "starting {} task worktree{}",
-                                agents.len(),
-                                if agents.len() == 1 { "" } else { "s" }
-                            ));
-                            let _ = daemon.outgoing.send(ToDaemon::NewTask {
-                                workspace,
-                                name: field(0),
-                                start: Some(field(1)).filter(|start| !start.is_empty()),
-                                agents,
-                                prompt: Some(field(4)).filter(|prompt| !prompt.is_empty()),
-                            });
+                            apply!(workspaces.submitted(purpose, values));
                             None
                         }
                         OverlayOutcome::Submitted {
@@ -691,9 +680,9 @@ fn run(
                                 _ => match workspaces
                                     .checks
                                     .as_ref()
-                                    .and_then(crate::workspace::trust_checks)
+                                    .and_then(|checks| workspaces.trust_checks(checks))
                                 {
-                                    Some(prompt) => overlay = Some(prompt),
+                                    Some(prompt) => overlay = Some(Overlay::Dialog(prompt)),
                                     None => {
                                         workspaces.message =
                                             Some("no untrusted repository checks".to_owned());
@@ -784,7 +773,7 @@ fn run(
                                         let _ = daemon.outgoing.send(request);
                                     }
                                     Some(ReviewAction::Note { path, lines }) => {
-                                        overlay = Some(Overlay::Prompt {
+                                        overlay = Some(Overlay::Dialog(Dialog::Prompt {
                                             title: format!(
                                                 "note on {path} lines {}-{}",
                                                 lines.0, lines.1
@@ -795,27 +784,27 @@ fn run(
                                                 path,
                                                 lines,
                                             },
-                                        });
+                                        }));
                                     }
                                     Some(ReviewAction::Commit) => {
-                                        overlay = Some(Overlay::Prompt {
+                                        overlay = Some(Overlay::Dialog(Dialog::Prompt {
                                             title: "commit message".to_owned(),
                                             text: String::new(),
                                             purpose: Purpose::Commit { worktree },
-                                        });
+                                        }));
                                     }
                                     Some(ReviewAction::Push) => {
-                                        overlay = Some(Overlay::Confirm {
+                                        overlay = Some(Overlay::Dialog(Dialog::Confirm {
                                             title: "push".to_owned(),
                                             lines: vec![
                                                 "Push this worktree's branch to its remote. The first push sets the upstream.".to_owned(),
                                             ],
                                             keys: vec![('y', "push".to_owned())],
                                             purpose: Purpose::Push { worktree },
-                                        });
+                                        }));
                                     }
                                     Some(ReviewAction::PullRequest) => {
-                                        overlay = Some(Overlay::Form {
+                                        overlay = Some(Overlay::Dialog(Dialog::Form {
                                             title: "pull request".to_owned(),
                                             fields: vec![
                                                 ("title".to_owned(), String::new()),
@@ -823,7 +812,7 @@ fn run(
                                             ],
                                             at: 0,
                                             purpose: Purpose::PullRequest { worktree },
-                                        });
+                                        }));
                                     }
                                     Some(ReviewAction::SendNotes) => {
                                         overlay = notes_target(&follow, &panes, worktree);
@@ -872,27 +861,10 @@ fn run(
                     }
                     Some(Command::NewTask) => {
                         keymap.reset();
-                        match &follow.workspace {
-                            Some(shown) if shown.worktree.is_some() => {
-                                let agent =
-                                    default_agent.clone().unwrap_or_else(|| "shell".to_owned());
-                                overlay = Some(Overlay::Form {
-                                    title: "new task".to_owned(),
-                                    fields: vec![
-                                        ("name".to_owned(), String::new()),
-                                        ("from".to_owned(), String::new()),
-                                        ("agents".to_owned(), agent),
-                                        ("count".to_owned(), "1".to_owned()),
-                                        ("prompt".to_owned(), String::new()),
-                                    ],
-                                    at: 4,
-                                    purpose: Purpose::NewTask {
-                                        workspace: shown.workspace,
-                                    },
-                                });
-                            }
-                            _ => workspaces.message = Some("not in a Git repository".to_owned()),
-                        }
+                        apply!(
+                            workspaces
+                                .new_task(follow.workspace.as_ref(), default_agent.as_deref())
+                        );
                     }
                     Some(Command::Checks) => {
                         keymap.reset();
@@ -1222,7 +1194,7 @@ fn notes_target(follow: &Follow, panes: &HashMap<u64, PaneInfo>, worktree: u64) 
     let keys = (1..=agents.len())
         .map(|number| (char::from(b'0' + number as u8), format!("pane {number}")))
         .collect();
-    Some(Overlay::Confirm {
+    Some(Overlay::Dialog(Dialog::Confirm {
         title: "send the open notes to".to_owned(),
         lines,
         keys,
@@ -1230,7 +1202,7 @@ fn notes_target(follow: &Follow, panes: &HashMap<u64, PaneInfo>, worktree: u64) 
             worktree,
             panes: agents.iter().map(|info| info.pane).collect(),
         },
-    })
+    }))
 }
 
 #[cfg(test)]

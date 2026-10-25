@@ -25,13 +25,13 @@ fn main() {
         specimen(paper);
         return;
     }
-    let keymap = match twyx_core::paths::Paths::discover()
+    let (keymap, default_agent) = match twyx_core::paths::Paths::discover()
         .map_err(|error| format!("{error:#}"))
         .and_then(|paths| {
             twyx_core::config::load(&paths.config.join("config.toml"))
                 .map_err(|error| error.to_string())
         }) {
-        Ok(config) => config.keymap,
+        Ok(config) => (config.keymap, config.default_agent),
         Err(error) => {
             eprintln!("twyx-desktop: {error}");
             std::process::exit(1);
@@ -45,7 +45,7 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| terminal::Terminal::new(window, cx, keymap)),
+            |window, cx| cx.new(|cx| terminal::Terminal::new(window, cx, keymap, default_agent)),
         );
         match opened {
             Ok(_) => cx.activate(true),

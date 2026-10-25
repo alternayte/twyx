@@ -1,24 +1,25 @@
-//! The sidebar and the workspace actions: the overview the daemon keeps
-//! current, the workspace mode cursor, and the requests and answers of the
-//! worktree actions.
+//! The sidebar and the workspace actions both clients share: the overview
+//! the daemon keeps current, the workspace mode cursor, and the requests,
+//! dialogs and answers of the worktree actions.
 
 use std::collections::HashMap;
 
 use twyx_core::keys::Command;
 use twyx_core::layout::LeafId;
-use twyx_protocol::client::{
+
+use crate::client::{
     ChecksInfo, FromDaemon, InboxItem, Overview, PaneInfo, RemovalPlan, ToDaemon, WorkspaceInfo,
 };
-use twyx_protocol::sidebar::{self, Kind, Row, Target};
-
-use crate::compositor::pane_title;
-use crate::overlay::{Overlay, Purpose};
+use crate::dialog::{Dialog, Purpose};
+use crate::sidebar::{self, Kind, Row, Target};
 
 /// What a command or an answer asks of the client.
 #[derive(Debug, Default, PartialEq)]
 pub struct Effect {
     pub requests: Vec<ToDaemon>,
-    pub overlay: Option<Overlay>,
+    pub dialog: Option<Dialog>,
+    /// Open the workspace switcher.
+    pub switcher: bool,
     /// Leave workspace mode.
     pub leave: bool,
     /// The sidebar docked or undocked: the tab area changed.
@@ -43,9 +44,23 @@ pub struct Workspaces {
     setup_for: Option<u64>,
     /// The checks of the worktree the checks overlay last asked for.
     pub checks: Option<ChecksInfo>,
+    /// Whether the client's dialog shows these lines in full; every line
+    /// fits when it is not set. A trust prompt that cannot show its whole
+    /// file offers no key to trust it.
+    pub fits: Option<fn(&[String]) -> bool>,
 }
 
 impl Workspaces {
+    /// A client's workspaces: its sidebar docked or not at first, and its
+    /// dialog's rule for what it shows in full.
+    pub fn new(docked: bool, fits: Option<fn(&[String]) -> bool>) -> Self {
+        Self {
+            docked,
+            fits,
+            ..Self::default()
+        }
+    }
+
     /// Builds the rows again from the overview.
     pub fn refresh(
         &mut self,
@@ -61,7 +76,7 @@ impl Workspaces {
             overview,
             shown.map(|shown| shown.workspace),
             focus,
-            |pane| pane_title(panes, pane),
+            |pane| panes.get(&pane).map(PaneInfo::label).unwrap_or_default(),
         );
         self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
         if self
@@ -162,7 +177,7 @@ impl Workspaces {
                 effect.resized = true;
             }
             Command::Switcher => {
-                effect.overlay = Some(Overlay::switcher());
+                effect.switcher = true;
                 effect.leave = true;
             }
             Command::SidebarUp | Command::SidebarDown => {
@@ -191,7 +206,7 @@ impl Workspaces {
             }
             Command::NewWorktree => match self.subject(in_mode, shown) {
                 (Some(project), _) if self.git_project(project) => {
-                    effect.overlay = Some(Overlay::Prompt {
+                    effect.dialog = Some(Dialog::Prompt {
                         title: "new worktree: branch".to_owned(),
                         text: String::new(),
                         purpose: Purpose::NewWorktree { project },
@@ -335,7 +350,7 @@ impl Workspaces {
                     });
                 }
             }
-            FromDaemon::RemovalPlan(plan) => effect.overlay = Some(removal(plan)),
+            FromDaemon::RemovalPlan(plan) => effect.dialog = Some(removal(plan)),
             FromDaemon::WorktreeRemoved { branch, .. } => {
                 self.message = Some(match branch {
                     Some(Ok(branch)) => format!("removed the worktree and the branch {branch}"),
@@ -362,10 +377,10 @@ impl Workspaces {
                                 .map(|command| format!("runs {command}")),
                         );
                         lines.push("Trust covers this file as it is now, not the scripts its commands run.".to_owned());
-                        effect.overlay = Some(Overlay::Confirm {
+                        effect.dialog = Some(Dialog::Confirm {
                             title: "trust the setup file".to_owned(),
-                            keys: trust_keys(&lines, "trust and set up"),
-                            lines: shown_lines(lines, "twyx worktree setup"),
+                            keys: self.trust_keys(&lines, "trust and set up"),
+                            lines: self.shown_lines(lines, "twyx worktree setup"),
                             purpose: Purpose::TrustSetup {
                                 worktree: info.worktree,
                                 hash: info.hash.clone(),
@@ -434,11 +449,118 @@ impl Workspaces {
         }
         effect
     }
+
+    /// The new task form for the shown workspace's repository.
+    pub fn new_task(
+        &mut self,
+        shown: Option<&WorkspaceInfo>,
+        default_agent: Option<&str>,
+    ) -> Effect {
+        let mut effect = Effect::default();
+        match shown {
+            Some(shown) if shown.worktree.is_some() => {
+                effect.dialog = Some(Dialog::Form {
+                    title: "new task".to_owned(),
+                    fields: vec![
+                        ("name".to_owned(), String::new()),
+                        ("from".to_owned(), String::new()),
+                        (
+                            "agents".to_owned(),
+                            default_agent.unwrap_or("shell").to_owned(),
+                        ),
+                        ("count".to_owned(), "1".to_owned()),
+                        ("prompt".to_owned(), String::new()),
+                    ],
+                    at: 4,
+                    purpose: Purpose::NewTask {
+                        workspace: shown.workspace,
+                    },
+                });
+            }
+            _ => self.message = Some("not in a Git repository".to_owned()),
+        }
+        effect
+    }
+
+    /// Takes a form's values.
+    pub fn submitted(&mut self, purpose: Purpose, values: Vec<String>) -> Effect {
+        let mut effect = Effect::default();
+        if let Purpose::NewTask { workspace } = purpose {
+            let field = |at: usize| values.get(at).cloned().unwrap_or_default();
+            let named: Vec<String> = field(2).split(',').map(str::to_owned).collect();
+            let count = field(3).parse().unwrap_or(1);
+            let agents = twyx_core::task::per_worktree(&named, count, None);
+            self.message = Some(format!(
+                "starting {} task worktree{}",
+                agents.len(),
+                if agents.len() == 1 { "" } else { "s" }
+            ));
+            effect.requests.push(ToDaemon::NewTask {
+                workspace,
+                name: field(0),
+                start: Some(field(1)).filter(|start| !start.is_empty()),
+                agents,
+                prompt: Some(field(4)).filter(|prompt| !prompt.is_empty()),
+            });
+        }
+        effect
+    }
+
+    /// A trust prompt's keys: `y` only when the dialog shows every line.
+    fn trust_keys(&self, lines: &[String], word: &str) -> Vec<(char, String)> {
+        if self.fits.is_none_or(|fits| fits(lines)) {
+            vec![('y', word.to_owned())]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// A trust prompt's lines, or where to read them in full when the dialog
+    /// cannot show them all.
+    fn shown_lines(&self, lines: Vec<String>, shell: &str) -> Vec<String> {
+        if self.fits.is_none_or(|fits| fits(&lines)) {
+            return lines;
+        }
+        let mut short: Vec<String> = lines.into_iter().take(2).collect();
+        short.push(format!(
+            "The file is too long to show here. Run {shell} in a shell to read all of it and trust it."
+        ));
+        short
+    }
+
+    /// The trust prompt for a worktree's repository check file, when it
+    /// needs one.
+    pub fn trust_checks(&self, info: &ChecksInfo) -> Option<Dialog> {
+        let file = info.file.as_ref().filter(|file| !file.trusted)?;
+        let mut lines = vec![format!("{} in the worktree", file.path)];
+        lines.push(format!("sha256 {}", file.hash));
+        if let Some(error) = &file.error {
+            lines.push(error.clone());
+        }
+        lines.extend(
+            info.checks
+                .iter()
+                .filter(|entry| entry.repository)
+                .map(|entry| format!("{} runs {}", entry.check.name, entry.check.command)),
+        );
+        lines.push(
+            "Trust covers this file as it is now, not the scripts its commands run.".to_owned(),
+        );
+        Some(Dialog::Confirm {
+            title: "trust the repository's checks".to_owned(),
+            keys: self.trust_keys(&lines, "trust"),
+            lines: self.shown_lines(lines, "twyx check trust"),
+            purpose: Purpose::TrustChecks {
+                worktree: info.worktree,
+                hash: file.hash.clone(),
+            },
+        })
+    }
 }
 
 /// A shipping step for the status bar: its command and how it went, with a
 /// pull request's URL.
-fn shipped(report: &twyx_protocol::client::ShipReport) -> String {
+fn shipped(report: &crate::client::ShipReport) -> String {
     let last = report
         .output
         .lines()
@@ -463,57 +585,8 @@ fn shipped(report: &twyx_protocol::client::ShipReport) -> String {
     }
 }
 
-/// A trust prompt's keys: `y` only when the dialog shows every line.
-fn trust_keys(lines: &[String], word: &str) -> Vec<(char, String)> {
-    if crate::chrome::dialog::fits(lines) {
-        vec![('y', word.to_owned())]
-    } else {
-        Vec::new()
-    }
-}
-
-/// A trust prompt's lines, or where to read them in full when the dialog
-/// cannot show them all.
-fn shown_lines(lines: Vec<String>, shell: &str) -> Vec<String> {
-    if crate::chrome::dialog::fits(&lines) {
-        return lines;
-    }
-    let mut short: Vec<String> = lines.into_iter().take(2).collect();
-    short.push(format!(
-        "The file is too long to show here. Run {shell} in a shell to read all of it and trust it."
-    ));
-    short
-}
-
-/// The trust prompt for a worktree's repository check file, when it needs
-/// one.
-pub fn trust_checks(info: &ChecksInfo) -> Option<Overlay> {
-    let file = info.file.as_ref().filter(|file| !file.trusted)?;
-    let mut lines = vec![format!("{} in the worktree", file.path)];
-    lines.push(format!("sha256 {}", file.hash));
-    if let Some(error) = &file.error {
-        lines.push(error.clone());
-    }
-    lines.extend(
-        info.checks
-            .iter()
-            .filter(|entry| entry.repository)
-            .map(|entry| format!("{} runs {}", entry.check.name, entry.check.command)),
-    );
-    lines.push("Trust covers this file as it is now, not the scripts its commands run.".to_owned());
-    Some(Overlay::Confirm {
-        title: "trust the repository's checks".to_owned(),
-        keys: trust_keys(&lines, "trust"),
-        lines: shown_lines(lines, "twyx check trust"),
-        purpose: Purpose::TrustChecks {
-            worktree: info.worktree,
-            hash: file.hash.clone(),
-        },
-    })
-}
-
 /// The removal prompt: what the worktree would lose, and the keys.
-fn removal(plan: &RemovalPlan) -> Overlay {
+fn removal(plan: &RemovalPlan) -> Dialog {
     let mut lines = vec![format!("{} at {}", plan.worktree.name, plan.worktree.path)];
     for (code, path) in plan.dirty.iter().take(8) {
         lines.push(format!("discards {code} {path}"));
@@ -539,12 +612,7 @@ fn removal(plan: &RemovalPlan) -> Overlay {
         ));
     }
     for pane in &plan.panes {
-        let panes = HashMap::from([(pane.pane, pane.clone())]);
-        lines.push(format!(
-            "kills pane {} {}",
-            pane.pane,
-            pane_title(&panes, pane.pane)
-        ));
+        lines.push(format!("kills pane {} {}", pane.pane, pane.label()));
     }
     if lines.len() == 1 {
         lines.push(
@@ -556,7 +624,7 @@ fn removal(plan: &RemovalPlan) -> Overlay {
         let how = if plan.unmerged.is_empty() { "-d" } else { "-D" };
         keys.push(('d', format!("remove and delete {branch} ({how})")));
     }
-    Overlay::Confirm {
+    Dialog::Confirm {
         title: "remove worktree".to_owned(),
         lines,
         keys,
@@ -569,7 +637,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use twyx_protocol::client::{GitState, PaneRef, ProjectInfo, WorkspaceSummary, WorktreeInfo};
+    use crate::client::{GitState, PaneRef, ProjectInfo, WorkspaceSummary, WorktreeInfo};
 
     fn workspaces() -> Workspaces {
         let worktree = |id: u64, name: &str, workspace: Option<u64>| WorktreeInfo {
@@ -657,7 +725,7 @@ mod tests {
         let mut workspaces = workspaces();
         workspaces.cursor = 4;
         let effect = workspaces.command(Command::NewWorktree, true, None);
-        let Some(Overlay::Prompt { purpose, .. }) = effect.overlay else {
+        let Some(Dialog::Prompt { purpose, .. }) = effect.dialog else {
             panic!("no prompt");
         };
         let effect = workspaces.prompted(purpose, "topic".to_owned());
@@ -682,7 +750,7 @@ mod tests {
         // A plain directory's workspace has no worktree to make.
         workspaces.cursor = 5;
         let effect = workspaces.command(Command::NewWorktree, true, None);
-        assert!(effect.overlay.is_none());
+        assert!(effect.dialog.is_none());
     }
 
     #[test]
@@ -706,7 +774,7 @@ mod tests {
             panes: Vec::new(),
         };
         let effect = workspaces.answer(&FromDaemon::RemovalPlan(plan));
-        let Some(Overlay::Confirm { keys, purpose, .. }) = effect.overlay else {
+        let Some(Dialog::Confirm { keys, purpose, .. }) = effect.dialog else {
             panic!("no confirmation");
         };
         assert_eq!(keys.len(), 2);

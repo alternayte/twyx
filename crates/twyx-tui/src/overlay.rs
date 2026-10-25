@@ -8,9 +8,11 @@ use twyx_core::keys::{Chord, Command, Key};
 use twyx_core::layout::LeafId;
 use twyx_core::palette::search;
 
+pub use twyx_protocol::dialog::Purpose;
+use twyx_protocol::dialog::{Answer, Dialog};
 use twyx_protocol::sidebar::Target;
 
-use crate::chrome::dialog::Dialog;
+use crate::chrome::dialog::Dialog as DialogBox;
 use crate::chrome::keys::KeySheet;
 use crate::chrome::palette::{Entry, Palette};
 use crate::compositor::Scene;
@@ -25,59 +27,6 @@ pub enum Choice {
     Pane(u64),
     /// Show a workspace, or open a worktree that has none.
     Go(Target),
-}
-
-/// What a prompt or a confirmation is for.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Purpose {
-    NewWorktree {
-        project: u64,
-    },
-    RemoveWorktree {
-        plan: u64,
-    },
-    TrustSetup {
-        worktree: u64,
-        hash: String,
-    },
-    /// Resume the focused pane's agent session, or all of the workspace's.
-    Resume {
-        this: u64,
-        all: Vec<u64>,
-    },
-    Integrations,
-    /// Start a task in this workspace's repository.
-    NewTask {
-        workspace: u64,
-    },
-    /// A review note's text, for these lines.
-    Note {
-        worktree: u64,
-        path: String,
-        lines: (u32, u32),
-    },
-    /// A commit message for the worktree's staged changes.
-    Commit {
-        worktree: u64,
-    },
-    /// Push the worktree's branch.
-    Push {
-        worktree: u64,
-    },
-    /// A pull request's title and body.
-    PullRequest {
-        worktree: u64,
-    },
-    /// Trust a worktree's repository check file at this hash.
-    TrustChecks {
-        worktree: u64,
-        hash: String,
-    },
-    /// Send a worktree's open notes to one of these agent panes, by digit.
-    SendNotes {
-        worktree: u64,
-        panes: Vec<u64>,
-    },
 }
 
 /// What one key in an overlay comes to.
@@ -136,12 +85,8 @@ pub enum Overlay {
         query: String,
         selected: usize,
     },
-    /// One line of text, such as a branch name.
-    Prompt {
-        title: String,
-        text: String,
-        purpose: Purpose,
-    },
+    /// A prompt, a form or a confirmation.
+    Dialog(Dialog),
     /// The inbox, newest first.
     Inbox {
         selected: usize,
@@ -154,21 +99,6 @@ pub enum Overlay {
     Checks {
         worktree: u64,
         selected: usize,
-    },
-    /// Fields to fill: label and value. Tab and the arrows move, enter
-    /// submits, esc declines.
-    Form {
-        title: String,
-        fields: Vec<(String, String)>,
-        at: usize,
-        purpose: Purpose,
-    },
-    /// Lines to read and the keys that answer them; esc declines.
-    Confirm {
-        title: String,
-        lines: Vec<String>,
-        keys: Vec<(char, String)>,
-        purpose: Purpose,
     },
 }
 
@@ -272,29 +202,12 @@ impl Overlay {
                 }
                 _ => Outcome::Stay,
             },
-            Overlay::Prompt { text, purpose, .. } => match (chord.key, typed) {
-                (Key::Escape, _) => Outcome::Close,
-                (Key::Enter, _) if !text.trim().is_empty() => Outcome::Prompted {
-                    purpose: purpose.clone(),
-                    text: text.trim().to_owned(),
-                },
-                (Key::Backspace, _) => {
-                    text.pop();
-                    Outcome::Stay
-                }
-                (_, Some(ch)) => {
-                    text.push(ch);
-                    Outcome::Stay
-                }
-                _ => Outcome::Stay,
-            },
-            Overlay::Confirm { keys, purpose, .. } => match (chord.key, typed) {
-                (Key::Escape, _) => Outcome::Close,
-                (_, Some(ch)) if keys.iter().any(|(key, _)| *key == ch) => Outcome::Confirmed {
-                    purpose: purpose.clone(),
-                    key: ch,
-                },
-                _ => Outcome::Stay,
+            Overlay::Dialog(dialog) => match dialog.key(chord) {
+                Answer::Stay => Outcome::Stay,
+                Answer::Close => Outcome::Close,
+                Answer::Prompted { purpose, text } => Outcome::Prompted { purpose, text },
+                Answer::Submitted { purpose, values } => Outcome::Submitted { purpose, values },
+                Answer::Confirmed { purpose, key } => Outcome::Confirmed { purpose, key },
             },
             Overlay::Inbox { selected } => {
                 let items = scene.inbox;
@@ -356,46 +269,6 @@ impl Overlay {
                     _ => Outcome::Stay,
                 }
             }
-            Overlay::Form {
-                fields,
-                at,
-                purpose,
-                ..
-            } => match (chord.key, typed) {
-                (Key::Escape, _) => Outcome::Close,
-                (Key::Enter, _) => Outcome::Submitted {
-                    purpose: purpose.clone(),
-                    values: fields
-                        .iter()
-                        .map(|(_, value)| value.trim().to_owned())
-                        .collect(),
-                },
-                (Key::Tab, _) if chord.shift => {
-                    *at = (*at + fields.len() - 1) % fields.len().max(1);
-                    Outcome::Stay
-                }
-                (Key::Tab | Key::Down, _) => {
-                    *at = (*at + 1) % fields.len().max(1);
-                    Outcome::Stay
-                }
-                (Key::Up, _) => {
-                    *at = (*at + fields.len() - 1) % fields.len().max(1);
-                    Outcome::Stay
-                }
-                (Key::Backspace, _) => {
-                    if let Some((_, value)) = fields.get_mut(*at) {
-                        value.pop();
-                    }
-                    Outcome::Stay
-                }
-                (_, Some(ch)) => {
-                    if let Some((_, value)) = fields.get_mut(*at) {
-                        value.push(ch);
-                    }
-                    Outcome::Stay
-                }
-                _ => Outcome::Stay,
-            },
             Overlay::Rename { tab, name } => match (chord.key, typed) {
                 (Key::Escape, _) => Outcome::Close,
                 (Key::Enter, _) => Outcome::Rename {
@@ -424,17 +297,9 @@ impl Overlay {
                 *selected = 0;
             }
             Overlay::Rename { name, .. } => name.push_str(&text),
-            Overlay::Prompt { text: line, .. } => line.push_str(&text),
+            Overlay::Dialog(dialog) => dialog.paste(&text),
             Overlay::Search(needle) => needle.push_str(&text),
-            Overlay::Form { fields, at, .. } => {
-                if let Some((_, value)) = fields.get_mut(*at) {
-                    value.push_str(&text);
-                }
-            }
-            Overlay::Confirm { .. }
-            | Overlay::Inbox { .. }
-            | Overlay::Checks { .. }
-            | Overlay::Keys { .. } => {}
+            Overlay::Inbox { .. } | Overlay::Checks { .. } | Overlay::Keys { .. } => {}
         }
     }
 
@@ -464,38 +329,6 @@ impl Overlay {
                     query,
                     entries: &entries[skip.min(entries.len())..],
                     selected: selected - skip.min(*selected),
-                }
-                .render(area, buf);
-            }
-            Overlay::Form {
-                title, fields, at, ..
-            } => {
-                let width = fields
-                    .iter()
-                    .map(|(label, _)| label.chars().count())
-                    .max()
-                    .unwrap_or(0);
-                let mut lines = vec![
-                    "Each worktree starts from the ref with its agent and the prompt. Agents: kinds or shell, comma separated.".to_owned(),
-                ];
-                lines.extend(fields.iter().enumerate().map(|(number, (label, value))| {
-                    let (marker, cursor) = if number == *at {
-                        ("›", "▏")
-                    } else {
-                        (" ", "")
-                    };
-                    format!("{marker} {label:width$}  {value}{cursor}")
-                }));
-                let keys = vec![
-                    ("tab".to_owned(), "next".to_owned()),
-                    ("enter".to_owned(), "start".to_owned()),
-                    ("esc".to_owned(), "cancel".to_owned()),
-                ];
-                Dialog {
-                    pen: scene.pen,
-                    title,
-                    lines: &lines,
-                    keys: &keys,
                 }
                 .render(area, buf);
             }
@@ -622,7 +455,7 @@ impl Overlay {
                 selected: 0,
             }
             .render(area, buf),
-            Overlay::Prompt { title, text, .. } => Palette {
+            Overlay::Dialog(Dialog::Prompt { title, text, .. }) => Palette {
                 pen: scene.pen,
                 title,
                 query: text,
@@ -630,15 +463,49 @@ impl Overlay {
                 selected: 0,
             }
             .render(area, buf),
-            Overlay::Confirm {
+            Overlay::Dialog(Dialog::Form {
+                title,
+                fields,
+                at,
+                purpose,
+            }) => {
+                let width = fields
+                    .iter()
+                    .map(|(label, _)| label.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                let mut lines: Vec<String> =
+                    purpose.hint().into_iter().map(str::to_owned).collect();
+                lines.extend(fields.iter().enumerate().map(|(number, (label, value))| {
+                    let (marker, cursor) = if number == *at {
+                        ("›", "▏")
+                    } else {
+                        (" ", "")
+                    };
+                    format!("{marker} {label:width$}  {value}{cursor}")
+                }));
+                let keys = vec![
+                    ("tab".to_owned(), "next".to_owned()),
+                    ("enter".to_owned(), purpose.submit().to_owned()),
+                    ("esc".to_owned(), "cancel".to_owned()),
+                ];
+                DialogBox {
+                    pen: scene.pen,
+                    title,
+                    lines: &lines,
+                    keys: &keys,
+                }
+                .render(area, buf);
+            }
+            Overlay::Dialog(Dialog::Confirm {
                 title, lines, keys, ..
-            } => {
+            }) => {
                 let mut keys: Vec<(String, String)> = keys
                     .iter()
                     .map(|(key, word)| (key.to_string(), word.clone()))
                     .collect();
                 keys.push(("esc".to_owned(), "cancel".to_owned()));
-                Dialog {
+                DialogBox {
                     pen: scene.pen,
                     title,
                     lines,

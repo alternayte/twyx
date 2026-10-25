@@ -149,13 +149,14 @@ impl Terminal {
                 .child(div().text_color(tones.graphite).child(word))
         };
 
-        let (location, sized_elsewhere) = {
+        let (location, sized_elsewhere, message) = {
             let shared = self.shared();
             let location = shared.workspace.as_ref().map(WorkspaceInfo::location);
             let lease = shared.tab_info().and_then(|tab| tab.lease);
             (
                 location,
                 lease.is_some_and(|holder| holder != shared.client),
+                shared.workspaces.message.clone(),
             )
         };
         let mode = self.keymap.mode();
@@ -212,6 +213,12 @@ impl Terminal {
             None => {
                 bar = bar.child(field(div().text_color(tones.graphite).child("connecting")));
             }
+        }
+        if let Some(message) = message {
+            bar =
+                bar.child(field(div().min_w(px(0.0)).child(
+                    div().truncate().text_color(tones.graphite).child(message),
+                )));
         }
         if sized_elsewhere {
             bar = bar.child(field(

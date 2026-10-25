@@ -8,6 +8,8 @@ use twyx_core::integration::{self, Locations};
 use twyx_core::paths::Paths;
 use twyx_protocol::client::{PaneInfo, WorkspaceInfo};
 
+use twyx_protocol::dialog::Dialog;
+
 use crate::overlay::{Overlay, Purpose};
 
 /// The file whose presence says the first-run offer was made.
@@ -49,7 +51,7 @@ pub fn resume_offer(
     if all.len() > 1 {
         keys.push(('a', format!("resume all {}", all.len())));
     }
-    Ok(Overlay::Confirm {
+    Ok(Overlay::Dialog(Dialog::Confirm {
         title: "resume agent sessions".to_owned(),
         lines,
         keys,
@@ -57,7 +59,7 @@ pub fn resume_offer(
             this: focused.pane,
             all,
         },
-    })
+    }))
 }
 
 /// The integrations offer for the agents on `PATH` that lack one, once:
@@ -103,12 +105,12 @@ pub fn integrations_offer(paths: &Paths) -> Result<Overlay, String> {
     lines.push(
         "Without them, state comes from the screen. The palette offers this again.".to_owned(),
     );
-    Ok(Overlay::Confirm {
+    Ok(Overlay::Dialog(Dialog::Confirm {
         title: "agent integrations".to_owned(),
         lines,
         keys: vec![('y', "install".to_owned())],
         purpose: Purpose::Integrations,
-    })
+    }))
 }
 
 /// Installs every offered integration; the outcome, for the status bar.

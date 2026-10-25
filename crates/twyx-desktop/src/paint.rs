@@ -297,6 +297,8 @@ pub struct Tones {
     pub graphite: Hsla,
     pub rule: Hsla,
     pub accent: Hsla,
+    /// The tinted bar under a selected row.
+    pub selection: Hsla,
     pub theme: Theme,
 }
 
@@ -310,6 +312,7 @@ impl Tones {
             graphite: hsla(theme.graphite),
             rule: hsla(theme.rule),
             accent: hsla(theme.accent),
+            selection: hsla(theme.selection),
             theme,
         }
     }
