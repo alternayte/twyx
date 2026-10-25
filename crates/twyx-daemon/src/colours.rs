@@ -44,19 +44,23 @@ impl Daemon {
         else {
             return;
         };
+        if let Some(colours) = self.colours_for(pane) {
+            link.send(ToHolder::Colours(colours));
+        }
+    }
+
+    /// The colours a pane reports, when a client has given any.
+    pub(crate) fn colours_for(&self, pane: PaneId) -> Option<PaneColours> {
         let leaseholder = self
             .leaf_of(pane)
             .and_then(|(tab, _)| self.tab(tab)?.lease)
             .and_then(|client| self.clients.get(&client)?.colours);
-        let colours = leaseholder.or_else(|| {
+        leaseholder.or_else(|| {
             self.clients
                 .values()
                 .filter(|client| client.interactive && client.colours.is_some())
                 .max_by_key(|client| client.used)
                 .and_then(|client| client.colours)
-        });
-        if let Some(colours) = colours {
-            link.send(ToHolder::Colours(colours));
-        }
+        })
     }
 }

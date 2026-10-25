@@ -184,6 +184,9 @@ enum Command {
         /// process's environment; NAME=VALUE sets it.
         #[arg(long = "env")]
         env: Vec<String>,
+        /// The paper and ink the command reads, as RRGGBB:RRGGBB.
+        #[arg(long)]
+        colours: Option<String>,
         /// The command and its arguments.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         argv: Vec<String>,
@@ -398,6 +401,7 @@ pub fn run() -> Result<()> {
             history,
             after,
             env,
+            colours,
             argv,
         } => holder(HolderArgs {
             pane,
@@ -409,6 +413,7 @@ pub fn run() -> Result<()> {
             history,
             after,
             env,
+            colours,
             argv,
         }),
     }
@@ -787,6 +792,7 @@ struct HolderArgs {
     history: Option<PathBuf>,
     after: Option<PathBuf>,
     env: Vec<String>,
+    colours: Option<String>,
     argv: Vec<String>,
 }
 
@@ -801,8 +807,23 @@ fn holder(args: HolderArgs) -> Result<()> {
         history,
         after,
         env: overrides,
+        colours,
         argv,
     } = args;
+    let colours = colours
+        .map(|colours| {
+            let parse = |hex: &str| {
+                u32::from_str_radix(hex, 16)
+                    .ok()
+                    .filter(|_| hex.len() == 6)
+                    .map(twyx_core::theme::Rgb::hex)
+            };
+            colours
+                .split_once(':')
+                .and_then(|(paper, ink)| Some((parse(paper)?, parse(ink)?)))
+                .with_context(|| format!("--colours {colours:?} is not RRGGBB:RRGGBB"))
+        })
+        .transpose()?;
     let pane: PaneId = pane.parse().context("pane id")?;
     if argv.is_empty() {
         bail!("a pane needs a command");
@@ -859,8 +880,15 @@ fn holder(args: HolderArgs) -> Result<()> {
         history,
     };
 
-    twyx_holder::runtime::run(config, |answerback| match &after {
-        Some(earlier) => twyx_holder::engine::create_after(geometry, answerback, earlier),
-        None => twyx_holder::engine::create(geometry, answerback),
+    twyx_holder::runtime::run(config, |answerback| {
+        let mut engine = match &after {
+            Some(earlier) => twyx_holder::engine::create_after(geometry, answerback, earlier),
+            None => twyx_holder::engine::create(geometry, answerback),
+        }?;
+        // The command's first query may come before any client speaks.
+        if let Some((paper, ink)) = colours {
+            engine.set_colours(paper, ink);
+        }
+        Ok(engine)
     })
 }

@@ -200,6 +200,7 @@ impl Daemon {
                 rows: record.rows,
                 history: record.history.then(|| self.paths.pane_history(pane)),
                 after,
+                colours: self.colours_for(pane),
             },
             &self.build,
             &self.events,

@@ -152,6 +152,8 @@ pub(crate) struct Start<'a> {
     pub history: Option<PathBuf>,
     /// A history to show above the new output.
     pub after: Option<PathBuf>,
+    /// The paper and ink the command reads from the start.
+    pub colours: Option<twyx_protocol::holder::PaneColours>,
 }
 
 /// Starts a holder and connects to it once it listens.
@@ -170,6 +172,12 @@ pub(crate) fn start(
     }
     if let Some(after) = &start.after {
         command.arg("--after").arg(after);
+    }
+    if let Some(colours) = start.colours {
+        let hex = |[r, g, b]: [u8; 3]| format!("{r:02x}{g:02x}{b:02x}");
+        command
+            .arg("--colours")
+            .arg(format!("{}:{}", hex(colours.paper), hex(colours.ink)));
     }
     // Values go in the holder's environment, not its argv, which any user
     // can read with ps.
