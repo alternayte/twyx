@@ -33,6 +33,9 @@ pub fn shortcut(keystroke: &Keystroke) -> Option<Shortcut> {
             ("d", true) => Shortcut::Run(Command::SplitDown),
             ("w", false) => Shortcut::Run(Command::ClosePane),
             ("p", true) => Shortcut::Run(Command::Palette),
+            ("p", false) => Shortcut::Run(Command::OpenFile),
+            ("f", true) => Shortcut::Run(Command::FindInFiles),
+            ("e", true) => Shortcut::Run(Command::Files),
             _ => return None,
         });
     }

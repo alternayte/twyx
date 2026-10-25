@@ -62,11 +62,11 @@ twyx has two clients: the TUI and the desktop app. Both attach to the same daemo
 
 | Feature | TUI | Desktop |
 |---|---|---|
-| File browser | none: by design, the palette opens files | none: not built yet |
-| Quick open | none | none: not built yet |
-| Project search | none | none: not built yet |
+| File tree | none: by design, quick open opens files | full |
+| Quick open | full | full; the palette also lists the files |
+| Find in files | full | full |
 | Markdown document view | none: not built yet | none: not built yet |
-| Open in Neovim | none | none: not built yet |
+| Open in Neovim | full | full |
 
 ## Chrome
 

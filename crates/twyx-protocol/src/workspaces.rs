@@ -47,6 +47,8 @@ pub struct Workspaces {
     setup_for: Option<u64>,
     /// The checks of the worktree the checks overlay last asked for.
     pub checks: Option<ChecksInfo>,
+    /// The files of the workspace the client last asked about.
+    pub files: crate::files::FileTree,
     /// Whether the client's dialog shows these lines in full; every line
     /// fits when it is not set. A trust prompt that cannot show its whole
     /// file offers no key to trust it.
@@ -435,6 +437,7 @@ impl Workspaces {
             }
             FromDaemon::Shipped(report) => self.message = Some(shipped(report)),
             FromDaemon::Checks(info) => self.checks = Some(info.clone()),
+            FromDaemon::Files(list) => self.files.answer(list.clone()),
             FromDaemon::CheckStarted { worktree, name, .. } => {
                 self.message = Some(format!("check {name} runs; ctrl-g e and o show it"));
                 effect.requests.push(ToDaemon::Checks {

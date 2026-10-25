@@ -64,6 +64,19 @@ impl Terminal {
     /// workspace mode cursor while the mode is open, else the client's own
     /// workspace. The focused pane is lettered in the accent.
     pub(super) fn sidebar(&mut self, tones: Tones, reduced: bool, cx: &mut Context<Self>) -> Div {
+        let frame = div()
+            .w(px(DESKTOP.sidebar))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .bg(tones.paper)
+            .border_r(px(DESKTOP.rule))
+            .border_color(tones.rule)
+            .child(self.sidebar_views(tones, cx));
+        if self.files_view {
+            return frame.child(self.files_view(tones, cx));
+        }
         let (rows, selected, inbox) = {
             let shared = self.shared();
             let workspaces = &shared.workspaces;
@@ -111,16 +124,47 @@ impl Terminal {
                 list = list.child(self.inbox_card(item, now, tones, cx));
             }
         }
+        frame.child(list)
+    }
+
+    /// The two views of the sidebar, the shown one lettered in ink; a
+    /// click shows the other.
+    fn sidebar_views(&self, tones: Tones, cx: &mut Context<Self>) -> Div {
+        let view = |label: &'static str, shown: bool, cx: &mut Context<Self>| {
+            div()
+                .h_full()
+                .flex()
+                .items_center()
+                .px(px(DESKTOP.pad))
+                .cursor_pointer()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(if shown { tones.ink } else { tones.graphite })
+                .when(shown, |view| {
+                    view.border_b(px(DESKTOP.mark)).border_color(tones.accent)
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                        if !shown {
+                            this.toggle_files();
+                        }
+                        cx.notify();
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(label)
+        };
         div()
-            .w(px(DESKTOP.sidebar))
-            .h_full()
+            .h(px(DESKTOP.tab_bar))
             .flex_shrink_0()
             .flex()
-            .flex_col()
-            .bg(tones.paper)
-            .border_r(px(DESKTOP.rule))
+            .flex_row()
+            .px(px(DESKTOP.pad))
+            .text_size(px(DESKTOP.size.caption))
+            .border_b(px(DESKTOP.rule))
             .border_color(tones.rule)
-            .child(list)
+            .child(view("SPACES", !self.files_view, cx))
+            .child(view("FILES", self.files_view, cx))
     }
 
     fn sidebar_row(

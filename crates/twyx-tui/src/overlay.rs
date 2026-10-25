@@ -8,6 +8,7 @@ use twyx_core::keys::{Chord, Key};
 
 pub use twyx_protocol::dialog::Purpose;
 use twyx_protocol::dialog::{Answer, Dialog};
+use twyx_protocol::files::{FindKey, Finder};
 use twyx_protocol::lists::{self, CheckKey, InboxKey};
 pub use twyx_protocol::palette::Choice;
 use twyx_protocol::palette::{self, Pick, Picker};
@@ -18,7 +19,7 @@ use crate::chrome::palette::{Entry, Palette};
 use crate::compositor::Scene;
 
 /// What one key in an overlay comes to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
     Stay,
     Close,
@@ -37,6 +38,8 @@ pub enum Outcome {
         item: u64,
         dismiss: bool,
     },
+    /// A request a key in the finder made.
+    Send(twyx_protocol::client::ToDaemon),
     /// A key in the checks list of `worktree`.
     Check {
         worktree: u64,
@@ -49,7 +52,7 @@ pub enum Outcome {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Overlay {
     /// The command palette, or the switcher over projects, worktrees and
     /// workspaces.
@@ -62,6 +65,8 @@ pub enum Overlay {
     Keys { scroll: usize },
     /// A worktree's checks with their last results.
     Checks { worktree: u64, selected: usize },
+    /// The search of the workspace's files.
+    Find(Finder),
 }
 
 impl Overlay {
@@ -82,7 +87,7 @@ impl Overlay {
         };
         match self {
             Overlay::Picker(picker) => {
-                let entries = entries(scene, picker.switcher);
+                let entries = entries(scene, picker.scope);
                 match picker.key(chord, &entries) {
                     Pick::Stay => Outcome::Stay,
                     Pick::Close => Outcome::Close,
@@ -130,6 +135,11 @@ impl Overlay {
                     dismiss: true,
                 },
             },
+            Overlay::Find(finder) => match finder.key(chord) {
+                FindKey::Stay => Outcome::Stay,
+                FindKey::Close => Outcome::Close,
+                FindKey::Send(request) => Outcome::Send(request),
+            },
             Overlay::Checks { worktree, selected } => {
                 match lists::checks_key(selected, scene.checks_of(*worktree), chord) {
                     CheckKey::Stay => Outcome::Stay,
@@ -149,6 +159,9 @@ impl Overlay {
         match self {
             Overlay::Picker(picker) => picker.paste(&text),
             Overlay::Dialog(dialog) => dialog.paste(&text),
+            Overlay::Find(finder) => {
+                finder.paste(&text);
+            }
             Overlay::Inbox { .. } | Overlay::Checks { .. } | Overlay::Keys { .. } => {}
         }
     }
@@ -156,7 +169,7 @@ impl Overlay {
     pub fn render(&self, scene: &Scene<'_>, area: Rect, buf: &mut Buffer) {
         match self {
             Overlay::Picker(picker) => {
-                let entries = entries(scene, picker.switcher);
+                let entries = entries(scene, picker.scope);
                 let found = picker.found(&entries);
                 let shown: Vec<Entry<'_>> = found
                     .iter()
@@ -175,13 +188,40 @@ impl Overlay {
                 let skip = selected.saturating_sub(room - 1);
                 Palette {
                     pen: scene.pen,
-                    title: if picker.switcher {
-                        "workspaces"
-                    } else {
-                        "palette"
-                    },
+                    title: picker.scope.title(),
                     query: &picker.query,
                     entries: &shown[skip.min(shown.len())..],
+                    selected: selected - skip.min(selected),
+                }
+                .render(area, buf);
+            }
+            Overlay::Find(finder) => {
+                let lines: Vec<(String, String)> = finder
+                    .hits()
+                    .iter()
+                    .map(|hit| {
+                        (
+                            hit.text.trim().to_owned(),
+                            format!("{}:{}", hit.path, hit.line),
+                        )
+                    })
+                    .collect();
+                let entries: Vec<Entry<'_>> = lines
+                    .iter()
+                    .map(|(text, kind)| Entry {
+                        text,
+                        kind,
+                        matched: &[],
+                    })
+                    .collect();
+                let room = usize::from(area.height.saturating_sub(6)).max(1);
+                let selected = finder.selected.min(entries.len().saturating_sub(1));
+                let skip = selected.saturating_sub(room - 1);
+                Palette {
+                    pen: scene.pen,
+                    title: "find in files",
+                    query: &finder.query,
+                    entries: &entries[skip.min(entries.len())..],
                     selected: selected - skip.min(selected),
                 }
                 .render(area, buf);
@@ -337,14 +377,20 @@ impl Overlay {
     }
 }
 
-/// What the palette or the switcher offers in this scene.
-fn entries(scene: &Scene<'_>, switcher: bool) -> Vec<palette::Entry> {
+/// What the palette, the switcher or quick open offers in this scene. The
+/// TUI's palette leaves the files to quick open.
+fn entries(scene: &Scene<'_>, scope: palette::Scope) -> Vec<palette::Entry> {
+    let files: &[String] = match scope {
+        palette::Scope::Files => scene.files,
+        palette::Scope::Palette | palette::Scope::Switcher => &[],
+    };
     palette::entries(
         scene.keymap,
         scene.workspace,
         scene.overview,
         |leaf| scene.leaf_title(leaf),
         |pane| scene.title(pane),
-        switcher,
+        files,
+        scope,
     )
 }

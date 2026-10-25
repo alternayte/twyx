@@ -246,6 +246,12 @@ pub enum Command {
     Review,
     /// Show this worktree's checks and their results.
     Checks,
+    /// Choose a file of this workspace to open in Neovim.
+    OpenFile,
+    /// Find text in this workspace's files.
+    FindInFiles,
+    /// Show this workspace's file tree in the sidebar, or the spaces again.
+    Files,
     Focus(Side),
     Resize(Side),
     Swap(Side),
@@ -311,6 +317,9 @@ impl Command {
             Command::NewTask => "new-task".to_owned(),
             Command::Review => "review".to_owned(),
             Command::Checks => "checks".to_owned(),
+            Command::OpenFile => "open-file".to_owned(),
+            Command::FindInFiles => "find-in-files".to_owned(),
+            Command::Files => "files".to_owned(),
             Command::Focus(s) => format!("focus-{}", side(s)),
             Command::Resize(s) => format!("resize-{}", side(s)),
             Command::Swap(s) => format!("swap-{}", side(s)),
@@ -368,6 +377,9 @@ impl Command {
             Command::NewTask => "task".to_owned(),
             Command::Review => "review".to_owned(),
             Command::Checks => "checks".to_owned(),
+            Command::OpenFile => "open file".to_owned(),
+            Command::FindInFiles => "find".to_owned(),
+            Command::Files => "files".to_owned(),
             Command::Focus(_) => "focus".to_owned(),
             Command::Resize(_) => "resize".to_owned(),
             Command::Swap(_) => "move".to_owned(),
@@ -420,6 +432,9 @@ impl Command {
             Command::NewTask,
             Command::Review,
             Command::Checks,
+            Command::OpenFile,
+            Command::FindInFiles,
+            Command::Files,
             Command::ToggleZoom,
             Command::ToggleFloating,
             Command::NextTab,
@@ -544,6 +559,9 @@ impl Default for Keymap {
             key('i', C::Inbox),
             key('v', C::Review),
             key('e', C::Checks),
+            key('o', C::OpenFile),
+            key('/', C::FindInFiles),
+            key('F', C::Files),
         ];
         command.extend(arrows(C::Focus));
         command.extend((1..=9).map(|n| key(char::from(b'0' + n), C::GoToTab(n))));

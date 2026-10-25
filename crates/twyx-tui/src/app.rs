@@ -327,6 +327,11 @@ fn run(
                 inbox: &workspaces.inbox,
                 reviews: &reviews,
                 checks: workspaces.checks.as_ref(),
+                files: workspaces
+                    .files
+                    .list
+                    .as_ref()
+                    .map_or(&[], |list| list.paths.as_slice()),
                 sidebar: (workspaces.docked || keymap.mode() == Mode::Workspace).then_some(
                     SidebarScene {
                         rows: &workspaces.rows,
@@ -447,9 +452,12 @@ fn run(
                 | FromDaemon::Recipes(_)
                 | FromDaemon::RecipeOpened { .. }
                 | FromDaemon::RecipeTrusted { .. }
-                | FromDaemon::Files(_)
-                | FromDaemon::Found(_)
                 | FromDaemon::Synced { .. } => {}
+                FromDaemon::Found(found) => {
+                    if let Some(Overlay::Find(finder)) = overlay.as_mut() {
+                        finder.answer(found);
+                    }
+                }
                 answer @ (FromDaemon::Refused { .. }
                 | FromDaemon::Overview(_)
                 | FromDaemon::Inbox(_)
@@ -464,6 +472,7 @@ fn run(
                 | FromDaemon::Checks(_)
                 | FromDaemon::CheckStarted { .. }
                 | FromDaemon::CheckEnded(_)
+                | FromDaemon::Files(_)
                 | FromDaemon::Shipped(_)) => apply!(workspaces.answer(&answer)),
             }
         }
@@ -643,6 +652,13 @@ fn run(
                             apply!(workspaces.confirmed(purpose, key));
                             None
                         }
+                        OverlayOutcome::Send(request) => {
+                            if matches!(request, ToDaemon::OpenInEditor { .. }) {
+                                overlay = None;
+                            }
+                            let _ = daemon.outgoing.send(request);
+                            None
+                        }
                         OverlayOutcome::Choose(choice) => {
                             overlay = None;
                             match choice {
@@ -771,6 +787,28 @@ fn run(
                             }
                             None => workspaces.message = Some("not in a Git worktree".to_owned()),
                         }
+                    }
+                    Some(Command::OpenFile | Command::FindInFiles) => {
+                        keymap.reset();
+                        match follow.workspace.as_ref().map(|shown| shown.workspace) {
+                            Some(workspace) if command == Some(Command::OpenFile) => {
+                                let _ = daemon.outgoing.send(ToDaemon::Files { workspace });
+                                overlay =
+                                    Some(Overlay::Picker(twyx_protocol::palette::Picker::files()));
+                            }
+                            Some(workspace) => {
+                                overlay = Some(Overlay::Find(twyx_protocol::files::Finder::new(
+                                    workspace,
+                                )));
+                            }
+                            None => {}
+                        }
+                    }
+                    Some(Command::Files) => {
+                        keymap.reset();
+                        workspaces.message = Some(
+                            "the file tree is in the desktop app; ctrl-g o opens a file".to_owned(),
+                        );
                     }
                     Some(Command::Inbox) => {
                         keymap.reset();

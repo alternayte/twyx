@@ -1097,6 +1097,9 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
         | Command::Integrations
         | Command::Inbox
         | Command::Checks
+        | Command::OpenFile
+        | Command::FindInFiles
+        | Command::Files
         | Command::NewTask
         | Command::ToggleSidebar
         | Command::Switcher

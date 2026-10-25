@@ -18,6 +18,8 @@ pub enum Choice {
     Pane(u64),
     /// Show a workspace, or open a worktree that has none.
     Go(Target),
+    /// Open a file of the shown workspace in Neovim.
+    File(String),
 }
 
 impl Choice {
@@ -36,6 +38,10 @@ impl Choice {
                 switch: true,
             },
             Choice::Go(Target::Pane(leaf)) => ToDaemon::FocusLeaf { leaf: *leaf },
+            Choice::File(path) => ToDaemon::OpenInEditor {
+                path: path.clone(),
+                line: None,
+            },
         })
     }
 }
@@ -49,13 +55,34 @@ pub struct Entry {
     pub choice: Choice,
 }
 
-/// The palette or the switcher while it is open.
+/// What a picker offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Scope {
+    /// Everything.
+    #[default]
+    Palette,
+    /// The projects, worktrees and workspaces alone.
+    Switcher,
+    /// The files of the shown workspace alone: quick open.
+    Files,
+}
+
+impl Scope {
+    pub fn title(self) -> &'static str {
+        match self {
+            Scope::Palette => "palette",
+            Scope::Switcher => "workspaces",
+            Scope::Files => "open file",
+        }
+    }
+}
+
+/// The palette, the switcher or quick open while it is open.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Picker {
     pub query: String,
     pub selected: usize,
-    /// The switcher offers the projects, worktrees and workspaces alone.
-    pub switcher: bool,
+    pub scope: Scope,
 }
 
 /// What one key in the palette comes to.
@@ -73,7 +100,14 @@ impl Picker {
 
     pub fn switcher() -> Self {
         Self {
-            switcher: true,
+            scope: Scope::Switcher,
+            ..Self::default()
+        }
+    }
+
+    pub fn files() -> Self {
+        Self {
+            scope: Scope::Files,
             ..Self::default()
         }
     }
@@ -129,17 +163,29 @@ impl Picker {
 }
 
 /// Everything the palette offers: the commands with their keys, the tabs
-/// of this workspace, the projects, worktrees and workspaces, and the panes
-/// and agent sessions of every workspace. The switcher offers the projects,
-/// worktrees and workspaces alone.
+/// of this workspace, the projects, worktrees and workspaces, the panes
+/// and agent sessions of every workspace, and `files`. The switcher offers
+/// the projects, worktrees and workspaces alone, quick open the files.
 pub fn entries(
     keymap: &Keymap,
     workspace: Option<&WorkspaceInfo>,
     overview: Option<&Overview>,
     leaf_title: impl Fn(&Leaf) -> String,
     pane_title: impl Fn(u64) -> String,
-    switcher: bool,
+    files: &[String],
+    scope: Scope,
 ) -> Vec<Entry> {
+    let file_entries = || {
+        files.iter().map(|path| Entry {
+            label: path.clone(),
+            kind: "file".to_owned(),
+            choice: Choice::File(path.clone()),
+        })
+    };
+    if scope == Scope::Files {
+        return file_entries().collect();
+    }
+    let switcher = scope == Scope::Switcher;
     let mut lines = Vec::new();
     if !switcher {
         lines.extend(
@@ -244,5 +290,6 @@ pub fn entries(
             }
         }
     }
+    lines.extend(file_entries());
     lines
 }

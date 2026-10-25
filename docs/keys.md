@@ -57,6 +57,9 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 | `i` | `inbox` |
 | `v` | `review` |
 | `e` | `checks` |
+| `o` | `open-file` |
+| `/` | `find-in-files` |
+| `F` | `files` |
 | `h` | `focus-left` |
 | `left` | `focus-left` |
 | `j` | `focus-down` |
@@ -220,6 +223,9 @@ The desktop client also takes these keys from the panes. They are fixed.
 | `cmd-shift-d` | | split down |
 | `cmd-w` | | close the pane |
 | `cmd-shift-p` | | palette |
+| `cmd-p` | | open a file |
+| `cmd-shift-f` | | find in files |
+| `cmd-shift-e` | | show the files or the spaces in the sidebar |
 | `cmd-c` | `ctrl-shift-c` | copy the selection |
 | `cmd-v` | `ctrl-shift-v` | paste |
 
@@ -250,3 +256,11 @@ These keys work while a review leaf has the focus. They are fixed. The view show
 ## Checks
 
 `ctrl-g e` lists the checks of the worktree. In the list, `enter` runs the check, `o` shows its last run's pane, `x` cancels a running check, and `t` asks to trust the repository's check file.
+
+## Files
+
+`ctrl-g o` lists the files of the workspace. Type to narrow the list, and `enter` opens the file in Neovim. `ctrl-g /` finds text in the files: type the text, and `enter` opens the chosen line in Neovim. A query with no capital letter ignores case. The list has the tracked files and the untracked files that Git does not ignore. In a directory that is not a Git repository, the list has the files that its ignore files do not hide.
+
+twyx opens the file in the Neovim of a pane in the workspace. With no Neovim in the workspace, it starts Neovim in a new pane.
+
+In the desktop client, `ctrl-g F` shows the file tree in the sidebar and gives it the keys. In the tree, `j` and `k` move, `enter` opens a directory or opens a file, `l` opens a directory, `h` closes it or goes to its parent, and `esc` gives the keys back to the panes. The TUI has no file tree.

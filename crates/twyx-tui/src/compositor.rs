@@ -64,6 +64,8 @@ pub struct Scene<'a> {
     pub reviews: &'a Reviews,
     /// The checks of the worktree the checks overlay last asked for.
     pub checks: Option<&'a twyx_protocol::client::ChecksInfo>,
+    /// The shown workspace's files, for quick open.
+    pub files: &'a [String],
     pub sidebar: Option<SidebarScene<'a>>,
 }
 
@@ -723,6 +725,7 @@ mod tests {
             inbox: &[],
             reviews: &Reviews::default(),
             checks: None,
+            files: &[],
             sidebar: None,
         }
         .compose();

@@ -330,6 +330,27 @@ fn review(
     shot(cx, window, out, "30c-copy-found")?;
     keys(cx, window, &["escape"])?;
 
+    // The file tree, quick open and find all open files in Neovim.
+    keys(cx, window, &["ctrl-g", "shift-f"])?;
+    pump(cx, window, Duration::from_secs(1))?;
+    keys(cx, window, &["j", "enter", "j"])?;
+    shot(cx, window, out, "33-files")?;
+    keys(cx, window, &["enter"])?;
+    pump(cx, window, Duration::from_secs(2))?;
+    shot(cx, window, out, "34-file-in-neovim")?;
+    keys(cx, window, &["ctrl-g", "o", "r", "e", "a", "d"])?;
+    shot(cx, window, out, "35-open-file")?;
+    keys(cx, window, &["enter"])?;
+    pump(cx, window, Duration::from_secs(2))?;
+    shot(cx, window, out, "36-opened-in-neovim")?;
+    keys(cx, window, &["ctrl-g", "/", "s", "a", "t", "u", "r"])?;
+    pump(cx, window, Duration::from_secs(1))?;
+    shot(cx, window, out, "37-find")?;
+    keys(cx, window, &["down", "enter"])?;
+    pump(cx, window, Duration::from_secs(2))?;
+    shot(cx, window, out, "38-found-in-neovim")?;
+    keys(cx, window, &["ctrl-g", "shift-f"])?;
+
     // The theme follows config.toml as it changes; a bad file keeps it.
     std::fs::create_dir_all(file.parent().context("a config directory")?)?;
     std::fs::write(file, "[theme]\nvariant = \"dark\"\naccent = \"#c8401c\"\n")?;

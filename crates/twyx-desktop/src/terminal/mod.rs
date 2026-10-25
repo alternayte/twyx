@@ -3,6 +3,7 @@
 
 mod chrome;
 mod dialog;
+mod files;
 mod lists;
 mod palette;
 mod review;
@@ -33,10 +34,11 @@ use twyx_protocol::client::{
 };
 use twyx_protocol::connection;
 use twyx_protocol::dialog::{Answer, Dialog, Purpose};
+use twyx_protocol::files::Finder;
 use twyx_protocol::grid::{Frame, MouseMode, Snapshot};
 use twyx_protocol::holder::CopyAction;
 use twyx_protocol::input::{InputEvent, Modifiers, MouseAction, MouseEvent};
-use twyx_protocol::palette::{Choice, Entry, Pick, Picker, entries};
+use twyx_protocol::palette::{Choice, Entry, Pick, Picker, Scope, entries};
 use twyx_protocol::review::{Action as ReviewAction, Reviews};
 use twyx_protocol::view::{Selection, View};
 use twyx_protocol::wire;
@@ -75,6 +77,8 @@ struct Shared {
     /// Notifications the daemon asked this client to show: title, body,
     /// sound, and the pane.
     notices: Vec<(String, String, bool, u64)>,
+    /// Text found in the files, for the find sheet.
+    found: Vec<twyx_protocol::client::FoundText>,
 }
 
 impl Shared {
@@ -191,6 +195,14 @@ pub struct Terminal {
     picker: Option<Picker>,
     /// The inbox or the checks, while one is open.
     list: Option<List>,
+    /// The search of the workspace's files, while it is open.
+    finder: Option<Finder>,
+    /// Whether the sidebar shows the files instead of the spaces.
+    files_view: bool,
+    /// Whether the file tree takes the keys.
+    files_focus: bool,
+    /// The workspace whose files this window last asked for, and when.
+    files_asked: Option<(u64, std::time::Instant)>,
     /// Text selected with the mouse, for copy.
     selection: Option<Selection>,
     /// The review leaves the last render placed.
@@ -250,6 +262,7 @@ impl Terminal {
                 .and_then(|paths| twyx_protocol::offers::first_run(&paths)),
             reviews: Reviews::default(),
             notices: Vec::new(),
+            found: Vec::new(),
         }));
         let this = cx.weak_entity();
         cx.on_system_notification_response(move |response, cx| {
@@ -288,6 +301,10 @@ impl Terminal {
             default_agent: config.default_agent,
             picker: None,
             list: None,
+            finder: None,
+            files_view: false,
+            files_focus: false,
+            files_asked: None,
             selection: None,
             review_leaves: Vec::new(),
             review_wheel: 0.0,
@@ -449,6 +466,18 @@ impl Terminal {
                     if terminal.reload() {
                         cx.notify();
                     }
+                    let found = std::mem::take(&mut terminal.shared().found);
+                    if let Some(finder) = terminal.finder.as_mut() {
+                        for answer in found {
+                            finder.answer(answer);
+                        }
+                    }
+                    let wanted = terminal.files_view
+                        || terminal
+                            .picker
+                            .as_ref()
+                            .is_some_and(|picker| picker.scope != Scope::Switcher);
+                    terminal.refresh_files(wanted);
                     let unread = terminal
                         .shared()
                         .workspaces
@@ -602,6 +631,7 @@ impl Terminal {
             Some(Shortcut::Run(command))
                 if self.picker.is_none()
                     && self.list.is_none()
+                    && self.finder.is_none()
                     && self.shared().dialog.is_none()
                     && !self.keys =>
             {
@@ -622,6 +652,15 @@ impl Terminal {
             {
                 if let Some(picker) = self.picker.as_mut() {
                     picker.paste(&text.replace(['\n', '\r'], ""));
+                    cx.notify();
+                    return;
+                }
+                if let Some(finder) = self.finder.as_mut() {
+                    if let twyx_protocol::files::FindKey::Send(request) =
+                        finder.paste(&text.replace(['\n', '\r'], ""))
+                    {
+                        self.request(request);
+                    }
                     cx.notify();
                     return;
                 }
@@ -655,7 +694,7 @@ impl Terminal {
         }
         if let Some(mut picker) = self.picker.take() {
             let pick = match key.chord() {
-                Some(chord) => picker.key(chord, &self.entries(picker.switcher)),
+                Some(chord) => picker.key(chord, &self.entries(picker.scope)),
                 None => Pick::Stay,
             };
             match pick {
@@ -672,6 +711,24 @@ impl Terminal {
             } else {
                 self.list = Some(list);
             }
+            cx.notify();
+            return;
+        }
+        if let Some(finder) = self.finder.take() {
+            match key.chord() {
+                Some(chord) => self.find_key(finder, chord),
+                None => self.finder = Some(finder),
+            }
+            cx.notify();
+            return;
+        }
+        // The file tree takes every key but the prefix while it has them.
+        if self.files_focus
+            && self.files_view
+            && self.keymap.mode() == Mode::Normal
+            && let Some(chord) = key.chord().filter(|chord| *chord != self.keymap.prefix)
+        {
+            self.tree_key(chord);
             cx.notify();
             return;
         }
@@ -756,9 +813,18 @@ impl Terminal {
         }
     }
 
-    /// What the palette or the switcher offers now.
-    fn entries(&self, switcher: bool) -> Vec<Entry> {
+    /// What the palette, the switcher or quick open offers now. The
+    /// desktop palette also offers the shown workspace's files.
+    fn entries(&self, scope: Scope) -> Vec<Entry> {
         let shared = self.shared();
+        let shown = shared.workspace.as_ref().map(|shown| shown.workspace);
+        let files = shared
+            .workspaces
+            .files
+            .list
+            .as_ref()
+            .filter(|list| Some(list.workspace) == shown)
+            .map_or(&[][..], |list| list.paths.as_slice());
         entries(
             &self.keymap,
             shared.workspace.as_ref(),
@@ -771,7 +837,8 @@ impl Terminal {
                     .map(PaneInfo::label)
                     .unwrap_or_default()
             },
-            switcher,
+            files,
+            scope,
         )
     }
 
@@ -849,6 +916,28 @@ impl Terminal {
                     Ok(dialog) => shared.dialog = Some(dialog),
                     Err(why) => shared.workspaces.message = Some(why),
                 }
+                cx.notify();
+            }
+            Command::OpenFile => {
+                self.keymap.reset();
+                self.picker = Some(Picker::files());
+                cx.notify();
+            }
+            Command::FindInFiles => {
+                self.keymap.reset();
+                let workspace = self
+                    .shared()
+                    .workspace
+                    .as_ref()
+                    .map(|shown| shown.workspace);
+                if let Some(workspace) = workspace {
+                    self.finder = Some(Finder::new(workspace));
+                }
+                cx.notify();
+            }
+            Command::Files => {
+                self.keymap.reset();
+                self.toggle_files();
                 cx.notify();
             }
             Command::Inbox => {
@@ -1448,7 +1537,9 @@ fn receive(state: &mut Shared, message: FromDaemon) -> Option<Effect> {
         | FromDaemon::Checks(_)
         | FromDaemon::CheckStarted { .. }
         | FromDaemon::CheckEnded(_)
+        | FromDaemon::Files(_)
         | FromDaemon::Shipped(_)) => return Some(state.workspaces.answer(&answer)),
+        FromDaemon::Found(found) => state.found.push(found),
         FromDaemon::Notify {
             title,
             body,
@@ -1470,8 +1561,6 @@ fn receive(state: &mut Shared, message: FromDaemon) -> Option<Effect> {
         FromDaemon::Welcome(_)
         | FromDaemon::Opened { .. }
         | FromDaemon::Switched { .. }
-        | FromDaemon::Files(_)
-        | FromDaemon::Found(_)
         | FromDaemon::Synced { .. }
         | FromDaemon::Recipes(_)
         | FromDaemon::RecipeOpened { .. }
@@ -1574,7 +1663,7 @@ impl Render for Terminal {
         let tab_bar = self.tab_bar(tones, reduced, cx);
         let status_bar = self.status_bar(tones, cx);
         let sheet = self.keys.then(|| self.key_sheet(tones, window));
-        if self.list.is_none() && self.picker.is_none() {
+        if self.list.is_none() && self.picker.is_none() && self.finder.is_none() {
             self.sheet_mark = None;
         }
         let list = self
@@ -1591,6 +1680,10 @@ impl Render for Terminal {
             .picker
             .clone()
             .map(|picker| self.palette_sheet(&picker, tones, reduced, window, cx));
+        let finder = self
+            .finder
+            .clone()
+            .map(|finder| self.find_sheet(&finder, tones, reduced, window, cx));
         if self.mark.is_some_and(|mark| mark.moving(reduced))
             || self.tab_mark.is_some_and(|mark| mark.moving(reduced))
             || self.sheet_mark.is_some_and(|mark| mark.moving(reduced))
@@ -1698,6 +1791,7 @@ impl Render for Terminal {
         }
         root.children(sheet)
             .children(picker)
+            .children(finder)
             .children(list)
             .children(dialog)
     }

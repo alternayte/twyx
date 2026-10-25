@@ -29,7 +29,7 @@ impl Terminal {
         let row = DESKTOP.unit * 7.0;
         let width = DESKTOP.palette_width;
         let left = ((f32::from(window.viewport_size().width) - width) / 2.0).max(0.0);
-        let entries = self.entries(picker.switcher);
+        let entries = self.entries(picker.scope);
         let found = picker.found(&entries);
         // The list scrolls so the selection stays in view.
         let first = picker.selected.saturating_sub(ROWS - 1);
@@ -120,11 +120,7 @@ impl Terminal {
                         div()
                             .text_size(px(DESKTOP.size.caption))
                             .text_color(tones.graphite)
-                            .child(if picker.switcher {
-                                "workspaces"
-                            } else {
-                                "palette"
-                            }),
+                            .child(picker.scope.title()),
                     ),
             )
             .child(list)
