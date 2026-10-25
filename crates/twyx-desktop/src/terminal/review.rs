@@ -4,18 +4,19 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Bounds, Context, Div, FontWeight, Hsla, MouseButton, MouseDownEvent, Pixels,
-    ScrollWheelEvent, div, px,
+    AnyElement, Bounds, Context, Div, FontWeight, HighlightStyle, Hsla, MouseButton,
+    MouseDownEvent, Pixels, ScrollWheelEvent, StyledText, div, px,
 };
 use twyx_core::diff::{FileDiff, LineKind};
 use twyx_core::keys::{Chord, Key};
 use twyx_core::layout::LeafId;
 use twyx_core::theme::DESKTOP;
 use twyx_protocol::client::{IndexState, NoteInfo, NoteState, ReviewInfo, Reviewed, ToDaemon};
-use twyx_protocol::review::{Cursor, KEYS, SideRow, sides};
+use twyx_protocol::review::{Cursor, KEYS, SideLine, SideRow, sides};
 
 use super::Terminal;
-use crate::paint::{Tones, hsla};
+use crate::highlight::Tokens;
+use crate::paint::{Palette, Tones, hsla};
 
 /// The narrowest diff, in cells, that shows two sides.
 const SPLIT_WIDTH: u16 = 120;
@@ -395,6 +396,7 @@ impl Terminal {
         cx: &mut Context<Self>,
     ) -> Div {
         let row = px(DESKTOP.unit * 5.0);
+        let palette = Palette::of(tones.theme.variant);
         let room = (f32::from(shown.bounds.size.height) / f32::from(row)) as usize + 1;
         let chosen = cursor.hunk.min(diff.hunks.len().saturating_sub(1));
         let number = |value: Option<u32>| {
@@ -416,16 +418,22 @@ impl Terminal {
                 .text_color(colour.unwrap_or(tones.graphite))
                 .child(sign)
         };
-        let code = |text: &str, colour: Option<Hsla>| {
-            div()
+        // A line in its syntax colours on a tint of its change, or else in
+        // the colour of its change.
+        let code = |text: &str, colour: Option<Hsla>, tokens: Option<&Tokens>| {
+            let line = div()
                 .flex_1()
                 .min_w(px(0.0))
                 .overflow_hidden()
-                .whitespace_nowrap()
-                .text_color(colour.unwrap_or(tones.ink))
-                .child(shown_text(text))
+                .whitespace_nowrap();
+            match tokens {
+                Some(tokens) => line.child(coloured(text, tokens, tones, palette)),
+                None => line
+                    .text_color(colour.unwrap_or(tones.ink))
+                    .child(shown_text(text)),
+            }
         };
-        let line_row = |colour: Option<Hsla>| {
+        let line_row = |colour: Option<Hsla>, tinted: bool| {
             div()
                 .h(row)
                 .flex_shrink_0()
@@ -434,6 +442,9 @@ impl Terminal {
                 .items_center()
                 .border_l(px(DESKTOP.mark))
                 .border_color(colour.unwrap_or(tones.paper))
+                .when_some(colour.filter(|_| tinted), |line, colour| {
+                    line.bg(colour.opacity(0.08))
+                })
         };
         let mut rows = div().flex().flex_col().pb(px(DESKTOP.pad));
         let mut count = 0;
@@ -443,6 +454,9 @@ impl Terminal {
             }
             let current = index == chosen;
             let leaf = shown.leaf;
+            let tokens = self.highlighter.hunk(&diff.path, hunk);
+            let tokens_of = |line: usize| tokens.as_ref().and_then(|tokens| tokens.get(line));
+            let tinted = tokens.is_some();
             rows = rows.child(
                 div()
                     .h(px(DESKTOP.unit * 7.0))
@@ -479,26 +493,45 @@ impl Terminal {
                         break;
                     }
                     let (left, right) = match side_row {
-                        SideRow::Same(old, new, text) => (
-                            Some((old, LineKind::Context, text)),
-                            Some((new, LineKind::Context, text)),
+                        SideRow::Same {
+                            index,
+                            old,
+                            new,
+                            text,
+                        } => (
+                            Some((
+                                SideLine {
+                                    index,
+                                    number: old,
+                                    text,
+                                },
+                                LineKind::Context,
+                            )),
+                            Some((
+                                SideLine {
+                                    index,
+                                    number: new,
+                                    text,
+                                },
+                                LineKind::Context,
+                            )),
                         ),
                         SideRow::Pair(old, new) => (
-                            old.map(|(at, text)| (at, LineKind::Removed, text)),
-                            new.map(|(at, text)| (at, LineKind::Added, text)),
+                            old.map(|side| (side, LineKind::Removed)),
+                            new.map(|side| (side, LineKind::Added)),
                         ),
                     };
-                    let half = |side: Option<(u32, LineKind, &str)>| match side {
-                        Some((at, kind, text)) => {
+                    let half = |side: Option<(SideLine<'_>, LineKind)>| match side {
+                        Some((side, kind)) => {
                             let (colour, mark) = marked(kind, tones);
-                            line_row(colour)
+                            line_row(colour, tinted)
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .child(number(Some(at)))
+                                .child(number(Some(side.number)))
                                 .child(sign(mark, colour))
-                                .child(code(text, colour))
+                                .child(code(side.text, colour, tokens_of(side.index)))
                         }
-                        None => line_row(None).flex_1().min_w(px(0.0)),
+                        None => line_row(None, false).flex_1().min_w(px(0.0)),
                     };
                     rows = rows.child(
                         div()
@@ -511,17 +544,17 @@ impl Terminal {
                     count += 1;
                 }
             } else {
-                for (line, (old, new)) in hunk.lines.iter().zip(hunk.numbers()) {
+                for (at, (line, (old, new))) in hunk.lines.iter().zip(hunk.numbers()).enumerate() {
                     if count >= room {
                         break;
                     }
                     let (colour, mark) = marked(line.kind, tones);
                     rows = rows.child(
-                        line_row(colour)
+                        line_row(colour, tinted)
                             .child(number(old))
                             .child(number(new))
                             .child(sign(mark, colour))
-                            .child(code(&line.text, colour)),
+                            .child(code(&line.text, colour, tokens_of(at))),
                     );
                     count += 1;
                 }
@@ -542,6 +575,30 @@ impl Terminal {
 /// that the layout keeps.
 fn shown_text(text: &str) -> String {
     text.replace('\t', "    ").replace(' ', "\u{a0}")
+}
+
+/// A line in its tokens' colours, laid out as `shown_text` lays it out.
+fn coloured(text: &str, tokens: &Tokens, tones: Tones, palette: Palette) -> StyledText {
+    let mut shown = String::new();
+    let mut runs = Vec::new();
+    let mut end = 0;
+    for (range, slot) in tokens {
+        let Some(piece) = text.get(range.clone()) else {
+            continue;
+        };
+        let start = shown.len();
+        shown.push_str(&shown_text(piece));
+        runs.push((
+            start..shown.len(),
+            HighlightStyle {
+                color: Some(slot.colour(tones, palette)),
+                ..HighlightStyle::default()
+            },
+        ));
+        end = range.end;
+    }
+    shown.push_str(&shown_text(text.get(end..).unwrap_or_default()));
+    StyledText::new(shown).with_highlights(runs)
 }
 
 /// The keys of a focused review leaf, on two rows at its foot.

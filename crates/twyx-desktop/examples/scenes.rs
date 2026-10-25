@@ -10,6 +10,9 @@
 //! layout.
 
 #[allow(dead_code)]
+#[path = "../src/highlight.rs"]
+mod highlight;
+#[allow(dead_code)]
 #[path = "../src/keys.rs"]
 mod keys;
 #[allow(dead_code, unused_imports)]

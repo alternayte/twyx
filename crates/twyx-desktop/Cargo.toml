@@ -13,6 +13,7 @@ workspace = true
 anyhow = "1"
 gpui = { package = "gpui-pre", version = "=0.3.9" }
 gpui-platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["font-kit", "wayland", "x11"] }
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 twyx-core = { workspace = true }
 twyx-protocol = { workspace = true }
 

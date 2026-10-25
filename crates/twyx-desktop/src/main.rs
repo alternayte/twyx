@@ -1,6 +1,7 @@
 //! The desktop client: one window, the focused pane, drawn on the GPU.
 //! `--specimen [light|dark]` opens the theme specimen instead.
 
+mod highlight;
 mod keys;
 mod paint;
 mod panes;

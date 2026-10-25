@@ -297,13 +297,27 @@ impl Reviews {
     }
 }
 
+/// One line of one side: its index in the hunk, its number in the file,
+/// and its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SideLine<'a> {
+    pub index: usize,
+    pub number: u32,
+    pub text: &'a str,
+}
+
 /// One row of a diff shown on two sides.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SideRow<'a> {
     /// A context line on both sides, with its old and new line numbers.
-    Same(u32, u32, &'a str),
+    Same {
+        index: usize,
+        old: u32,
+        new: u32,
+        text: &'a str,
+    },
     /// A removed line and the added line beside it; either may be missing.
-    Pair(Option<(u32, &'a str)>, Option<(u32, &'a str)>),
+    Pair(Option<SideLine<'a>>, Option<SideLine<'a>>),
 }
 
 /// A hunk's lines as two sides: each run of removed lines beside the run of
@@ -311,8 +325,8 @@ pub enum SideRow<'a> {
 pub fn sides(hunk: &twyx_core::diff::Hunk) -> Vec<SideRow<'_>> {
     fn flush<'a>(
         rows: &mut Vec<SideRow<'a>>,
-        removed: &mut Vec<(u32, &'a str)>,
-        added: &mut Vec<(u32, &'a str)>,
+        removed: &mut Vec<SideLine<'a>>,
+        added: &mut Vec<SideLine<'a>>,
     ) {
         for at in 0..removed.len().max(added.len()) {
             rows.push(SideRow::Pair(
@@ -326,17 +340,23 @@ pub fn sides(hunk: &twyx_core::diff::Hunk) -> Vec<SideRow<'_>> {
     let mut rows = Vec::new();
     let mut removed = Vec::new();
     let mut added = Vec::new();
-    for (line, (old, new)) in hunk.lines.iter().zip(hunk.numbers()) {
+    for (index, (line, (old, new))) in hunk.lines.iter().zip(hunk.numbers()).enumerate() {
+        let side = |number: Option<u32>| SideLine {
+            index,
+            number: number.unwrap_or(0),
+            text: line.text.as_str(),
+        };
         match line.kind {
-            LineKind::Removed => removed.push((old.unwrap_or(0), line.text.as_str())),
-            LineKind::Added => added.push((new.unwrap_or(0), line.text.as_str())),
+            LineKind::Removed => removed.push(side(old)),
+            LineKind::Added => added.push(side(new)),
             LineKind::Context => {
                 flush(&mut rows, &mut removed, &mut added);
-                rows.push(SideRow::Same(
-                    old.unwrap_or(0),
-                    new.unwrap_or(0),
-                    &line.text,
-                ));
+                rows.push(SideRow::Same {
+                    index,
+                    old: old.unwrap_or(0),
+                    new: new.unwrap_or(0),
+                    text: &line.text,
+                });
             }
             LineKind::NoNewline => {}
         }
@@ -426,9 +446,32 @@ mod tests {
         assert_eq!(
             sides(hunk),
             vec![
-                SideRow::Same(1, 1, "keep"),
-                SideRow::Pair(Some((2, "old")), Some((2, "new"))),
-                SideRow::Pair(None, Some((3, "more"))),
+                SideRow::Same {
+                    index: 0,
+                    old: 1,
+                    new: 1,
+                    text: "keep",
+                },
+                SideRow::Pair(
+                    Some(SideLine {
+                        index: 1,
+                        number: 2,
+                        text: "old",
+                    }),
+                    Some(SideLine {
+                        index: 2,
+                        number: 2,
+                        text: "new",
+                    }),
+                ),
+                SideRow::Pair(
+                    None,
+                    Some(SideLine {
+                        index: 3,
+                        number: 3,
+                        text: "more",
+                    }),
+                ),
             ]
         );
     }

@@ -274,10 +274,10 @@ impl ReviewView<'_> {
                     rows.push((
                         number,
                         match row {
-                            SideRow::Same(_, _, text) => Row::Same(text.to_owned()),
+                            SideRow::Same { text, .. } => Row::Same(text.to_owned()),
                             SideRow::Pair(old, new) => Row::Pair(
-                                old.map(|(_, text)| text.to_owned()),
-                                new.map(|(_, text)| text.to_owned()),
+                                old.map(|side| side.text.to_owned()),
+                                new.map(|side| side.text.to_owned()),
                             ),
                         },
                     ));

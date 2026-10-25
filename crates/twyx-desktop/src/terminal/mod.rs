@@ -40,6 +40,7 @@ use twyx_protocol::view::{Selection, View};
 use twyx_protocol::wire;
 use twyx_protocol::workspaces::{Effect, Workspaces};
 
+use crate::highlight::Highlighter;
 use crate::keys::{self, Shortcut};
 use crate::paint::{self, Metrics, Tones};
 use crate::panes::{self, FocusMark, Grid, Layer, Scene, Shown};
@@ -177,6 +178,7 @@ pub struct Terminal {
     review_leaves: Vec<ReviewLeaf>,
     /// The wheel's turn over a review leaf not yet taken as a hunk step.
     review_wheel: f32,
+    highlighter: Highlighter,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -244,6 +246,7 @@ impl Terminal {
             selection: None,
             review_leaves: Vec::new(),
             review_wheel: 0.0,
+            highlighter: Highlighter::default(),
         }
     }
 
