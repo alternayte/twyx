@@ -327,6 +327,7 @@ impl Workspaces {
             | Purpose::Integrations
             | Purpose::RenameTab { .. }
             | Purpose::CopySearch
+            | Purpose::OpenLink { .. }
             | Purpose::NewTask { .. }
             | Purpose::Note { .. } => {}
         }

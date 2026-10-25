@@ -70,10 +70,14 @@ fn mouse(cx: &mut HeadlessAppContext, window: AnyWindowHandle, event: PlatformIn
 }
 
 fn down(at: Point<Pixels>) -> PlatformInput {
+    down_with(at, Modifiers::default())
+}
+
+fn down_with(at: Point<Pixels>, modifiers: Modifiers) -> PlatformInput {
     PlatformInput::MouseDown(MouseDownEvent {
         button: MouseButton::Left,
         position: at,
-        modifiers: Modifiers::default(),
+        modifiers,
         click_count: 1,
         first_mouse: false,
     })
@@ -206,6 +210,40 @@ fn main() -> Result<()> {
     shot(cx, window, &out, "10d-selected")?;
     let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
     println!("copied: {copied:?}");
+
+    // A link from pane output asks before it opens: Cmd-click on macOS,
+    // Ctrl-click on Linux.
+    std::fs::write(
+        "/tmp/twyxlink.sh",
+        "printf '\\033[H\\033[2J\\033]8;;https://example.com/twyx\\033\\\\a link\\033]8;;\\033\\\\\\n'\n",
+    )?;
+    keys(
+        cx,
+        window,
+        &"sh /tmp/twyxlink.sh"
+            .split("")
+            .filter(|key| !key.is_empty())
+            .map(|key| if key == " " { "space" } else { key })
+            .collect::<Vec<_>>(),
+    )?;
+    keys(cx, window, &["enter"])?;
+    pump(cx, window, Duration::from_secs(1))?;
+    let link = at(30.0, 52.0);
+    let modifiers = if cfg!(target_os = "macos") {
+        Modifiers {
+            platform: true,
+            ..Modifiers::default()
+        }
+    } else {
+        Modifiers {
+            control: true,
+            ..Modifiers::default()
+        }
+    };
+    mouse(cx, window, down_with(link, modifiers))?;
+    mouse(cx, window, up(link))?;
+    shot(cx, window, &out, "10e-open-link")?;
+    keys(cx, window, &["escape"])?;
 
     // A Git project, opened from the CLI, shows in the sidebar.
     let repo = repository("scenes")?;

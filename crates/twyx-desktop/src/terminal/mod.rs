@@ -611,7 +611,7 @@ impl Terminal {
     }
 
     /// Takes one key for the open dialog.
-    fn dialog_key(&mut self, chord: twyx_core::keys::Chord) {
+    fn dialog_key(&mut self, chord: twyx_core::keys::Chord, cx: &mut Context<Self>) {
         let answer = {
             let mut shared = self.shared();
             let Some(dialog) = shared.dialog.as_mut() else {
@@ -637,6 +637,13 @@ impl Terminal {
                     if let Ok(paths) = Paths::discover() {
                         workspaces.message = Some(twyx_protocol::offers::install(&paths));
                     }
+                    return;
+                }
+                Answer::Confirmed {
+                    purpose: Purpose::OpenLink { target },
+                    ..
+                } => {
+                    cx.open_url(&target);
                     return;
                 }
                 Answer::Confirmed { purpose, key } => workspaces.confirmed(purpose, key),
@@ -728,7 +735,7 @@ impl Terminal {
         self.shared().workspaces.message = None;
         if self.shared().dialog.is_some() {
             if let Some(chord) = key.chord() {
-                self.dialog_key(chord);
+                self.dialog_key(chord, cx);
             }
             cx.notify();
             return;
@@ -1156,6 +1163,29 @@ impl Terminal {
             return;
         };
         self.selection = None;
+        // Cmd-click (Ctrl-click on Linux) asks to open a link, also in a
+        // pane that takes the mouse.
+        let link_click = if cfg!(target_os = "macos") {
+            event.modifiers.platform
+        } else {
+            event.modifiers.control
+        };
+        if link_click {
+            let target = {
+                let shared = self.shared();
+                shared.views.get(&pane).and_then(|view| {
+                    let cell = view.cell(local.0, local.1)?;
+                    view.link(cell)
+                        .filter(|target| twyx_core::text::link_allowed(target))
+                        .map(str::to_owned)
+                })
+            };
+            if let Some(target) = target {
+                self.shared().dialog = Some(Dialog::open_link(&target));
+                cx.notify();
+                return;
+            }
+        }
         if self.placement.mouse.contains(&pane) && !event.modifiers.shift {
             self.drag = Some(Drag::Pane);
             self.to_pane(&target, col, row, event.button, MouseAction::Press);

@@ -61,6 +61,24 @@ pub enum Purpose {
         worktree: u64,
         panes: Vec<u64>,
     },
+    /// Open a link from pane output, after the user saw its target.
+    OpenLink {
+        target: String,
+    },
+}
+
+impl Dialog {
+    /// The question before a link from pane output opens (Invariant 14).
+    pub fn open_link(target: &str) -> Self {
+        Dialog::Confirm {
+            title: "open link".to_owned(),
+            lines: vec![twyx_core::text::printable(target)],
+            keys: vec![('y', "open".to_owned())],
+            purpose: Purpose::OpenLink {
+                target: target.to_owned(),
+            },
+        }
+    }
 }
 
 impl Purpose {

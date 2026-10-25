@@ -20,6 +20,7 @@ twyx has two clients: the TUI and the desktop app. Both attach to the same daemo
 | Copy mode with search | full | full |
 | Select text with the mouse and copy it | full | full |
 | Mouse wheel to the pane | full | full |
+| Open a link from pane output (OSC 8) | full: your terminal opens it | full: cmd-click shows the target first |
 | Two clients on one tab, with the size lease | full | full |
 
 ## Projects and workspaces
