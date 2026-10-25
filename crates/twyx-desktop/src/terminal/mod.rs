@@ -179,6 +179,12 @@ pub struct Terminal {
     drop: Option<Drop>,
     mark: Option<FocusMark>,
     tab_mark: Option<panes::Travel<u64>>,
+    /// Each sidebar row's last mark change.
+    fades: sidebar::Fades,
+    /// Whether a sidebar mark is still fading.
+    fading: bool,
+    /// The selection on the open palette or list.
+    sheet_mark: Option<panes::Travel<usize>>,
     /// The agent a new task starts, from config.
     default_agent: Option<String>,
     /// The palette or the switcher, while it is open.
@@ -273,6 +279,9 @@ impl Terminal {
             drop: None,
             mark: None,
             tab_mark: None,
+            sheet_mark: None,
+            fades: HashMap::new(),
+            fading: false,
             default_agent: config.default_agent,
             picker: None,
             list: None,
@@ -1524,25 +1533,31 @@ impl Render for Terminal {
         let over = Arc::clone(&scene);
         let tab_bar = self.tab_bar(tones, reduced, cx);
         let status_bar = self.status_bar(tones, cx);
-        if self.mark.is_some_and(|mark| mark.moving(reduced))
-            || self.tab_mark.is_some_and(|mark| mark.moving(reduced))
-        {
-            window.request_animation_frame();
-        }
         let sheet = self.keys.then(|| self.key_sheet(tones, window));
+        if self.list.is_none() && self.picker.is_none() {
+            self.sheet_mark = None;
+        }
         let list = self
             .list
-            .map(|list| self.list_sheet(list, tones, window, cx));
+            .map(|list| self.list_sheet(list, tones, reduced, window, cx));
         let dialog = self
             .shared()
             .dialog
             .clone()
             .map(|dialog| self.dialog_sheet(&dialog, tones, window));
-        let sidebar = (docked || overlaid).then(|| self.sidebar(tones, cx));
+        self.fading = false;
+        let sidebar = (docked || overlaid).then(|| self.sidebar(tones, reduced, cx));
         let picker = self
             .picker
             .clone()
-            .map(|picker| self.palette_sheet(&picker, tones, window, cx));
+            .map(|picker| self.palette_sheet(&picker, tones, reduced, window, cx));
+        if self.mark.is_some_and(|mark| mark.moving(reduced))
+            || self.tab_mark.is_some_and(|mark| mark.moving(reduced))
+            || self.sheet_mark.is_some_and(|mark| mark.moving(reduced))
+            || self.fading
+        {
+            window.request_animation_frame();
+        }
 
         let main = div()
             .flex_1()

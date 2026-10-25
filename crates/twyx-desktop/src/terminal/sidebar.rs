@@ -3,16 +3,58 @@
 //! section, from the rows both clients share, then the newest inbox items.
 //! A click shows what a row or an item stands for.
 
+use std::collections::HashMap;
+use std::time::Instant;
+
 use gpui::prelude::*;
 use gpui::{Context, Div, FontWeight, MouseButton, MouseDownEvent, div, px};
 use twyx_core::keys::Mode;
-use twyx_core::theme::DESKTOP;
+use twyx_core::theme::{AgentState, DESKTOP, Motion};
 use twyx_protocol::client::InboxItem;
 use twyx_protocol::lists;
 use twyx_protocol::sidebar::{Kind, Row};
 
 use super::Terminal;
 use crate::paint::Tones;
+
+/// A row's mark on its way from one state to another: the old mark fades
+/// out under the new one.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Fade {
+    from: Option<AgentState>,
+    to: Option<AgentState>,
+    /// How far the new mark has come in, from 0.0 to 1.0.
+    progress: f32,
+}
+
+/// The last mark of each row and when it changed, by the row's target.
+pub(super) type Fades = HashMap<String, (Option<AgentState>, Option<AgentState>, Instant)>;
+
+fn fade_key(row: &Row) -> String {
+    format!("{:?}{:?}", row.kind, row.target)
+}
+
+/// The mark cell of a row: the new mark over the fading old one.
+fn mark_cell(fade: Fade, tones: Tones) -> Div {
+    let glyph = |state: Option<AgentState>, opacity: f32| {
+        div()
+            .absolute()
+            .left(px(0.0))
+            .top(px(0.0))
+            .opacity(opacity)
+            .text_color(state.map_or(tones.graphite, |state| tones.agent(state)))
+            .child(state.map_or(String::new(), |state| state.glyph().to_string()))
+    };
+    let mut cell = div()
+        .relative()
+        .w(px(DESKTOP.pad * 2.0))
+        .h(px(DESKTOP.size.body + DESKTOP.unit))
+        .flex_shrink_0();
+    if fade.progress < 1.0 && fade.from != fade.to {
+        cell = cell.child(glyph(fade.from, 1.0 - fade.progress));
+    }
+    cell.child(glyph(fade.to, fade.progress))
+}
 
 /// The most inbox items the sidebar shows; the inbox list has them all.
 const INBOX_ITEMS: usize = 5;
@@ -21,7 +63,7 @@ impl Terminal {
     /// The sidebar's rows. The selected row sits on a tinted bar: the
     /// workspace mode cursor while the mode is open, else the client's own
     /// workspace. The focused pane is lettered in the accent.
-    pub(super) fn sidebar(&self, tones: Tones, cx: &mut Context<Self>) -> Div {
+    pub(super) fn sidebar(&mut self, tones: Tones, reduced: bool, cx: &mut Context<Self>) -> Div {
         let (rows, selected, inbox) = {
             let shared = self.shared();
             let workspaces = &shared.workspaces;
@@ -41,8 +83,12 @@ impl Terminal {
             .flex()
             .flex_col()
             .pb(px(DESKTOP.pad));
+        let keys: std::collections::HashSet<String> = rows.iter().map(fade_key).collect();
+        self.fades.retain(|key, _| keys.contains(key));
         for (index, row) in rows.into_iter().enumerate() {
-            list = list.child(self.sidebar_row(index, row, selected == Some(index), tones, cx));
+            let fade = self.fade(&row, reduced);
+            list =
+                list.child(self.sidebar_row(index, row, selected == Some(index), fade, tones, cx));
         }
         if !inbox.is_empty() {
             let unread = inbox.iter().filter(|item| !item.read).count();
@@ -82,6 +128,7 @@ impl Terminal {
         index: usize,
         row: Row,
         selected: bool,
+        fade: Fade,
         tones: Tones,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -142,16 +189,7 @@ impl Terminal {
                     cx.stop_propagation();
                 }),
             )
-            .child(
-                div()
-                    .w(px(DESKTOP.pad * 2.0))
-                    .flex_shrink_0()
-                    .text_color(row.mark.map_or(tones.graphite, |state| tones.agent(state)))
-                    .child(
-                        row.mark
-                            .map_or(String::new(), |state| state.glyph().to_string()),
-                    ),
-            )
+            .child(mark_cell(fade, tones))
             .child(
                 div()
                     .flex_1()
@@ -177,6 +215,30 @@ impl Terminal {
                         .child(format!("{detail}{}", if row.dirty { "*" } else { "" })),
                 )
             })
+    }
+
+    /// Where a row's mark is between its last state and this one.
+    fn fade(&mut self, row: &Row, reduced: bool) -> Fade {
+        let key = fade_key(row);
+        let now = Instant::now();
+        let entry = self.fades.entry(key).or_insert((row.mark, row.mark, now));
+        if entry.1 != row.mark {
+            *entry = (entry.1, row.mark, now);
+        }
+        let motion = if reduced {
+            DESKTOP.motion.reduced()
+        } else {
+            DESKTOP.motion
+        };
+        let progress = Motion::ease(motion.fade, entry.2.elapsed());
+        if progress < 1.0 {
+            self.fading = true;
+        }
+        Fade {
+            from: entry.0,
+            to: entry.1,
+            progress,
+        }
     }
 
     /// One inbox item: its mark, title and age, then its state and place.

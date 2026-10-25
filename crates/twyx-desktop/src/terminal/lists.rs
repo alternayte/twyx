@@ -85,9 +85,10 @@ impl Terminal {
     }
 
     pub(super) fn list_sheet(
-        &self,
+        &mut self,
         list: List,
         tones: Tones,
+        reduced: bool,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -185,9 +186,11 @@ impl Terminal {
         let left = ((f32::from(window.viewport_size().width) - width) / 2.0).max(0.0);
         let selected = selected.min(lines.len().saturating_sub(1));
         let first = selected.saturating_sub(ROWS - 1);
-        let mut rows = div().flex().flex_col();
+        let mut rows = div().relative().flex().flex_col();
+        if !lines.is_empty() {
+            rows = rows.child(self.selection_bar(selected, selected - first, row, tones, reduced));
+        }
         for (index, line) in lines.into_iter().enumerate().skip(first).take(ROWS) {
-            let chosen = index == selected;
             rows = rows.child(
                 div()
                     .relative()
@@ -198,17 +201,6 @@ impl Terminal {
                     .px(px(DESKTOP.pad * 2.0))
                     .gap(px(DESKTOP.gap))
                     .cursor_pointer()
-                    .when(chosen, |row| {
-                        row.bg(tones.selection).child(
-                            div()
-                                .absolute()
-                                .left(px(0.0))
-                                .top(px(0.0))
-                                .bottom(px(0.0))
-                                .w(px(DESKTOP.mark))
-                                .bg(tones.accent),
-                        )
-                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, _, cx| {
