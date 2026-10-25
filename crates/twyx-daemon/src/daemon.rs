@@ -117,6 +117,8 @@ pub(crate) struct Client {
     pub focused: bool,
     /// The panes in view when the inbox last looked.
     pub seen: std::collections::BTreeSet<PaneId>,
+    /// The paper and ink the client shows panes on.
+    pub colours: Option<twyx_protocol::holder::PaneColours>,
 }
 
 #[derive(Debug)]
@@ -674,6 +676,7 @@ impl Daemon {
                 sidebar: false,
                 focused: true,
                 seen: std::collections::BTreeSet::new(),
+                colours: None,
             },
         );
         if !hello.interactive {
@@ -743,6 +746,7 @@ impl Daemon {
             ToDaemon::Files { workspace } => self.files(id, workspace),
             ToDaemon::FindInFiles { workspace, query } => self.find_in_files(id, workspace, query),
             ToDaemon::OpenInEditor { path, line } => self.open_in_editor(id, path, line),
+            ToDaemon::Colours(colours) => self.set_client_colours(id, colours),
             ToDaemon::OpenReview { worktree } => self.open_review(id, worktree),
             ToDaemon::Notes { worktree } => self.notes(id, worktree),
             ToDaemon::AddNote {
@@ -1114,6 +1118,7 @@ impl Daemon {
         };
         entry.lease = Some(id);
         self.apply_size(tab);
+        self.send_tab_colours(tab);
         self.broadcast_workspace();
     }
 

@@ -212,6 +212,8 @@ pub struct Terminal {
     highlighter: Highlighter,
     /// The unread count the Dock badge shows.
     badge: usize,
+    /// The paper and ink the daemon last heard from this window.
+    colours_sent: Option<twyx_protocol::holder::PaneColours>,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -310,6 +312,7 @@ impl Terminal {
             review_wheel: 0.0,
             highlighter: Highlighter::default(),
             badge: 0,
+            colours_sent: None,
         }
     }
 
@@ -347,6 +350,7 @@ impl Terminal {
         let parts = connection.split();
         let outgoing = parts.outgoing.clone();
         self.outgoing = Some(outgoing.clone());
+        self.colours_sent = None;
         self.keymap.reset();
         self.drag = None;
         let _ = outgoing.send(ToDaemon::WatchOverview);
@@ -1634,6 +1638,16 @@ impl Render for Terminal {
         self.sync(area, window, cx);
 
         let tones = self.tones(window);
+        // The panes' programs read the paper they are shown on.
+        let sheet = twyx_core::theme::Sheet::of(tones.theme.variant);
+        let colours = twyx_protocol::holder::PaneColours {
+            paper: [sheet.paper.r, sheet.paper.g, sheet.paper.b],
+            ink: [sheet.ink.r, sheet.ink.g, sheet.ink.b],
+        };
+        if self.outgoing.is_some() && self.colours_sent != Some(colours) {
+            self.colours_sent = Some(colours);
+            self.request(ToDaemon::Colours(colours));
+        }
         let reduced = cx.reduce_motion();
         let origin = point(left, px(DESKTOP.tab_bar));
         let grid = Grid {

@@ -13,6 +13,7 @@ use twyx_core::layout::Axis;
 use twyx_protocol::client::{
     FromDaemon, Launch, MAJOR, MINOR, PaneState, Place, ServerHello, ToDaemon,
 };
+use twyx_protocol::holder::PaneColours;
 use twyx_protocol::input::{InputEvent, KeyCode, KeyEvent, Modifiers};
 use twyx_protocol::wire;
 
@@ -839,4 +840,59 @@ fn invariant_14_only_the_focused_pane_sets_the_clipboard_by_default() {
     );
     assert_eq!(text, "focused");
     assert!(!from_hidden, "a pane without the focus set the clipboard");
+}
+
+/// A program that asks for the background colour and the light or dark
+/// scheme, asks to hear when the scheme changes, and prints each answer.
+const COLOUR_READER: &str = r#"
+import os, sys, termios, tty
+fd = sys.stdin.fileno()
+tty.setraw(fd)
+os.write(1, b"\x1b[?2031h\x1b]11;?\x07\x1b[?996n")
+seen = b""
+while True:
+    seen += os.read(fd, 64)
+    for end in (b"\x07", b"n"):
+        while end in seen:
+            answer, seen = seen.split(end, 1)
+            os.write(1, (answer.replace(b"\x1b", b"ESC") + b"|\r\n"))
+"#;
+
+#[test]
+fn a_pane_reports_the_leaseholders_paper_and_hears_when_it_changes() {
+    let mut sandbox = Sandbox::new("colours");
+    sandbox.start();
+    let mut light = sandbox.connect(80, 24);
+    light
+        .send(&ToDaemon::Colours(PaneColours {
+            paper: [0xf4, 0xf1, 0xea],
+            ink: [0x2b, 0x2b, 0x2b],
+        }))
+        .unwrap();
+    let pane = new_pane_at(
+        &mut light,
+        "",
+        Launch::Command(vec![
+            "python3".to_owned(),
+            "-c".to_owned(),
+            COLOUR_READER.to_owned(),
+        ]),
+        Place::NewTab,
+    );
+    light.wait_for_text(pane, "rgb:f4f4/f1f1/eaea|");
+    light.wait_for_text(pane, "ESC[?997;2|");
+
+    // A dark client takes the lease with its input: the program hears of it.
+    let mut dark = sandbox.connect(80, 24);
+    dark.send(&ToDaemon::Colours(PaneColours {
+        paper: [0x1b, 0x1b, 0x1b],
+        ink: [0xe8, 0xe6, 0xe1],
+    }))
+    .unwrap();
+    dark.send(&ToDaemon::Input(InputEvent::Key(KeyEvent::press(
+        KeyCode::Char('x'),
+        Modifiers::empty(),
+    ))))
+    .unwrap();
+    light.wait_for_text(pane, "ESC[?997;1|");
 }

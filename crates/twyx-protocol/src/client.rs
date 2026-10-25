@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 14;
+pub const MINOR: u16 = 15;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -819,6 +819,9 @@ pub enum ToDaemon {
         path: String,
         line: Option<u32>,
     },
+    /// The paper and ink this client shows panes on; the panes of the
+    /// tabs whose size it leases report them. Since minor 15.
+    Colours(crate::holder::PaneColours),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

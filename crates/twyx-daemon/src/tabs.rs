@@ -221,6 +221,7 @@ impl Daemon {
             body: welcome.snapshot,
         });
         self.broadcast_pane(pane);
+        self.send_colours(pane);
         Ok(())
     }
 

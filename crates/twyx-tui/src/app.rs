@@ -304,6 +304,9 @@ fn run(
     let mut workspaces = Workspaces::new(false, Some(crate::chrome::dialog::fits));
     let mut reviews = crate::review::Reviews::default();
     let _ = daemon.outgoing.send(ToDaemon::WatchOverview);
+    if let Some(colours) = screen.pane_colours() {
+        let _ = daemon.outgoing.send(ToDaemon::Colours(colours));
+    }
     // What the daemon was last told about this client's sidebar.
     let mut sidebar_told = false;
     // Everything the compositor and the mouse need to know, now.
@@ -483,6 +486,9 @@ fn run(
             daemon = reconnect(paths, area, shown)?;
             forward(&mut daemon, &wake_tx);
             let _ = daemon.outgoing.send(ToDaemon::WatchOverview);
+            if let Some(colours) = screen.pane_colours() {
+                let _ = daemon.outgoing.send(ToDaemon::Colours(colours));
+            }
             sidebar_told = false;
             client_id = daemon.hello.client;
             keymap.reset();
@@ -957,6 +963,18 @@ impl std::fmt::Debug for Screen {
 }
 
 impl Screen {
+    /// The terminal's paper and ink for the panes' programs to read, when
+    /// the terminal said both.
+    fn pane_colours(&self) -> Option<twyx_protocol::holder::PaneColours> {
+        let (Some(paper), Some(ink), _) = self.paper else {
+            return None;
+        };
+        Some(twyx_protocol::holder::PaneColours {
+            paper: [paper.r, paper.g, paper.b],
+            ink: [ink.r, ink.g, ink.b],
+        })
+    }
+
     fn start(theme: ThemeConfig) -> Result<Self> {
         terminal::enable_raw_mode().context("enter raw mode")?;
         let answers = probe::interrogate(&mut tty()?).unwrap_or_default();

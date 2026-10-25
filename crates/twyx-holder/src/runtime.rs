@@ -466,6 +466,11 @@ impl Core<'_> {
                 send(out, FromHolder::Tail(rows.join("\n")));
             }
             ToHolder::Ping => send(out, FromHolder::Pong),
+            ToHolder::Colours(colours) => {
+                let rgb = |[r, g, b]: [u8; 3]| twyx_core::theme::Rgb { r, g, b };
+                self.engine
+                    .set_colours(rgb(colours.paper), rgb(colours.ink));
+            }
             ToHolder::Copy(action) => {
                 if let Some(text) = self.engine.copy(action) {
                     send(out, FromHolder::Copied(text));

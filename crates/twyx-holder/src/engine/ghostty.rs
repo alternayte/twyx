@@ -11,11 +11,15 @@ use libghostty_vt::screen::{CellContentTag, CellWide};
 use libghostty_vt::search::Search;
 use libghostty_vt::selection::{FormatOptions, Selection};
 use libghostty_vt::snapshot::Decoder;
+use libghostty_vt::style::RgbColor;
 use libghostty_vt::style::{Style, StyleColor, Underline as GhosttyUnderline};
-use libghostty_vt::terminal::{Mode, Point, PointCoordinate, PointSpace, ScrollViewport};
+use libghostty_vt::terminal::{
+    ColorScheme, Mode, Point, PointCoordinate, PointSpace, ScrollViewport,
+};
 use libghostty_vt::{RenderState, Terminal};
 
 use twyx_core::keys::CopyMotion;
+use twyx_core::theme::Rgb;
 use twyx_protocol::grid::{
     Attrs, Cell, Colour, Cursor, CursorShape, Modes, MouseEncoding, MouseMode, Row, Underline,
 };
@@ -36,6 +40,10 @@ pub struct Ghostty {
     links: Links,
     signals: Rc<RefCell<Vec<EngineSignal>>>,
     copy: Option<Copy>,
+    /// Where the terminal's replies to the pane go.
+    reply: Rc<RefCell<Box<dyn Write + Send>>>,
+    /// The paper's scheme, once a client gave the pane its colours.
+    scheme: Rc<std::cell::Cell<Option<ColorScheme>>>,
 }
 
 /// Copy mode: a cursor over the screen and scrollback, the selection's
@@ -119,6 +127,9 @@ impl Ghostty {
             }
         })
         .ok()?;
+        let scheme: Rc<std::cell::Cell<Option<ColorScheme>>> = Rc::default();
+        let known = Rc::clone(&scheme);
+        term.on_color_scheme(move |_| known.get()).ok()?;
         let render = RenderState::new().ok()?;
         let mut engine = Self {
             term,
@@ -127,21 +138,49 @@ impl Ghostty {
             links: Links::default(),
             signals,
             copy: None,
+            reply: Rc::new(RefCell::new(Box::new(std::io::sink()))),
+            scheme,
         };
         engine.answer_to(answerback).ok()?;
         Some(engine)
     }
 
     /// Where the terminal's replies to the pane go.
-    fn answer_to(
-        &mut self,
-        mut answerback: Box<dyn Write + Send>,
-    ) -> Result<(), libghostty_vt::Error> {
+    fn answer_to(&mut self, answerback: Box<dyn Write + Send>) -> Result<(), libghostty_vt::Error> {
+        *self.reply.borrow_mut() = answerback;
+        let reply = Rc::clone(&self.reply);
         self.term
-            .on_pty_write(move |_, reply: &[u8]| {
-                let _ = answerback.write_all(reply);
+            .on_pty_write(move |_, bytes: &[u8]| {
+                let _ = reply.borrow_mut().write_all(bytes);
             })
             .map(|_| ())
+    }
+
+    /// The paper and ink a program reads with OSC 10 and 11, and the light
+    /// or dark scheme it reads with `CSI ? 996 n`. A program that asked for
+    /// scheme reports (mode 2031) hears when the scheme changes.
+    pub fn set_colours(&mut self, paper: Rgb, ink: Rgb) {
+        let rgb = |colour: Rgb| RgbColor {
+            r: colour.r,
+            g: colour.g,
+            b: colour.b,
+        };
+        let _ = self.term.set_default_bg_color(Some(rgb(paper)));
+        let _ = self.term.set_default_fg_color(Some(rgb(ink)));
+        let scheme = if paper.lightness() > ink.lightness() {
+            ColorScheme::Light
+        } else {
+            ColorScheme::Dark
+        };
+        let before = self.scheme.replace(Some(scheme));
+        if before.is_some_and(|before| before != scheme)
+            && self.term.mode(Mode::COLOR_SCHEME_REPORT).unwrap_or(false)
+        {
+            let mut report = [0u8; 16];
+            if let Ok(len) = scheme.encode_report(&mut report) {
+                let _ = self.reply.borrow_mut().write_all(&report[..len]);
+            }
+        }
     }
 
     /// The engine's own snapshot of screen and scrollback, for a history
@@ -898,5 +937,48 @@ mod tests {
         let red = Colour::Palette(1);
         assert_eq!(view.rows[0].cells[0].bg, red, "a written cell");
         assert_eq!(view.rows[0].cells[10].bg, red, "an erased cell");
+    }
+
+    #[test]
+    fn a_pane_reports_the_colours_it_was_given_and_their_change() {
+        #[derive(Clone)]
+        struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let out = Sink(std::sync::Arc::default());
+        let taken = || String::from_utf8(std::mem::take(&mut *out.0.lock().unwrap())).unwrap();
+        let mut engine = Ghostty::new(
+            Geometry {
+                cols: 20,
+                rows: 5,
+                scrollback_lines: 100,
+            },
+            Box::new(out.clone()),
+        )
+        .unwrap();
+        let paper = Rgb::hex(0xF4F1EA);
+        let ink = Rgb::hex(0x2B2B2B);
+        engine.set_colours(paper, ink);
+        engine.advance(b"\x1b]11;?\x07\x1b[?996n");
+        let answer = taken();
+        assert!(answer.contains("]11;rgb:f4f4/f1f1/eaea"), "{answer:?}");
+        assert!(answer.ends_with("\x1b[?997;2n"), "light paper: {answer:?}");
+
+        engine.advance(b"\x1b[?2031h");
+        engine.set_colours(ink, paper);
+        assert_eq!(
+            taken(),
+            "\x1b[?997;1n",
+            "a program that asked hears of the change"
+        );
+        engine.set_colours(ink, paper);
+        assert_eq!(taken(), "", "the same colours report nothing");
     }
 }

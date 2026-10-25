@@ -10,7 +10,7 @@ use twyx_core::keys::CopyMotion;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 1;
-pub const MINOR: u16 = 4;
+pub const MINOR: u16 = 5;
 
 /// Sent by the daemon when it connects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +130,15 @@ pub enum ToHolder {
     Tail {
         lines: u16,
     },
+    /// The paper and ink a program in the pane reads. Since minor 5.
+    Colours(PaneColours),
+}
+
+/// A client's paper and ink, as red, green and blue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneColours {
+    pub paper: [u8; 3],
+    pub ink: [u8; 3],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

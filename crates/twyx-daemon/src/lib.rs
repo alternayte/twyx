@@ -6,6 +6,7 @@
 mod agents;
 mod api;
 mod checks;
+mod colours;
 pub mod daemon;
 mod files;
 mod git;

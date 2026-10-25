@@ -111,6 +111,11 @@ impl HolderLink {
         self.minor >= 4
     }
 
+    /// Whether the holder reports the colours a client gives it.
+    pub(crate) fn takes_colours(&self) -> bool {
+        self.minor >= 5
+    }
+
     pub(crate) fn send(&self, message: ToHolder) {
         let _ = self.out.send(message);
     }
