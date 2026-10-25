@@ -488,8 +488,15 @@ impl Workspaces {
     /// Takes a form's values.
     pub fn submitted(&mut self, purpose: Purpose, values: Vec<String>) -> Effect {
         let mut effect = Effect::default();
+        let field = |at: usize| values.get(at).cloned().unwrap_or_default();
+        if let Purpose::PullRequest { worktree } = purpose {
+            effect.requests.push(ToDaemon::OpenPullRequest {
+                worktree,
+                title: field(0),
+                body: field(1),
+            });
+        }
         if let Purpose::NewTask { workspace } = purpose {
-            let field = |at: usize| values.get(at).cloned().unwrap_or_default();
             let named: Vec<String> = field(2).split(',').map(str::to_owned).collect();
             let count = field(3).parse().unwrap_or(1);
             let agents = twyx_core::task::per_worktree(&named, count, None);

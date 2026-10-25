@@ -4,6 +4,7 @@
 mod chrome;
 mod dialog;
 mod palette;
+mod review;
 mod sidebar;
 
 use std::collections::{HashMap, HashSet};
@@ -20,7 +21,8 @@ use gpui::{
 
 use twyx_core::keys::{Command, Keymap, Mode, Outcome};
 use twyx_core::layout::{
-    Cells, Drop, Fractions, Leaf, LeafId, Placed, Side, drop_at, frame_title, rule_at, under,
+    Cells, Content, Drop, Fractions, Leaf, LeafId, Placed, Side, drop_at, frame_title, rule_at,
+    under,
 };
 use twyx_core::paths::Paths;
 use twyx_core::theme::DESKTOP;
@@ -33,13 +35,15 @@ use twyx_protocol::grid::{Frame, MouseMode, Snapshot};
 use twyx_protocol::holder::CopyAction;
 use twyx_protocol::input::{InputEvent, Modifiers, MouseAction, MouseEvent};
 use twyx_protocol::palette::{Choice, Entry, Pick, Picker, entries};
+use twyx_protocol::review::{Action as ReviewAction, Reviews};
 use twyx_protocol::view::{Selection, View};
 use twyx_protocol::wire;
 use twyx_protocol::workspaces::{Effect, Workspaces};
 
 use crate::keys::{self, Shortcut};
 use crate::paint::{self, Metrics, Tones};
-use crate::panes::{self, FocusMark, Grid, Scene, Shown};
+use crate::panes::{self, FocusMark, Grid, Layer, Scene, Shown};
+use review::ReviewLeaf;
 
 /// State the daemon task and the window both touch.
 struct Shared {
@@ -63,6 +67,7 @@ struct Shared {
     workspaces: Workspaces,
     /// The question open over the panes, if any.
     dialog: Option<Dialog>,
+    reviews: Reviews,
 }
 
 impl Shared {
@@ -72,6 +77,27 @@ impl Shared {
             .tabs
             .iter()
             .find(|tab| Some(tab.tab) == self.tab)
+    }
+
+    /// The focused leaf and its worktree, when it is a review leaf.
+    fn focused_review(&self) -> Option<(LeafId, u64)> {
+        let leaf = self.leaf?;
+        match self.tab_info()?.layout.leaf(leaf)?.content {
+            Content::Review(worktree) => Some((leaf, worktree)),
+            Content::Pane(_) => None,
+        }
+    }
+
+    /// The worktrees of the review leaves in the shown tab.
+    fn shown_reviews(&self) -> Vec<u64> {
+        self.tab_info()
+            .into_iter()
+            .flat_map(|tab| tab.layout.leaves())
+            .filter_map(|leaf| match leaf.content {
+                Content::Review(worktree) => Some(worktree),
+                Content::Pane(_) => None,
+            })
+            .collect()
     }
 
     fn title(&self, leaf: &Leaf) -> String {
@@ -147,6 +173,10 @@ pub struct Terminal {
     picker: Option<Picker>,
     /// Text selected with the mouse, for copy.
     selection: Option<Selection>,
+    /// The review leaves the last render placed.
+    review_leaves: Vec<ReviewLeaf>,
+    /// The wheel's turn over a review leaf not yet taken as a hunk step.
+    review_wheel: f32,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -189,6 +219,7 @@ impl Terminal {
             clipboard: None,
             workspaces: Workspaces::new(true, None),
             dialog: None,
+            reviews: Reviews::default(),
         }));
         // The task that reads the daemon needs the entity to be registered,
         // so the connection starts on the first render.
@@ -211,6 +242,8 @@ impl Terminal {
             default_agent,
             picker: None,
             selection: None,
+            review_leaves: Vec::new(),
+            review_wheel: 0.0,
         }
     }
 
@@ -343,6 +376,15 @@ impl Terminal {
                     if state.asked_screens.insert(pane) {
                         let _ = outgoing.send(ToDaemon::Snapshot { pane });
                     }
+                }
+                let shown = state.shown_reviews();
+                let Shared {
+                    reviews,
+                    workspaces,
+                    ..
+                } = &mut *state;
+                for request in reviews.wanted(&shown, workspaces.overview.as_ref()) {
+                    let _ = outgoing.send(request);
                 }
                 drop(state);
                 let updated = this.update(cx, |terminal, cx| {
@@ -547,10 +589,45 @@ impl Terminal {
         if before != after {
             cx.notify();
         }
-        match outcome {
-            Outcome::ToPane => self.send(InputEvent::Key(key)),
-            Outcome::Consumed => {}
-            Outcome::Run(command) => self.run(command, cx),
+        let review = self.shared().focused_review();
+        match (outcome, review) {
+            // A review leaf takes its keys itself.
+            (Outcome::ToPane, Some((leaf, worktree))) => {
+                if let Some(chord) = key.chord() {
+                    self.review_key(leaf, worktree, chord);
+                    cx.notify();
+                }
+            }
+            (Outcome::ToPane, None) => self.send(InputEvent::Key(key)),
+            (Outcome::Consumed, _) => {}
+            (Outcome::Run(command), _) => self.run(command, cx),
+        }
+    }
+
+    /// Takes a key in a focused review leaf.
+    fn review_key(&mut self, leaf: LeafId, worktree: u64, chord: twyx_core::keys::Chord) {
+        let action = self.shared().reviews.key(leaf, worktree, chord);
+        let mut shared = self.shared();
+        match action {
+            None => {}
+            Some(ReviewAction::Send(request)) => {
+                drop(shared);
+                self.request(request);
+            }
+            Some(ReviewAction::SendNotes) => {
+                let agents: Vec<PaneInfo> = shared
+                    .workspace
+                    .iter()
+                    .flat_map(|workspace| &workspace.tabs)
+                    .flat_map(|tab| tab.layout.panes())
+                    .filter_map(|pane| shared.panes.get(&pane.raw()).cloned())
+                    .collect();
+                shared.dialog = twyx_protocol::review::notes_target(worktree, &agents);
+                if shared.dialog.is_none() {
+                    shared.workspaces.message = Some("no agent runs in this workspace".to_owned());
+                }
+            }
+            Some(action) => shared.dialog = action.dialog(worktree),
         }
     }
 
@@ -1028,6 +1105,7 @@ impl Terminal {
         };
         let Some(tab) = shared.tab_info() else {
             self.mark = None;
+            self.review_leaves.clear();
             return scene;
         };
         // The leaves are placed at the leaseholder's tab area: another
@@ -1039,6 +1117,24 @@ impl Terminal {
             height: tab.rows,
         };
         let placed = tab.layout.place(area);
+        self.review_leaves = placed
+            .iter()
+            .filter(|p| p.frame && p.content)
+            .filter_map(|p| match p.leaf.content {
+                Content::Review(worktree) => {
+                    let mut bounds = grid.rect(p.inner);
+                    bounds.origin -= grid.origin;
+                    Some(ReviewLeaf {
+                        leaf: p.leaf.id,
+                        worktree,
+                        bounds,
+                        cols: p.inner.width,
+                        focused: Some(p.leaf.id) == shared.leaf,
+                    })
+                }
+                Content::Pane(_) => None,
+            })
+            .collect();
         for each in &placed {
             if !each.frame {
                 continue;
@@ -1168,6 +1264,10 @@ fn receive(state: &mut Shared, message: FromDaemon) -> Option<Effect> {
         | FromDaemon::CheckStarted { .. }
         | FromDaemon::CheckEnded(_)
         | FromDaemon::Shipped(_)) => return Some(state.workspaces.answer(&answer)),
+        FromDaemon::Review(info) => state.reviews.answer(info),
+        FromDaemon::Notes { worktree, notes } => {
+            state.reviews.notes.insert(worktree, notes);
+        }
         FromDaemon::Pane(info) => {
             state.panes.insert(info.pane, info);
         }
@@ -1180,8 +1280,6 @@ fn receive(state: &mut Shared, message: FromDaemon) -> Option<Effect> {
         | FromDaemon::Opened { .. }
         | FromDaemon::Switched { .. }
         | FromDaemon::Notify { .. }
-        | FromDaemon::Review(_)
-        | FromDaemon::Notes { .. }
         | FromDaemon::Synced { .. }
         | FromDaemon::Recipes(_)
         | FromDaemon::RecipeOpened { .. }
@@ -1242,7 +1340,26 @@ impl Render for Terminal {
             origin,
             metrics: self.metrics.clone(),
         };
-        let scene = self.scene(grid, Bounds::new(origin, area), tones, reduced);
+        let scene = Arc::new(self.scene(grid, Bounds::new(origin, area), tones, reduced));
+        let review_leaves = self.review_leaves.clone();
+        let floating_reviews: HashSet<LeafId> = scene
+            .leaves
+            .iter()
+            .filter(|shown| shown.placed.floating)
+            .map(|shown| shown.placed.leaf.id)
+            .collect();
+        let (tiled, floating): (Vec<ReviewLeaf>, Vec<ReviewLeaf>) = review_leaves
+            .into_iter()
+            .partition(|shown| !floating_reviews.contains(&shown.leaf));
+        let tiled: Vec<_> = tiled
+            .into_iter()
+            .map(|shown| self.review_leaf(shown, tones, cx))
+            .collect();
+        let floating: Vec<_> = floating
+            .into_iter()
+            .map(|shown| self.review_leaf(shown, tones, cx))
+            .collect();
+        let over = Arc::clone(&scene);
         let tab_bar = self.tab_bar(tones, reduced, cx);
         let status_bar = self.status_bar(tones, cx);
         if self.mark.is_some_and(|mark| mark.moving(reduced))
@@ -1309,10 +1426,27 @@ impl Render for Terminal {
                     .child(
                         canvas(
                             |_, _, _| {},
-                            move |_, _, window, cx| panes::paint(&scene, window, cx),
+                            move |_, _, window, cx| {
+                                panes::paint(&scene, Layer::Tiled, window, cx);
+                            },
                         )
+                        .absolute()
                         .size_full(),
-                    ),
+                    )
+                    // The review leaves lie between the tiled panes and the
+                    // floating layer.
+                    .children(tiled)
+                    .child(
+                        canvas(
+                            |_, _, _| {},
+                            move |_, _, window, cx| {
+                                panes::paint(&over, Layer::Floating, window, cx);
+                            },
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                    .children(floating),
             )
             .child(status_bar);
 

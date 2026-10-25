@@ -617,29 +617,9 @@ fn run(
                             apply!(workspaces.prompted(purpose, text));
                             None
                         }
-                        OverlayOutcome::Submitted {
-                            purpose: purpose @ Purpose::NewTask { .. },
-                            values,
-                        } => {
+                        OverlayOutcome::Submitted { purpose, values } => {
                             overlay = None;
                             apply!(workspaces.submitted(purpose, values));
-                            None
-                        }
-                        OverlayOutcome::Submitted {
-                            purpose: Purpose::PullRequest { worktree },
-                            values,
-                        } => {
-                            overlay = None;
-                            let field = |at: usize| values.get(at).cloned().unwrap_or_default();
-                            let _ = daemon.outgoing.send(ToDaemon::OpenPullRequest {
-                                worktree,
-                                title: field(0),
-                                body: field(1),
-                            });
-                            None
-                        }
-                        OverlayOutcome::Submitted { .. } => {
-                            overlay = None;
                             None
                         }
                         OverlayOutcome::Check { worktree, key } => {

@@ -134,6 +134,10 @@ fn main() -> Result<()> {
         .into();
     let cx = &mut cx;
     pump(cx, window, Duration::from_secs(3))?;
+    // `review` as the second argument renders only the review scenes.
+    if std::env::args().nth(2).as_deref() == Some("review") {
+        return review(cx, window, &out);
+    }
     shot(cx, window, &out, "1-one-pane")?;
     keys(cx, window, &["ctrl-g", "n"])?;
     keys(cx, window, &["ctrl-g", "p", "d", "escape"])?;
@@ -209,7 +213,63 @@ fn main() -> Result<()> {
     keys(cx, window, &["escape", "ctrl-g", "b"])?;
     shot(cx, window, &out, "16-undocked")?;
     keys(cx, window, &["ctrl-g", "b", "ctrl-g", "?"])?;
-    shot(cx, window, &out, "17-keys")
+    shot(cx, window, &out, "17-keys")?;
+    keys(cx, window, &["escape"])?;
+    review(cx, window, &out)
+}
+
+/// A repository with changes since its base, opened and reviewed.
+fn review(cx: &mut HeadlessAppContext, window: AnyWindowHandle, out: &Path) -> Result<()> {
+    let repo = repository()?;
+    std::fs::write(repo.join("README.md"), "scenes\nwith a second line\n")?;
+    std::fs::create_dir_all(repo.join("src"))?;
+    let body: String = (1..=30)
+        .map(|n| format!("pub fn step_{n}(value: u32) -> u32 {{\n    value + {n}\n}}\n\n"))
+        .collect();
+    std::fs::write(repo.join("src/lib.rs"), &body)?;
+    git(&repo, &["add", "src/lib.rs"])?;
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=twyx",
+            "-c",
+            "user.email=twyx@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "steps",
+        ],
+    )?;
+    let edited = body
+        .replace("value + 2\n", "value.saturating_add(2)\n")
+        .replace(
+            "pub fn step_15(value: u32) -> u32 {\n    value + 15\n}\n",
+            "/// Fifteen on, saturating.\npub fn step_15(value: u32) -> u32 {\n    value.saturating_add(15)\n}\n",
+        )
+        .replace("pub fn step_28(value: u32) -> u32 {\n    value + 28\n}\n\n", "");
+    std::fs::write(repo.join("src/lib.rs"), edited)?;
+    let twyx = std::env::var_os("TWYX_BINARY").context("TWYX_BINARY names the twyx binary")?;
+    let opened = std::process::Command::new(&twyx)
+        .arg("open")
+        .arg(&repo)
+        .status()
+        .context("run twyx open")?;
+    anyhow::ensure!(opened.success(), "twyx open {} failed", repo.display());
+    pump(cx, window, Duration::from_secs(2))?;
+    keys(cx, window, &["ctrl-g", "v"])?;
+    pump(cx, window, Duration::from_secs(2))?;
+    shot(cx, window, out, "20-review")?;
+    keys(cx, window, &["j"])?;
+    shot(cx, window, out, "21-review-second-file")?;
+    keys(cx, window, &["space"])?;
+    pump(cx, window, Duration::from_secs(1))?;
+    shot(cx, window, out, "22-review-marked")?;
+    keys(cx, window, &["s", "n"])?;
+    shot(cx, window, out, "23-review-sides")?;
+    keys(cx, window, &["shift-c"])?;
+    shot(cx, window, out, "24-review-commit")?;
+    keys(cx, window, &["escape"])
 }
 
 /// A Git repository with one commit, in a new temporary directory.
@@ -239,4 +299,14 @@ fn repository() -> Result<std::path::PathBuf> {
         anyhow::ensure!(status.success(), "git {args:?} failed");
     }
     Ok(repo)
+}
+
+fn git(repo: &Path, args: &[&str]) -> Result<()> {
+    let status = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .status()
+        .context("run git")?;
+    anyhow::ensure!(status.success(), "git {args:?} failed");
+    Ok(())
 }

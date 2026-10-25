@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use gpui::{App, Bounds, ContentMask, Pixels, Point, Window, fill, point, px, size};
-use twyx_core::layout::{Cells, Content, LeafId, Placed};
+use twyx_core::layout::{Cells, LeafId, Placed};
 use twyx_core::theme::{DESKTOP, Motion};
 use twyx_protocol::view::{Selection, View};
 
@@ -84,15 +84,30 @@ pub struct Scene {
     pub family: &'static str,
 }
 
-pub fn paint(scene: &Scene, window: &mut Window, cx: &mut App) {
-    window.paint_quad(fill(scene.bounds, scene.tones.paper));
+/// The tab area paints in two layers, so that the client's own views can
+/// lie over the tiled panes and under the floating ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layer {
+    /// The paper and the tiled leaves.
+    Tiled,
+    /// The floating leaves, the drop preview and the focus mark.
+    Floating,
+}
+
+pub fn paint(scene: &Scene, layer: Layer, window: &mut Window, cx: &mut App) {
+    if layer == Layer::Tiled {
+        window.paint_quad(fill(scene.bounds, scene.tones.paper));
+    }
     window.with_content_mask(
         Some(ContentMask {
             bounds: scene.bounds,
         }),
         |window| {
-            for shown in scene.leaves.iter().filter(|shown| !shown.placed.floating) {
-                leaf(scene, shown, window, cx);
+            if layer == Layer::Tiled {
+                for shown in scene.leaves.iter().filter(|shown| !shown.placed.floating) {
+                    leaf(scene, shown, window, cx);
+                }
+                return;
             }
             for shown in scene.leaves.iter().filter(|shown| shown.placed.floating) {
                 window.paint_quad(fill(scene.grid.rect(shown.placed.outer), scene.tones.paper));
@@ -130,17 +145,6 @@ fn leaf(scene: &Scene, shown: &Shown, window: &mut Window, cx: &mut App) {
                     selected(selection, view, inner, &grid.metrics, tones, window);
                 }
             });
-        } else if let Content::Review(_) = placed.leaf.content {
-            text(
-                window,
-                cx,
-                scene.family,
-                "this review opens in the terminal client",
-                inner.origin,
-                DESKTOP.size.caption,
-                tones.graphite,
-                false,
-            );
         }
     } else {
         // A collapsed stack child: its title row, on a rule.
