@@ -35,4 +35,9 @@ WRAPPER
   export AR_x86_64_unknown_linux_gnu="$wrapper/ar"
 fi
 
+# The desktop's Linux backends find fontconfig with pkg-config, which has no
+# Linux sysroot here; loading it at run time needs none, and a check never
+# links.
+export RUST_FONTCONFIG_DLOPEN=on
+
 cargo check --quiet --workspace --target x86_64-unknown-linux-gnu

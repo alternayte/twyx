@@ -27,6 +27,9 @@ jobs:
         with:
           tool: just,cargo-deny
       - uses: Swatinem/rust-cache@v2
+      # The desktop client's Linux backends link these.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev
       # The terminal engine, libghostty-vt, builds with Zig 0.16.
       - uses: mlugg/setup-zig@v2
         with:
@@ -58,6 +61,9 @@ jobs:
         with:
           tool: just
       - uses: Swatinem/rust-cache@v2
+      # The desktop client's Linux backends link these.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev
       # The terminal engine, libghostty-vt, builds with Zig 0.16.
       - uses: mlugg/setup-zig@v2
         with:
