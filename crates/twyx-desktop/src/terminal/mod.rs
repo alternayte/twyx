@@ -244,7 +244,10 @@ impl Terminal {
             first: None,
             clipboard: None,
             workspaces: Workspaces::new(true, None),
-            dialog: None,
+            // The first window on a machine offers the agent integrations.
+            dialog: Paths::discover()
+                .ok()
+                .and_then(|paths| twyx_protocol::offers::first_run(&paths)),
             reviews: Reviews::default(),
             notices: Vec::new(),
         }));
@@ -560,7 +563,12 @@ impl Terminal {
                 Answer::Confirmed {
                     purpose: Purpose::Integrations,
                     ..
-                } => return,
+                } => {
+                    if let Ok(paths) = Paths::discover() {
+                        workspaces.message = Some(twyx_protocol::offers::install(&paths));
+                    }
+                    return;
+                }
                 Answer::Confirmed { purpose, key } => workspaces.confirmed(purpose, key),
             }
         };
@@ -811,6 +819,36 @@ impl Terminal {
                     shared.workspaces.command(command, in_mode, shown.as_ref())
                 };
                 self.apply(effect);
+                cx.notify();
+            }
+            Command::RenameTab | Command::CopySearch | Command::Resume | Command::Integrations => {
+                // A search keeps copy mode: the holder finds the text there.
+                if command != Command::CopySearch {
+                    self.keymap.reset();
+                }
+                let offer = {
+                    let shared = self.shared();
+                    match command {
+                        Command::RenameTab => {
+                            Workspaces::rename_tab(shared.workspace.as_ref(), shared.tab)
+                                .ok_or_else(|| "no tab to rename".to_owned())
+                        }
+                        Command::CopySearch => Ok(Workspaces::copy_search()),
+                        Command::Resume => twyx_protocol::offers::resume_offer(
+                            focused_pane(&shared).and_then(|pane| shared.panes.get(&pane)),
+                            shared.workspace.as_ref(),
+                            &shared.panes,
+                        ),
+                        _ => Paths::discover()
+                            .map_err(|error| format!("{error:#}"))
+                            .and_then(|paths| twyx_protocol::offers::integrations_offer(&paths)),
+                    }
+                };
+                let mut shared = self.shared();
+                match offer {
+                    Ok(dialog) => shared.dialog = Some(dialog),
+                    Err(why) => shared.workspaces.message = Some(why),
+                }
                 cx.notify();
             }
             Command::Inbox => {

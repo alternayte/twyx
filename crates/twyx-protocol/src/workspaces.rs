@@ -251,6 +251,19 @@ impl Workspaces {
                 body: text.clone(),
             });
         }
+        if let Purpose::RenameTab { tab } = purpose {
+            effect.requests.push(ToDaemon::RenameTab {
+                tab,
+                name: text.clone(),
+            });
+        }
+        if purpose == Purpose::CopySearch {
+            effect
+                .requests
+                .push(ToDaemon::Copy(crate::holder::CopyAction::Search(
+                    text.clone(),
+                )));
+        }
         if let Purpose::Commit { worktree } = purpose {
             effect.requests.push(ToDaemon::Commit {
                 worktree,
@@ -310,6 +323,8 @@ impl Workspaces {
             | Purpose::Commit { .. }
             | Purpose::PullRequest { .. }
             | Purpose::Integrations
+            | Purpose::RenameTab { .. }
+            | Purpose::CopySearch
             | Purpose::NewTask { .. }
             | Purpose::Note { .. } => {}
         }
@@ -574,6 +589,31 @@ impl Workspaces {
             },
         }
         effect
+    }
+
+    /// The prompt for a tab's new name, with its name now.
+    pub fn rename_tab(shown: Option<&WorkspaceInfo>, tab: Option<u64>) -> Option<Dialog> {
+        let tab = tab?;
+        let name = shown?
+            .tabs
+            .iter()
+            .find(|each| each.tab == tab)
+            .map(|each| each.name.clone())
+            .unwrap_or_default();
+        Some(Dialog::Prompt {
+            title: "rename tab".to_owned(),
+            text: name,
+            purpose: Purpose::RenameTab { tab },
+        })
+    }
+
+    /// The prompt for a copy mode search.
+    pub fn copy_search() -> Dialog {
+        Dialog::Prompt {
+            title: "search".to_owned(),
+            text: String::new(),
+            purpose: Purpose::CopySearch,
+        }
     }
 
     /// The trust prompt for a worktree's repository check file, when it

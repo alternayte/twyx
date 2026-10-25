@@ -23,11 +23,6 @@ pub enum Outcome {
     Stay,
     Close,
     Choose(Choice),
-    Rename {
-        tab: u64,
-        name: String,
-    },
-    Search(String),
     Prompted {
         purpose: Purpose,
         text: String,
@@ -59,27 +54,14 @@ pub enum Overlay {
     /// The command palette, or the switcher over projects, worktrees and
     /// workspaces.
     Picker(Picker),
-    Rename {
-        tab: u64,
-        name: String,
-    },
-    /// The needle for a copy mode search.
-    Search(String),
     /// A prompt, a form or a confirmation.
     Dialog(Dialog),
     /// The inbox, newest first.
-    Inbox {
-        selected: usize,
-    },
+    Inbox { selected: usize },
     /// Every bound key, by mode.
-    Keys {
-        scroll: usize,
-    },
+    Keys { scroll: usize },
     /// A worktree's checks with their last results.
-    Checks {
-        worktree: u64,
-        selected: usize,
-    },
+    Checks { worktree: u64, selected: usize },
 }
 
 impl Overlay {
@@ -128,19 +110,6 @@ impl Overlay {
                 .min(end);
                 Outcome::Stay
             }
-            Overlay::Search(needle) => match (chord.key, typed) {
-                (Key::Escape, _) => Outcome::Close,
-                (Key::Enter, _) => Outcome::Search(needle.clone()),
-                (Key::Backspace, _) => {
-                    needle.pop();
-                    Outcome::Stay
-                }
-                (_, Some(ch)) => {
-                    needle.push(ch);
-                    Outcome::Stay
-                }
-                _ => Outcome::Stay,
-            },
             Overlay::Dialog(dialog) => match dialog.key(chord) {
                 Answer::Stay => Outcome::Stay,
                 Answer::Close => Outcome::Close,
@@ -171,22 +140,6 @@ impl Overlay {
                     },
                 }
             }
-            Overlay::Rename { tab, name } => match (chord.key, typed) {
-                (Key::Escape, _) => Outcome::Close,
-                (Key::Enter, _) => Outcome::Rename {
-                    tab: *tab,
-                    name: name.trim().to_owned(),
-                },
-                (Key::Backspace, _) => {
-                    name.pop();
-                    Outcome::Stay
-                }
-                (_, Some(ch)) => {
-                    name.push(ch);
-                    Outcome::Stay
-                }
-                _ => Outcome::Stay,
-            },
         }
     }
 
@@ -195,9 +148,7 @@ impl Overlay {
         let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
         match self {
             Overlay::Picker(picker) => picker.paste(&text),
-            Overlay::Rename { name, .. } => name.push_str(&text),
             Overlay::Dialog(dialog) => dialog.paste(&text),
-            Overlay::Search(needle) => needle.push_str(&text),
             Overlay::Inbox { .. } | Overlay::Checks { .. } | Overlay::Keys { .. } => {}
         }
     }
@@ -322,22 +273,6 @@ impl Overlay {
                 pen: scene.pen,
                 sections: &scene.keymap.sheet(),
                 scroll: *scroll,
-            }
-            .render(area, buf),
-            Overlay::Rename { name, .. } => Palette {
-                pen: scene.pen,
-                title: "rename tab",
-                query: name,
-                entries: &[],
-                selected: 0,
-            }
-            .render(area, buf),
-            Overlay::Search(needle) => Palette {
-                pen: scene.pen,
-                title: "search",
-                query: needle,
-                entries: &[],
-                selected: 0,
             }
             .render(area, buf),
             Overlay::Dialog(Dialog::Prompt { title, text, .. }) => Palette {

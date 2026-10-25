@@ -300,7 +300,7 @@ fn run(
     let mut dirty = true;
     let mut mouse = Mouse::default();
     // The first client to start offers the agent integrations.
-    let mut overlay: Option<Overlay> = crate::agents::first_run(paths);
+    let mut overlay: Option<Overlay> = twyx_protocol::offers::first_run(paths).map(Overlay::Dialog);
     let mut workspaces = Workspaces::new(false, Some(crate::chrome::dialog::fits));
     let mut reviews = crate::review::Reviews::default();
     let _ = daemon.outgoing.send(ToDaemon::WatchOverview);
@@ -602,18 +602,6 @@ fn run(
                             overlay = None;
                             None
                         }
-                        OverlayOutcome::Search(needle) => {
-                            overlay = None;
-                            let _ = daemon
-                                .outgoing
-                                .send(ToDaemon::Copy(CopyAction::Search(needle)));
-                            None
-                        }
-                        OverlayOutcome::Rename { tab, name } => {
-                            overlay = None;
-                            let _ = daemon.outgoing.send(ToDaemon::RenameTab { tab, name });
-                            None
-                        }
                         OverlayOutcome::Prompted { purpose, text } => {
                             overlay = None;
                             apply!(workspaces.prompted(purpose, text));
@@ -645,7 +633,7 @@ fn run(
                             ..
                         } => {
                             overlay = None;
-                            workspaces.message = Some(crate::agents::install(paths));
+                            workspaces.message = Some(twyx_protocol::offers::install(paths));
                             None
                         }
                         OverlayOutcome::Confirmed { purpose, key } => {
@@ -748,12 +736,12 @@ fn run(
                     Some(Command::Resume) => {
                         keymap.reset();
                         let focused = follow.shown.and_then(|pane| panes.get(&pane));
-                        match crate::agents::resume_offer(
+                        match twyx_protocol::offers::resume_offer(
                             focused,
                             follow.workspace.as_ref(),
                             &panes,
                         ) {
-                            Ok(offer) => overlay = Some(offer),
+                            Ok(offer) => overlay = Some(Overlay::Dialog(offer)),
                             Err(why) => workspaces.message = Some(why),
                         }
                     }
@@ -792,13 +780,13 @@ fn run(
                     }
                     Some(Command::Integrations) => {
                         keymap.reset();
-                        match crate::agents::integrations_offer(paths) {
-                            Ok(offer) => overlay = Some(offer),
+                        match twyx_protocol::offers::integrations_offer(paths) {
+                            Ok(offer) => overlay = Some(Overlay::Dialog(offer)),
                             Err(why) => workspaces.message = Some(why),
                         }
                     }
                     Some(Command::CopySearch) => {
-                        overlay = Some(Overlay::Search(String::new()));
+                        overlay = Some(Overlay::Dialog(Workspaces::copy_search()));
                     }
                     Some(Command::CopyYank) => {
                         // The holder leaves copy mode once it has copied.
@@ -807,15 +795,8 @@ fn run(
                     }
                     Some(Command::RenameTab) => {
                         keymap.reset();
-                        if let Some(tab) = follow.tab {
-                            let name = follow
-                                .workspace
-                                .as_ref()
-                                .and_then(|workspace| workspace.tabs.iter().find(|t| t.tab == tab))
-                                .map(|tab| tab.name.clone())
-                                .unwrap_or_default();
-                            overlay = Some(Overlay::Rename { tab, name });
-                        }
+                        overlay = Workspaces::rename_tab(follow.workspace.as_ref(), follow.tab)
+                            .map(Overlay::Dialog);
                     }
                     Some(
                         command @ (Command::ToggleSidebar

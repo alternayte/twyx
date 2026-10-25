@@ -1,16 +1,13 @@
-//! Agent offers in the TUI: Resume for ended agent panes, and the agent
-//! integrations, on first run and from the palette.
+//! The agent offers both clients make: Resume for ended agent panes, and
+//! the agent integrations, on first run and from the palette.
 
 use std::collections::HashMap;
 
+use crate::client::{PaneInfo, WorkspaceInfo};
+use crate::dialog::{Dialog, Purpose};
 use twyx_core::agent::AgentKinds;
 use twyx_core::integration::{self, Locations};
 use twyx_core::paths::Paths;
-use twyx_protocol::client::{PaneInfo, WorkspaceInfo};
-
-use twyx_protocol::dialog::Dialog;
-
-use crate::overlay::{Overlay, Purpose};
 
 /// The file whose presence says the first-run offer was made.
 fn offered(paths: &Paths) -> std::path::PathBuf {
@@ -23,7 +20,7 @@ pub fn resume_offer(
     focused: Option<&PaneInfo>,
     workspace: Option<&WorkspaceInfo>,
     panes: &HashMap<u64, PaneInfo>,
-) -> Result<Overlay, String> {
+) -> Result<Dialog, String> {
     let Some((focused, kind)) =
         focused.and_then(|pane| pane.resume.as_ref().map(|kind| (pane, kind)))
     else {
@@ -51,7 +48,7 @@ pub fn resume_offer(
     if all.len() > 1 {
         keys.push(('a', format!("resume all {}", all.len())));
     }
-    Ok(Overlay::Dialog(Dialog::Confirm {
+    Ok(Dialog::Confirm {
         title: "resume agent sessions".to_owned(),
         lines,
         keys,
@@ -59,12 +56,12 @@ pub fn resume_offer(
             this: focused.pane,
             all,
         },
-    }))
+    })
 }
 
 /// The integrations offer for the agents on `PATH` that lack one, once:
 /// the first time any client asks.
-pub fn first_run(paths: &Paths) -> Option<Overlay> {
+pub fn first_run(paths: &Paths) -> Option<Dialog> {
     let marker = offered(paths);
     if marker.exists() {
         return None;
@@ -78,7 +75,7 @@ pub fn first_run(paths: &Paths) -> Option<Overlay> {
 }
 
 /// One confirmation that lists every file change the integrations make.
-pub fn integrations_offer(paths: &Paths) -> Result<Overlay, String> {
+pub fn integrations_offer(paths: &Paths) -> Result<Dialog, String> {
     let kinds =
         AgentKinds::load(&paths.config.join("agents")).map_err(|error| error.to_string())?;
     let at = Locations::from_env().map_err(|error| format!("{error:#}"))?;
@@ -105,12 +102,12 @@ pub fn integrations_offer(paths: &Paths) -> Result<Overlay, String> {
     lines.push(
         "Without them, state comes from the screen. The palette offers this again.".to_owned(),
     );
-    Ok(Overlay::Dialog(Dialog::Confirm {
+    Ok(Dialog::Confirm {
         title: "agent integrations".to_owned(),
         lines,
         keys: vec![('y', "install".to_owned())],
         purpose: Purpose::Integrations,
-    }))
+    })
 }
 
 /// Installs every offered integration; the outcome, for the status bar.

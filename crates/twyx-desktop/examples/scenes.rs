@@ -150,6 +150,8 @@ fn main() -> Result<()> {
         .into();
     let cx = &mut cx;
     pump(cx, window, Duration::from_secs(3))?;
+    // The first window offers the agent integrations when any is on PATH.
+    keys(cx, window, &["escape"])?;
     // `review` as the second argument renders only the review scenes.
     if std::env::args().nth(2).as_deref() == Some("review") {
         return review(cx, window, &out, &file);
@@ -317,6 +319,16 @@ fn review(
     shot(cx, window, out, "29-inbox-dismissed")?;
     keys(cx, window, &["enter"])?;
     shot(cx, window, out, "30-inbox-jumped")?;
+
+    // A tab takes a new name; copy mode finds text in a shell.
+    keys(cx, window, &["ctrl-g", "t", "r", "space", "r", "u", "n"])?;
+    shot(cx, window, out, "30a-rename-tab")?;
+    keys(cx, window, &["enter", "escape", "ctrl-g", "1"])?;
+    keys(cx, window, &["ctrl-g", "c", "/", "t", "w", "y", "x"])?;
+    shot(cx, window, out, "30b-copy-search")?;
+    keys(cx, window, &["enter"])?;
+    shot(cx, window, out, "30c-copy-found")?;
+    keys(cx, window, &["escape"])?;
 
     // The theme follows config.toml as it changes; a bad file keeps it.
     std::fs::create_dir_all(file.parent().context("a config directory")?)?;

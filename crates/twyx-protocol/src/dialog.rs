@@ -50,6 +50,12 @@ pub enum Purpose {
         worktree: u64,
         hash: String,
     },
+    /// A tab's new name; an empty one gives the tab its pane's title again.
+    RenameTab {
+        tab: u64,
+    },
+    /// Text to find in copy mode, as typed.
+    CopySearch,
     /// Send a worktree's open notes to one of these agent panes, by digit.
     SendNotes {
         worktree: u64,
@@ -58,6 +64,16 @@ pub enum Purpose {
 }
 
 impl Purpose {
+    /// Whether a prompt takes empty text.
+    fn takes_empty(&self) -> bool {
+        matches!(self, Purpose::RenameTab { .. })
+    }
+
+    /// Whether a prompt's text loses the spaces at its ends.
+    fn trims(&self) -> bool {
+        !matches!(self, Purpose::CopySearch)
+    }
+
     /// The line a form shows above its fields.
     pub fn hint(&self) -> Option<&'static str> {
         match self {
@@ -133,10 +149,16 @@ impl Dialog {
         match self {
             Dialog::Prompt { text, purpose, .. } => match (chord.key, typed) {
                 (Key::Escape, _) => Answer::Close,
-                (Key::Enter, _) if !text.trim().is_empty() => Answer::Prompted {
-                    purpose: purpose.clone(),
-                    text: text.trim().to_owned(),
-                },
+                (Key::Enter, _) if purpose.takes_empty() || !text.trim().is_empty() => {
+                    Answer::Prompted {
+                        purpose: purpose.clone(),
+                        text: if purpose.trims() {
+                            text.trim().to_owned()
+                        } else {
+                            text.clone()
+                        },
+                    }
+                }
                 (Key::Backspace, _) => {
                     text.pop();
                     Answer::Stay

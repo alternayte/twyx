@@ -11,6 +11,7 @@ pub mod grid;
 pub mod holder;
 pub mod input;
 pub mod lists;
+pub mod offers;
 pub mod palette;
 pub mod peer;
 pub mod review;

@@ -3,7 +3,6 @@
 //! Ratatui draws the chrome into a buffer. Pane cells go into the frame grid
 //! directly, through the twyx emitter.
 
-pub mod agents;
 pub mod app;
 pub mod chrome;
 pub mod compositor;
