@@ -195,7 +195,7 @@ fn main() -> Result<()> {
     println!("copied: {copied:?}");
 
     // A Git project, opened from the CLI, shows in the sidebar.
-    let repo = repository()?;
+    let repo = repository("scenes")?;
     let twyx = std::env::var_os("TWYX_BINARY").context("TWYX_BINARY names the twyx binary")?;
     let opened = std::process::Command::new(twyx)
         .arg("open")
@@ -225,7 +225,7 @@ fn main() -> Result<()> {
 
 /// A repository with changes since its base, opened and reviewed.
 fn review(cx: &mut HeadlessAppContext, window: AnyWindowHandle, out: &Path) -> Result<()> {
-    let repo = repository()?;
+    let repo = repository("review")?;
     std::fs::write(repo.join("README.md"), "scenes\nwith a second line\n")?;
     std::fs::create_dir_all(repo.join("src"))?;
     let body: String = (1..=30)
@@ -303,9 +303,10 @@ fn review(cx: &mut HeadlessAppContext, window: AnyWindowHandle, out: &Path) -> R
     shot(cx, window, out, "30-inbox-jumped")
 }
 
-/// A Git repository with one commit, in a new temporary directory.
-fn repository() -> Result<std::path::PathBuf> {
-    let repo = std::env::temp_dir().join(format!("twyx-scenes-{}", std::process::id()));
+/// A Git repository with one commit, in a new temporary directory named
+/// after `name`.
+fn repository(name: &str) -> Result<std::path::PathBuf> {
+    let repo = std::env::temp_dir().join(format!("twyx-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&repo)?;
     std::fs::write(repo.join("README.md"), "scenes\n")?;
     for args in [
