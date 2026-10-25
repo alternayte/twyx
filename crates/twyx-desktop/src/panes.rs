@@ -130,7 +130,7 @@ pub fn paint(scene: &Scene, layer: Layer, window: &mut Window, cx: &mut App) {
 
 fn leaf(scene: &Scene, shown: &Shown, window: &mut Window, cx: &mut App) {
     let (grid, tones) = (&scene.grid, scene.tones);
-    let placed = shown.placed;
+    let placed = &shown.placed;
     let outer = grid.rect(placed.outer);
     let frame = grid.frame(placed.outer);
     let line = grid.metrics.line_height;
@@ -193,7 +193,7 @@ fn selected(
 /// The title over a frame's top rule, on paper so the rule breaks for it.
 fn title(scene: &Scene, shown: &Shown, window: &mut Window, cx: &mut App) {
     let (grid, tones) = (&scene.grid, scene.tones);
-    let placed = shown.placed;
+    let placed = &shown.placed;
     let outer = grid.rect(placed.outer);
     let (cell, line) = (grid.metrics.cell_width, grid.metrics.line_height);
     let room = usize::from(placed.outer.width.saturating_sub(4));

@@ -38,10 +38,7 @@ impl Choice {
                 switch: true,
             },
             Choice::Go(Target::Pane(leaf)) => ToDaemon::FocusLeaf { leaf: *leaf },
-            Choice::File(path) => ToDaemon::OpenInEditor {
-                path: path.clone(),
-                line: None,
-            },
+            Choice::File(path) => crate::files::open(path.clone()),
         })
     }
 }

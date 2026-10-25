@@ -86,7 +86,7 @@ impl Terminal {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                    this.focus_review(leaf);
+                    this.focus_leaf(leaf);
                     cx.notify();
                     cx.stop_propagation();
                 }),
@@ -232,7 +232,7 @@ impl Terminal {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                            this.focus_review(leaf);
+                            this.focus_leaf(leaf);
                             this.shared().reviews.choose_file(leaf, index);
                             cx.notify();
                             cx.stop_propagation();
@@ -478,7 +478,7 @@ impl Terminal {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                            this.focus_review(leaf);
+                            this.focus_leaf(leaf);
                             this.shared().reviews.choose_hunk(leaf, index);
                             cx.notify();
                             cx.stop_propagation();
@@ -564,7 +564,7 @@ impl Terminal {
     }
 
     /// Focuses a review leaf a click landed in.
-    fn focus_review(&self, leaf: LeafId) {
+    pub(super) fn focus_leaf(&self, leaf: LeafId) {
         if self.shared().leaf != Some(leaf) {
             self.request(ToDaemon::FocusLeaf { leaf });
         }
@@ -578,7 +578,7 @@ fn shown_text(text: &str) -> String {
 }
 
 /// A line in its tokens' colours, laid out as `shown_text` lays it out.
-fn coloured(text: &str, tokens: &Tokens, tones: Tones, palette: Palette) -> StyledText {
+pub(super) fn coloured(text: &str, tokens: &Tokens, tones: Tones, palette: Palette) -> StyledText {
     let mut shown = String::new();
     let mut runs = Vec::new();
     let mut end = 0;

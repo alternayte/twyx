@@ -286,6 +286,7 @@ impl Client {
             | FromDaemon::Shipped(_)
             | FromDaemon::Files(_)
             | FromDaemon::Found(_)
+            | FromDaemon::Document(_)
             | FromDaemon::Synced { .. } => {}
         }
     }

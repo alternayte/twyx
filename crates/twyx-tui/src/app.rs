@@ -30,6 +30,7 @@ use twyx_protocol::wire;
 use crate::chrome::sidebar::Sidebar;
 use crate::chrome::{Depth, Pen};
 use crate::compositor::{CHROME_ROWS, Scene, SidebarScene, tab_area};
+use crate::document::{self, DocKey, Documents, Tops};
 use crate::emitter::{Capabilities, Emitter};
 use crate::input;
 use crate::mouse::{Action, Mouse};
@@ -219,8 +220,32 @@ impl Follow {
             .find(|tab| Some(tab.tab) == self.tab)?;
         match tab.layout.leaf(self.leaf?)?.content {
             Content::Review(worktree) => Some((self.leaf?, worktree)),
-            Content::Pane(_) => None,
+            Content::Pane(_) | Content::Document(_) => None,
         }
+    }
+
+    /// The focused leaf when it is a document.
+    fn focused_document(&self) -> Option<LeafId> {
+        let tab = self
+            .workspace
+            .as_ref()?
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.tab) == self.tab)?;
+        let leaf = tab.layout.leaf(self.leaf?)?;
+        matches!(leaf.content, Content::Document(_)).then_some(leaf.id)
+    }
+
+    /// The document leaves in the shown tab.
+    fn shown_documents(&self) -> Vec<LeafId> {
+        self.workspace
+            .iter()
+            .flat_map(|workspace| &workspace.tabs)
+            .filter(|tab| Some(tab.tab) == self.tab)
+            .flat_map(|tab| tab.layout.leaves())
+            .filter(|leaf| matches!(leaf.content, Content::Document(_)))
+            .map(|leaf| leaf.id)
+            .collect()
     }
 
     /// The worktrees of the review leaves in the shown tab.
@@ -232,7 +257,7 @@ impl Follow {
             .flat_map(|tab| tab.layout.leaves())
             .filter_map(|leaf| match leaf.content {
                 Content::Review(worktree) => Some(worktree),
-                Content::Pane(_) => None,
+                Content::Pane(_) | Content::Document(_) => None,
             })
             .collect()
     }
@@ -303,6 +328,8 @@ fn run(
     let mut overlay: Option<Overlay> = twyx_protocol::offers::first_run(paths).map(Overlay::Dialog);
     let mut workspaces = Workspaces::new(false, Some(crate::chrome::dialog::fits));
     let mut reviews = crate::review::Reviews::default();
+    let mut documents = Documents::default();
+    let mut tops = Tops::default();
     let _ = daemon.outgoing.send(ToDaemon::WatchOverview);
     if let Some(colours) = screen.pane_colours() {
         let _ = daemon.outgoing.send(ToDaemon::Colours(colours));
@@ -329,6 +356,8 @@ fn run(
                 overview: workspaces.overview.as_ref(),
                 inbox: &workspaces.inbox,
                 reviews: &reviews,
+                documents: &documents,
+                tops: &tops,
                 checks: workspaces.checks.as_ref(),
                 files: workspaces
                     .files
@@ -424,6 +453,7 @@ fn run(
                     screen.write(&format!("\x1b]52;c;{encoded}\x1b\\"))?;
                 }
                 FromDaemon::Review(info) => reviews.answer(info),
+                FromDaemon::Document(text) => documents.answer(text),
                 FromDaemon::Notes { worktree, notes } => {
                     reviews.notes.insert(worktree, notes);
                 }
@@ -556,6 +586,9 @@ fn run(
         }
 
         for request in reviews.wanted(&follow.shown_reviews(), workspaces.overview.as_ref()) {
+            let _ = daemon.outgoing.send(request);
+        }
+        for request in documents.wanted(&follow.shown_documents()) {
             let _ = daemon.outgoing.send(request);
         }
 
@@ -701,6 +734,41 @@ fn run(
                         workspaces.focus_current();
                     }
                     match outcome {
+                        // A document leaf takes its keys itself.
+                        Outcome::ToPane
+                            if follow.focused_document().is_some() && chord.is_some() =>
+                        {
+                            let (Some(leaf), Some(chord)) = (follow.focused_document(), chord)
+                            else {
+                                continue;
+                            };
+                            let key = documents.key(leaf, chord);
+                            match &key {
+                                DocKey::Send(request) => {
+                                    let _ = daemon.outgoing.send(request.clone());
+                                }
+                                DocKey::Browse(address) => {
+                                    workspaces.message = Some(browse(screen, address)?);
+                                }
+                                DocKey::Notice(notice) => {
+                                    workspaces.message = Some(notice.clone());
+                                }
+                                _ => {
+                                    let scene = scene!();
+                                    if let (Some(placed), Some(shown)) = (
+                                        scene.placed().into_iter().find(|p| p.leaf.id == leaf),
+                                        documents.shown.get(&leaf),
+                                    ) {
+                                        let laid = document::lay(
+                                            &shown.document,
+                                            document::text_width(placed.inner.width),
+                                        );
+                                        tops.apply(leaf, &key, &laid, placed.inner.height);
+                                    }
+                                }
+                            }
+                            None
+                        }
                         // A review leaf takes its keys itself.
                         Outcome::ToPane => match (follow.focused_review(), chord) {
                             (Some((leaf, worktree)), Some(chord)) => {
@@ -941,6 +1009,31 @@ fn working_directory() -> String {
 }
 
 /// The outer terminal, from raw mode to the restored screen.
+/// Opens an address the reader agreed to in this machine's browser; over
+/// SSH, or without an opener, puts it on the outer terminal's clipboard.
+fn browse(screen: &mut Screen, address: &str) -> Result<String> {
+    if std::env::var_os("SSH_CONNECTION").is_none() {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        if let Ok(mut child) = std::process::Command::new(opener)
+            .arg(address)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            std::thread::spawn(move || child.wait());
+            return Ok(format!("opened {address}"));
+        }
+    }
+    let encoded = base64::engine::general_purpose::STANDARD.encode(address.as_bytes());
+    screen.write(&format!("\x1b]52;c;{encoded}\x1b\\"))?;
+    Ok(format!("copied {address}"))
+}
+
 pub struct Screen {
     pub emitter: Emitter<std::io::Stdout>,
     capabilities: Capabilities,

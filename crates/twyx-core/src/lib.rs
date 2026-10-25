@@ -12,6 +12,7 @@ pub mod integration;
 pub mod keys;
 pub mod launch;
 pub mod layout;
+pub mod markdown;
 pub mod palette;
 pub mod pane;
 pub mod paths;

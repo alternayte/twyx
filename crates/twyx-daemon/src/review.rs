@@ -49,11 +49,12 @@ impl Daemon {
                     return;
                 };
                 let leaf = self.new_review_leaf(worktree);
+                let id = leaf.id;
                 if let Some(entry) = self.tab_mut(tab) {
                     entry.layout.split(None, leaf, twyx_core::layout::Axis::Row);
-                    entry.focus = Some(leaf.id);
+                    entry.focus = Some(id);
                 }
-                leaf.id
+                id
             }
         };
         self.show_leaf(client, workspace, leaf);

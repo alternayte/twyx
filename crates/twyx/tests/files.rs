@@ -9,7 +9,8 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use twyx_protocol::client::{FileList, FoundText, FromDaemon, Launch, ToDaemon};
+use twyx_core::layout::{Content, LeafId};
+use twyx_protocol::client::{DocumentText, FileList, FoundText, FromDaemon, Launch, ToDaemon};
 
 use support::{Client, Sandbox, git, repo};
 
@@ -209,4 +210,87 @@ fn open_in_neovim_starts_neovim_then_uses_the_running_one() {
         _ => None,
     });
     assert_eq!(client.panes.len(), panes, "no second Neovim");
+}
+
+/// The document leaves of the shown workspace: leaf and path.
+fn documents(client: &Client) -> Vec<(LeafId, String)> {
+    client
+        .workspace
+        .iter()
+        .flat_map(|shown| &shown.tabs)
+        .flat_map(|tab| tab.layout.leaves())
+        .filter_map(|leaf| match leaf.content {
+            Content::Document(path) => Some((leaf.id, path)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn read(client: &mut Client, leaf: LeafId, since: Option<i64>) -> DocumentText {
+    client.send(&ToDaemon::Document { leaf, since }).unwrap();
+    client.expect("the document", |message| match message {
+        FromDaemon::Document(document) => Some(document.clone()),
+        _ => None,
+    })
+}
+
+/// The daemon answers an unchanged file with nothing: it reads no file,
+/// so the `Synced` after the request comes first and alone.
+fn unchanged(client: &mut Client, leaf: LeafId, since: Option<i64>) {
+    client.send(&ToDaemon::Document { leaf, since }).unwrap();
+    client.send(&ToDaemon::Sync { token: 7 }).unwrap();
+    client.expect("the request handled", |message| match message {
+        FromDaemon::Document(document) => panic!("sent again: {document:?}"),
+        FromDaemon::Synced { token: 7 } => Some(()),
+        _ => None,
+    });
+}
+
+#[test]
+fn a_document_opens_once_and_is_sent_again_only_when_it_changes() {
+    let mut sandbox = Sandbox::new("dc");
+    sandbox.start();
+    let main = repo(&sandbox, "app");
+    write(&main.join("docs/guide.md"), "# Guide\n");
+
+    let mut client = sandbox.connect(80, 24);
+    open(&mut client, &main);
+    let tabs = client.workspace.as_ref().unwrap().tabs.len();
+    for _ in 0..2 {
+        client
+            .send(&ToDaemon::OpenDocument {
+                path: "docs/guide.md".to_owned(),
+            })
+            .unwrap();
+        client.wait_until("the document leaf", |c| documents(c).len() == 1);
+    }
+    assert_eq!(
+        client.workspace.as_ref().unwrap().tabs.len(),
+        tabs + 1,
+        "opening the same file again shows its leaf"
+    );
+    let (leaf, path) = documents(&client).remove(0);
+    let guide = main.join("docs/guide.md");
+    assert_eq!(path, guide.to_string_lossy());
+
+    let first = read(&mut client, leaf, None);
+    assert_eq!(first.text, "# Guide\n");
+    assert_eq!(first.root, main.to_string_lossy());
+    assert_eq!(first.error, None);
+    unchanged(&mut client, leaf, first.modified);
+
+    write(&guide, "# Guide\n\nMore.\n");
+    let later = std::time::SystemTime::now() + Duration::from_secs(2);
+    std::fs::File::options()
+        .write(true)
+        .open(&guide)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    let second = read(&mut client, leaf, first.modified);
+    assert_eq!(second.text, "# Guide\n\nMore.\n");
+
+    std::fs::remove_file(&guide).unwrap();
+    let gone = read(&mut client, leaf, second.modified);
+    assert!(gone.error.is_some(), "{gone:?}");
 }

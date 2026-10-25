@@ -17,7 +17,7 @@ use crate::worktrees::Done;
 
 impl Daemon {
     /// The workspace's directory, and whether it is a Git worktree.
-    fn file_root(&self, workspace: u64) -> Option<(PathBuf, bool)> {
+    pub(crate) fn file_root(&self, workspace: u64) -> Option<(PathBuf, bool)> {
         let entry = self.workspaces.get(&workspace)?;
         let worktree = entry
             .worktree

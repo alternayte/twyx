@@ -77,7 +77,8 @@ const SCOPES: [(&str, Slot); 8] = [
     ("comment, punctuation.definition.comment", Slot::Graphite),
 ];
 
-/// Each hunk's tokens, by path and hunk id.
+/// Each hunk's tokens, by path and hunk id; each code block's, by its
+/// language and a hash of its text.
 type Cache = HashMap<(String, u64), Arc<Vec<Tokens>>>;
 
 /// The most hunks whose colours stay cached.
@@ -158,6 +159,46 @@ impl Highlighter {
         }
         cache.insert(key, Arc::clone(&lines));
         Some(lines)
+    }
+
+    /// Each line's tokens in a code block in `language`, a fence's info
+    /// word such as `rust` or `sh`. `None` when no grammar knows it.
+    pub fn code(&self, language: &str, text: &str) -> Option<Arc<Vec<Tokens>>> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut hasher);
+        let key = (format!("```{language}"), hasher.finish());
+        if let Some(found) = self.lock().get(&key) {
+            return Some(Arc::clone(found));
+        }
+        let (syntaxes, theme) = self.loaded();
+        let syntax = syntaxes
+            .find_syntax_by_token(language)
+            .filter(|syntax| syntax.name != "Plain Text")?;
+        let mut lines = HighlightLines::new(syntax, theme);
+        let tokens: Vec<Tokens> = text
+            .lines()
+            .map(|text| {
+                let line = format!("{text}\n");
+                let mut at = 0;
+                let mut tokens = Tokens::new();
+                for (style, piece) in lines.highlight_line(&line, syntaxes).unwrap_or_default() {
+                    let end = (at + piece.len()).min(text.len());
+                    if at < end {
+                        tokens.push((at..end, Slot::of(style.foreground)));
+                    }
+                    at += piece.len();
+                }
+                tokens
+            })
+            .collect();
+        let tokens = Arc::new(tokens);
+        let mut cache = self.lock();
+        if cache.len() >= CACHED {
+            cache.clear();
+        }
+        cache.insert(key, Arc::clone(&tokens));
+        Some(tokens)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Cache> {

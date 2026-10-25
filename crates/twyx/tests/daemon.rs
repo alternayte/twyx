@@ -237,7 +237,7 @@ fn a_shell_pane_closes_with_its_shell_and_a_command_pane_stays_to_run_again() {
             leaf: client
                 .workspace
                 .as_ref()
-                .and_then(|workspace| workspace.tabs[0].layout.leaves().first().copied())
+                .and_then(|workspace| workspace.tabs[0].layout.leaves().first().cloned())
                 .expect("a leaf")
                 .id,
         })

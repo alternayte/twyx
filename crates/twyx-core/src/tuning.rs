@@ -137,3 +137,15 @@ pub const FOUND_FILE_BYTES: u64 = 2 << 20;
 
 /// The longest line a search result keeps, in characters.
 pub const FOUND_LINE_CHARS: usize = 300;
+
+/// The longest document a client is sent, in bytes.
+pub const DOCUMENT_BYTES: u64 = 4 << 20;
+
+/// How often a client asks whether a shown document changed.
+pub const DOCUMENT_REFRESH: Duration = Duration::from_millis(500);
+
+/// The largest remote image the desktop fetches, in bytes.
+pub const REMOTE_IMAGE_BYTES: u64 = 16 << 20;
+
+/// How long the desktop waits for one remote image.
+pub const REMOTE_IMAGE_TIMEOUT: Duration = Duration::from_secs(20);

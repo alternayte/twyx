@@ -457,9 +457,11 @@ impl Daemon {
     fn reconcile(&mut self) {
         for (_, tab) in &mut self.tabs {
             for leaf in tab.layout.leaves() {
-                let known = match leaf.content {
-                    Content::Pane(pane) => self.panes.contains_key(&pane),
-                    Content::Review(worktree) => self.worktrees.contains_key(&worktree),
+                let known = match &leaf.content {
+                    Content::Pane(pane) => self.panes.contains_key(pane),
+                    Content::Review(worktree) => self.worktrees.contains_key(worktree),
+                    // A missing file shows as an error in the document.
+                    Content::Document(_) => true,
                 };
                 if !known {
                     tab.layout.remove(leaf.id);
@@ -495,11 +497,12 @@ impl Daemon {
             for pane in recovered {
                 let leaf = self.new_leaf(pane);
                 if let Some(tab) = self.tab_mut(tab) {
+                    let id = leaf.id;
                     match tab.focus {
                         Some(last) => tab.layout.stack(last, leaf),
                         None => tab.layout.split(None, leaf, Axis::Row),
                     }
-                    tab.focus = Some(leaf.id);
+                    tab.focus = Some(id);
                 }
             }
         }
@@ -746,6 +749,8 @@ impl Daemon {
             ToDaemon::Files { workspace } => self.files(id, workspace),
             ToDaemon::FindInFiles { workspace, query } => self.find_in_files(id, workspace, query),
             ToDaemon::OpenInEditor { path, line } => self.open_in_editor(id, path, line),
+            ToDaemon::OpenDocument { path } => self.open_document(id, path),
+            ToDaemon::Document { leaf, since } => self.document(id, leaf, since),
             ToDaemon::Colours(colours) => self.set_client_colours(id, colours),
             ToDaemon::OpenReview { worktree } => self.open_review(id, worktree),
             ToDaemon::Notes { worktree } => self.notes(id, worktree),

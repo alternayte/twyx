@@ -18,7 +18,7 @@ use crate::tuning;
 pub struct LeafId(pub u64);
 
 /// What a leaf shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "RawLeaf", into = "RawLeaf")]
 pub struct Leaf {
     pub id: LeafId,
@@ -26,11 +26,12 @@ pub struct Leaf {
 }
 
 /// A terminal, or a view the client draws itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Content {
     Pane(PaneId),
     /// The review of one worktree.
     Review(u64),
+    Document(String),
 }
 
 impl Leaf {
@@ -45,7 +46,7 @@ impl Leaf {
     pub fn terminal(&self) -> Option<PaneId> {
         match self.content {
             Content::Pane(pane) => Some(pane),
-            Content::Review(_) => None,
+            Content::Review(_) | Content::Document(_) => None,
         }
     }
 }
@@ -139,7 +140,7 @@ pub struct Fractions {
     pub height: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Floating {
     pub leaf: Leaf,
     pub geometry: Fractions,
@@ -195,7 +196,7 @@ impl Cells {
 }
 
 /// Where one leaf lands in the tab area.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
     pub leaf: Leaf,
     /// The frame, including the rules it shares with its neighbours.
@@ -358,7 +359,7 @@ impl Layout {
         if let Some(root) = &self.root {
             collect(root, &mut leaves);
         }
-        leaves.extend(self.floating.iter().map(|floating| floating.leaf));
+        leaves.extend(self.floating.iter().map(|floating| floating.leaf.clone()));
         leaves
     }
 
@@ -426,7 +427,7 @@ impl Layout {
         for floating in &self.floating {
             let outer = floating_cells(floating.geometry, area);
             placed.push(Placed {
-                leaf: floating.leaf,
+                leaf: floating.leaf.clone(),
                 outer,
                 inner: outer.inner(),
                 content: true,
@@ -486,7 +487,7 @@ impl Layout {
             return;
         }
         if let Some(node) = node_at_mut(root, &path)
-            && let Node::Leaf(existing) = *node
+            && let Node::Leaf(existing) = node.clone()
         {
             *node = Node::Stack {
                 children: vec![existing, leaf],
@@ -635,9 +636,16 @@ impl Layout {
             return;
         };
         if let Some(root) = &mut self.root {
-            replace_leaf(root, id, Leaf { id: LeafId(0), ..a });
-            replace_leaf(root, other, a);
-            replace_leaf(root, LeafId(0), b);
+            replace_leaf(
+                root,
+                id,
+                &Leaf {
+                    id: LeafId(0),
+                    ..a.clone()
+                },
+            );
+            replace_leaf(root, other, &a);
+            replace_leaf(root, LeafId(0), &b);
         }
     }
 
@@ -754,7 +762,7 @@ impl Layout {
     /// Points a leaf at another pane, for "Run again".
     pub fn replace_pane(&mut self, id: LeafId, pane: PaneId) {
         if let Some(root) = &mut self.root {
-            replace_leaf(root, id, Leaf::pane(id, pane));
+            replace_leaf(root, id, &Leaf::pane(id, pane));
         }
         for floating in &mut self.floating {
             if floating.leaf.id == id {
@@ -813,9 +821,9 @@ fn node_area(node: &Node, path: &[usize], area: Cells) -> Option<Cells> {
 
 fn collect(node: &Node, leaves: &mut Vec<Leaf>) {
     match node {
-        Node::Leaf(leaf) => leaves.push(*leaf),
+        Node::Leaf(leaf) => leaves.push(leaf.clone()),
         Node::Split { children, .. } => children.iter().for_each(|child| collect(child, leaves)),
-        Node::Stack { children, .. } => leaves.extend(children.iter().copied()),
+        Node::Stack { children, .. } => leaves.extend(children.iter().cloned()),
     }
 }
 
@@ -887,7 +895,7 @@ fn split_at(root: &mut Node, path: &[usize], leaf: Leaf, axis: Axis, before: boo
         return;
     }
     if let Some(node) = node_at_mut(root, path) {
-        let existing = std::mem::replace(node, Node::Leaf(leaf));
+        let existing = std::mem::replace(node, Node::Leaf(leaf.clone()));
         let children = if before {
             vec![Node::Leaf(leaf), existing]
         } else {
@@ -919,7 +927,7 @@ fn remove_from(node: Node, id: LeafId) -> (Option<Node>, Option<LeafId>) {
                 .map(|leaf| leaf.id);
             let node = match children.len() {
                 0 => None,
-                1 => Some(Node::Leaf(children[0])),
+                1 => children.pop().map(Node::Leaf),
                 _ => Some(Node::Stack {
                     expanded: if expanded == index {
                         index.min(children.len() - 1)
@@ -979,9 +987,9 @@ fn remove_from(node: Node, id: LeafId) -> (Option<Node>, Option<LeafId>) {
     }
 }
 
-fn replace_leaf(node: &mut Node, id: LeafId, with: Leaf) {
+fn replace_leaf(node: &mut Node, id: LeafId, with: &Leaf) {
     match node {
-        Node::Leaf(leaf) if leaf.id == id => *leaf = with,
+        Node::Leaf(leaf) if leaf.id == id => *leaf = with.clone(),
         Node::Leaf(_) => {}
         Node::Split { children, .. } => children
             .iter_mut()
@@ -989,14 +997,14 @@ fn replace_leaf(node: &mut Node, id: LeafId, with: Leaf) {
         Node::Stack { children, .. } => children
             .iter_mut()
             .filter(|leaf| leaf.id == id)
-            .for_each(|leaf| *leaf = with),
+            .for_each(|leaf| *leaf = with.clone()),
     }
 }
 
 fn place_node(node: &Node, area: Cells, placed: &mut Vec<Placed>) {
     match node {
         Node::Leaf(leaf) => placed.push(Placed {
-            leaf: *leaf,
+            leaf: leaf.clone(),
             outer: area,
             inner: area.inner(),
             content: true,
@@ -1052,7 +1060,7 @@ fn place_node(node: &Node, area: Cells, placed: &mut Vec<Placed>) {
                     ..area
                 };
                 placed.push(Placed {
-                    leaf: *leaf,
+                    leaf: leaf.clone(),
                     outer,
                     inner: Cells {
                         x: outer.x + 1,

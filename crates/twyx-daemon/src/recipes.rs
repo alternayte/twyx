@@ -454,7 +454,7 @@ impl Daemon {
                     .iter()
                     .filter_map(|floating| {
                         Some(Floating {
-                            leaf: *leaves.get(&floating.pane)?,
+                            leaf: leaves.get(&floating.pane)?.clone(),
                             geometry: Fractions {
                                 x: floating.x / 100.0,
                                 y: floating.y / 100.0,
@@ -527,7 +527,7 @@ fn layout_node(node: &Node, leaves: &BTreeMap<String, Leaf>) -> Result<layout::N
     let leaf = |name: &String| {
         leaves
             .get(name)
-            .copied()
+            .cloned()
             .ok_or_else(|| format!("no pane {name}"))
     };
     Ok(match node {

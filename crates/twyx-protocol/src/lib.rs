@@ -7,6 +7,7 @@ pub mod api;
 pub mod client;
 pub mod connection;
 pub mod dialog;
+pub mod documents;
 pub mod files;
 pub mod grid;
 pub mod holder;

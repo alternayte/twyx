@@ -3,6 +3,7 @@
 
 mod chrome;
 mod dialog;
+mod document;
 mod files;
 mod lists;
 mod palette;
@@ -48,6 +49,7 @@ use crate::highlight::Highlighter;
 use crate::keys::{self, Shortcut};
 use crate::paint::{self, Metrics, Tones};
 use crate::panes::{self, FocusMark, Grid, Layer, Scene, Shown};
+use document::{DocumentLeaf, Picture};
 use lists::List;
 use review::ReviewLeaf;
 
@@ -74,6 +76,7 @@ struct Shared {
     /// The question open over the panes, if any.
     dialog: Option<Dialog>,
     reviews: Reviews,
+    documents: twyx_protocol::documents::Documents,
     /// Notifications the daemon asked this client to show: title, body,
     /// sound, and the pane.
     notices: Vec<(String, String, bool, u64)>,
@@ -95,8 +98,24 @@ impl Shared {
         let leaf = self.leaf?;
         match self.tab_info()?.layout.leaf(leaf)?.content {
             Content::Review(worktree) => Some((leaf, worktree)),
-            Content::Pane(_) => None,
+            Content::Pane(_) | Content::Document(_) => None,
         }
+    }
+
+    /// The focused leaf, when it is a document leaf.
+    fn focused_document(&self) -> Option<LeafId> {
+        let leaf = self.tab_info()?.layout.leaf(self.leaf?)?;
+        matches!(leaf.content, Content::Document(_)).then_some(leaf.id)
+    }
+
+    /// The document leaves in the shown tab.
+    fn shown_documents(&self) -> Vec<LeafId> {
+        self.tab_info()
+            .into_iter()
+            .flat_map(|tab| tab.layout.leaves())
+            .filter(|leaf| matches!(leaf.content, Content::Document(_)))
+            .map(|leaf| leaf.id)
+            .collect()
     }
 
     /// The worktrees of the review leaves in the shown tab.
@@ -106,19 +125,23 @@ impl Shared {
             .flat_map(|tab| tab.layout.leaves())
             .filter_map(|leaf| match leaf.content {
                 Content::Review(worktree) => Some(worktree),
-                Content::Pane(_) => None,
+                Content::Pane(_) | Content::Document(_) => None,
             })
             .collect()
     }
 
     fn title(&self, leaf: &Leaf) -> String {
-        match leaf.terminal() {
-            Some(pane) => self
+        match &leaf.content {
+            Content::Pane(pane) => self
                 .panes
                 .get(&pane.raw())
                 .map(PaneInfo::label)
                 .unwrap_or_default(),
-            None => "review".to_owned(),
+            Content::Review(_) => "review".to_owned(),
+            Content::Document(path) => std::path::Path::new(path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
         }
     }
 }
@@ -207,6 +230,12 @@ pub struct Terminal {
     selection: Option<Selection>,
     /// The review leaves the last render placed.
     review_leaves: Vec<ReviewLeaf>,
+    /// The document leaves the last render placed, and where each one is
+    /// scrolled.
+    document_leaves: Vec<DocumentLeaf>,
+    document_scroll: HashMap<LeafId, gpui::ScrollHandle>,
+    /// The remote images readers allowed, by address.
+    pictures: HashMap<String, Picture>,
     /// The wheel's turn over a review leaf not yet taken as a hunk step.
     review_wheel: f32,
     highlighter: Highlighter,
@@ -263,6 +292,7 @@ impl Terminal {
                 .ok()
                 .and_then(|paths| twyx_protocol::offers::first_run(&paths)),
             reviews: Reviews::default(),
+            documents: Default::default(),
             notices: Vec::new(),
             found: Vec::new(),
         }));
@@ -309,6 +339,9 @@ impl Terminal {
             files_asked: None,
             selection: None,
             review_leaves: Vec::new(),
+            document_leaves: Vec::new(),
+            document_scroll: HashMap::new(),
+            pictures: HashMap::new(),
             review_wheel: 0.0,
             highlighter: Highlighter::default(),
             badge: 0,
@@ -454,6 +487,10 @@ impl Terminal {
                     ..
                 } = &mut *state;
                 for request in reviews.wanted(&shown, workspaces.overview.as_ref()) {
+                    let _ = outgoing.send(request);
+                }
+                let shown = state.shown_documents();
+                for request in state.documents.wanted(&shown) {
                     let _ = outgoing.send(request);
                 }
                 drop(state);
@@ -775,6 +812,11 @@ impl Terminal {
         if before != after {
             cx.notify();
         }
+        let document = self.shared().focused_document();
+        if let (Outcome::ToPane, Some(leaf), Some(chord)) = (&outcome, document, key.chord()) {
+            self.document_key(leaf, chord, cx);
+            return;
+        }
         let review = self.shared().focused_review();
         match (outcome, review) {
             // A review leaf takes its keys itself.
@@ -1026,7 +1068,7 @@ impl Terminal {
             .placed
             .iter()
             .find(|p| Some(p.leaf.id) == placement.focus && p.content)
-            .copied()
+            .cloned()
     }
 
     /// A press on another pane focuses it. A press on a tiled pane's title
@@ -1044,7 +1086,7 @@ impl Terminal {
             .iter()
             .rev()
             .find(|p| p.floating && p.holds(col, row))
-            .copied()
+            .cloned()
         {
             let leaf = floating.leaf.id;
             if Some(leaf) != placement.focus {
@@ -1073,7 +1115,7 @@ impl Terminal {
             }
         } else if let Some(titled) = under(&placement.placed, col, row)
             .filter(|p| !p.floating && row == p.outer.y)
-            .copied()
+            .cloned()
         {
             // A title row moves its pane, even where it borders a rule.
             if Some(titled.leaf.id) != placement.focus {
@@ -1095,7 +1137,7 @@ impl Terminal {
             return;
         }
 
-        let Some(target) = under(&placement.placed, col, row).copied() else {
+        let Some(target) = under(&placement.placed, col, row).cloned() else {
             return;
         };
         if Some(target.leaf.id) != placement.focus {
@@ -1384,6 +1426,7 @@ impl Terminal {
         let Some(tab) = shared.tab_info() else {
             self.mark = None;
             self.review_leaves.clear();
+            self.document_leaves.clear();
             return scene;
         };
         // The leaves are placed at the leaseholder's tab area: another
@@ -1410,7 +1453,20 @@ impl Terminal {
                         focused: Some(p.leaf.id) == shared.leaf,
                     })
                 }
-                Content::Pane(_) => None,
+                Content::Pane(_) | Content::Document(_) => None,
+            })
+            .collect();
+        self.document_leaves = placed
+            .iter()
+            .filter(|p| p.frame && p.content && matches!(p.leaf.content, Content::Document(_)))
+            .map(|p| {
+                let mut bounds = grid.rect(p.inner);
+                bounds.origin -= grid.origin;
+                DocumentLeaf {
+                    leaf: p.leaf.id,
+                    bounds,
+                    focused: Some(p.leaf.id) == shared.leaf,
+                }
             })
             .collect();
         for each in &placed {
@@ -1437,7 +1493,7 @@ impl Terminal {
                 each.leaf.terminal().map(|pane| pane.raw()) == Some(selection.pane)
             });
             scene.leaves.push(Shown {
-                placed: *each,
+                placed: each.clone(),
                 title,
                 view,
                 focused,
@@ -1551,6 +1607,7 @@ fn receive(state: &mut Shared, message: FromDaemon) -> Option<Effect> {
             pane,
         } => state.notices.push((title, body, sound, pane)),
         FromDaemon::Review(info) => state.reviews.answer(info),
+        FromDaemon::Document(text) => state.documents.answer(text),
         FromDaemon::Notes { worktree, notes } => {
             state.reviews.notes.insert(worktree, notes);
         }
@@ -1669,10 +1726,28 @@ impl Render for Terminal {
             .into_iter()
             .map(|shown| self.review_leaf(shown, tones, cx))
             .collect();
-        let floating: Vec<_> = floating
+        let mut floating: Vec<_> = floating
             .into_iter()
             .map(|shown| self.review_leaf(shown, tones, cx))
             .collect();
+        let (tiled_documents, floating_documents): (Vec<DocumentLeaf>, Vec<DocumentLeaf>) = self
+            .document_leaves
+            .clone()
+            .into_iter()
+            .partition(|shown| !floating_reviews.contains(&shown.leaf));
+        let tiled: Vec<_> = tiled
+            .into_iter()
+            .chain(
+                tiled_documents
+                    .into_iter()
+                    .map(|shown| self.document_leaf(shown, tones, cx)),
+            )
+            .collect();
+        floating.extend(
+            floating_documents
+                .into_iter()
+                .map(|shown| self.document_leaf(shown, tones, cx)),
+        );
         let over = Arc::clone(&scene);
         let tab_bar = self.tab_bar(tones, reduced, cx);
         let status_bar = self.status_bar(tones, cx);

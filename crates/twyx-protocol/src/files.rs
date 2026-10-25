@@ -18,6 +18,16 @@ pub struct TreeRow {
     pub open: bool,
 }
 
+/// The request that opens a file: a Markdown file as a document, any
+/// other in Neovim.
+pub fn open(path: String) -> ToDaemon {
+    if twyx_core::markdown::is_markdown(&path) {
+        ToDaemon::OpenDocument { path }
+    } else {
+        ToDaemon::OpenInEditor { path, line: None }
+    }
+}
+
 /// What a key in the tree asks for.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TreeKey {
@@ -131,10 +141,7 @@ impl FileTree {
             }
             (Key::Up, _) | (_, Some('k')) => self.cursor = self.cursor.saturating_sub(1),
             (Key::Enter, _) | (_, Some(' ')) if !row.directory => {
-                return TreeKey::Send(ToDaemon::OpenInEditor {
-                    path: row.path,
-                    line: None,
-                });
+                return TreeKey::Send(open(row.path));
             }
             (Key::Enter, _) | (_, Some(' ')) => self.toggle(&row.path),
             (Key::Right, _) | (_, Some('l')) if row.directory => {

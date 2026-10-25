@@ -8,6 +8,7 @@ mod api;
 mod checks;
 mod colours;
 pub mod daemon;
+mod documents;
 mod files;
 mod git;
 mod holders;

@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 15;
+pub const MINOR: u16 = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -822,6 +822,19 @@ pub enum ToDaemon {
     /// The paper and ink this client shows panes on; the panes of the
     /// tabs whose size it leases report them. Since minor 15.
     Colours(crate::holder::PaneColours),
+    /// Shows the document leaf of a file in this client's workspace, or
+    /// opens one in a new tab. A relative path is relative to the
+    /// workspace's directory. Since minor 16.
+    OpenDocument {
+        path: String,
+    },
+    /// Sends the `Document` of a document leaf, unless the file is still
+    /// as it was at `since`, its modification time in milliseconds.
+    /// Since minor 16.
+    Document {
+        leaf: LeafId,
+        since: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -962,6 +975,25 @@ pub enum FromDaemon {
     Files(FileList),
     /// Text found in a workspace's files. Since minor 14.
     Found(FoundText),
+    /// The text of a document leaf's file. Since minor 16.
+    Document(DocumentText),
+}
+
+/// A document leaf's file as the daemon read it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentText {
+    pub leaf: LeafId,
+    pub path: String,
+    /// The directory of the leaf's workspace: local images and links stay
+    /// inside it.
+    pub root: String,
+    /// Empty when the file could not be read.
+    pub text: String,
+    /// The file's modification time in milliseconds.
+    pub modified: Option<i64>,
+    /// The file is longer than the text holds.
+    pub truncated: bool,
+    pub error: Option<String>,
 }
 
 /// The files of a workspace's directory: the tracked and the untracked

@@ -26,6 +26,7 @@ use crate::chrome::Pen;
 use crate::chrome::bars::{HintBar, StatusBar, Tab, TabBar};
 use crate::chrome::frames::{Frame, Frames};
 use crate::chrome::sidebar::Sidebar;
+use crate::document::{DocumentView, Documents, Tops};
 use crate::emitter::Grid;
 use crate::mouse::Selection;
 use crate::overlay::Overlay;
@@ -62,6 +63,9 @@ pub struct Scene<'a> {
     pub inbox: &'a [InboxItem],
     /// The reviews that review leaves show.
     pub reviews: &'a Reviews,
+    /// The files that document leaves show, and where each is scrolled.
+    pub documents: &'a Documents,
+    pub tops: &'a Tops,
     /// The checks of the worktree the checks overlay last asked for.
     pub checks: Option<&'a twyx_protocol::client::ChecksInfo>,
     /// The shown workspace's files, for quick open.
@@ -171,15 +175,19 @@ impl<'a> Scene<'a> {
 
     /// A leaf's title: its pane's, or what the view shows.
     pub fn leaf_title(&self, leaf: &Leaf) -> String {
-        match leaf.content {
+        match &leaf.content {
             Content::Pane(pane) => self.title(pane.raw()),
+            Content::Document(path) => std::path::Path::new(path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             Content::Review(worktree) => {
                 let name = self
                     .overview
                     .iter()
                     .flat_map(|overview| &overview.projects)
                     .flat_map(|project| &project.worktrees)
-                    .find(|each| each.worktree == worktree)
+                    .find(|each| each.worktree == *worktree)
                     .map_or("worktree", |each| each.name.as_str());
                 format!("review · {name}")
             }
@@ -411,6 +419,22 @@ impl<'a> Scene<'a> {
     /// that ended says so on its bottom rule.
     fn pane(&self, grid: &mut Grid, links: &mut Links, placed: &Placed, area: Rect) {
         let Some(pane) = placed.leaf.terminal().map(PaneId::raw) else {
+            if let Content::Document(_) = placed.leaf.content {
+                let mut layer = sentinel(Rect::new(0, 0, self.cols, self.rows));
+                DocumentView {
+                    pen: self.pen,
+                    shown: self.documents.shown.get(&placed.leaf.id),
+                    top: self
+                        .tops
+                        .0
+                        .get(&placed.leaf.id)
+                        .copied()
+                        .unwrap_or_default(),
+                    focused: Some(placed.leaf.id) == self.focus,
+                }
+                .render(rect(placed.inner).intersection(area), &mut layer);
+                overlay_cells(grid, &layer);
+            }
             if let Content::Review(worktree) = placed.leaf.content {
                 let mut layer = sentinel(Rect::new(0, 0, self.cols, self.rows));
                 ReviewView {
@@ -724,6 +748,8 @@ mod tests {
             overview: None,
             inbox: &[],
             reviews: &Reviews::default(),
+            documents: &Documents::default(),
+            tops: &Tops::default(),
             checks: None,
             files: &[],
             sidebar: None,

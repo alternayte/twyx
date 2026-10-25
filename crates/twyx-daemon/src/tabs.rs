@@ -99,10 +99,10 @@ impl Daemon {
             return;
         };
         match (place, focus) {
-            (Place::Split(axis), _) => entry.layout.split(focus, leaf, axis),
-            (Place::Stack, Some(focus)) => entry.layout.stack(focus, leaf),
-            (Place::Stack | Place::NewTab, _) => entry.layout.split(None, leaf, Axis::Row),
-            (Place::Floating, _) => entry.layout.float(leaf),
+            (Place::Split(axis), _) => entry.layout.split(focus, leaf.clone(), axis),
+            (Place::Stack, Some(focus)) => entry.layout.stack(focus, leaf.clone()),
+            (Place::Stack | Place::NewTab, _) => entry.layout.split(None, leaf.clone(), Axis::Row),
+            (Place::Floating, _) => entry.layout.float(leaf.clone()),
         }
         let inner = entry
             .layout
@@ -153,8 +153,8 @@ impl Daemon {
         let Some(entry) = self.tab_mut(tab) else {
             return Err("the new tab is gone".to_owned());
         };
-        entry.layout.split(None, leaf, Axis::Row);
         entry.focus = Some(leaf.id);
+        entry.layout.split(None, leaf.clone(), Axis::Row);
         let inner = entry
             .layout
             .place(area_cells(entry.area))
@@ -243,8 +243,8 @@ impl Daemon {
                 };
                 let leaf = self.new_leaf(pane);
                 if let Some(entry) = self.tab_mut(tab) {
-                    entry.layout.split(None, leaf, Axis::Row);
                     entry.focus = Some(leaf.id);
+                    entry.layout.split(None, leaf.clone(), Axis::Row);
                 }
                 self.apply_size(tab);
                 leaf.id
