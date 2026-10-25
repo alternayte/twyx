@@ -37,7 +37,6 @@ use crate::overlay::{Choice, Outcome as OverlayOutcome, Overlay, Purpose};
 use crate::probe;
 use crate::review::Action as ReviewAction;
 use twyx_protocol::connection as client;
-use twyx_protocol::dialog::Dialog;
 use twyx_protocol::view::View;
 use twyx_protocol::workspaces::{Effect, Workspaces};
 
@@ -643,51 +642,12 @@ fn run(
                             overlay = None;
                             None
                         }
-                        OverlayOutcome::Check {
-                            worktree,
-                            name,
-                            key,
-                        } => {
-                            let run = workspaces
-                                .checks
-                                .as_ref()
-                                .filter(|info| info.worktree == worktree)
-                                .and_then(|info| {
-                                    info.checks.iter().find(|entry| entry.check.name == name)
-                                })
-                                .and_then(|entry| entry.run.as_ref());
-                            match key {
-                                'r' => {
-                                    let _ =
-                                        daemon.outgoing.send(ToDaemon::RunCheck { worktree, name });
-                                }
-                                'x' => {
-                                    let _ = daemon
-                                        .outgoing
-                                        .send(ToDaemon::CancelCheck { worktree, name });
-                                }
-                                'o' => match run.and_then(|run| run.pane) {
-                                    Some(pane) => {
-                                        overlay = None;
-                                        let _ = daemon.outgoing.send(ToDaemon::ShowPane { pane });
-                                    }
-                                    None => {
-                                        workspaces.message =
-                                            Some(format!("check {name} has no output to show"));
-                                    }
-                                },
-                                _ => match workspaces
-                                    .checks
-                                    .as_ref()
-                                    .and_then(|checks| workspaces.trust_checks(checks))
-                                {
-                                    Some(prompt) => overlay = Some(Overlay::Dialog(prompt)),
-                                    None => {
-                                        workspaces.message =
-                                            Some("no untrusted repository checks".to_owned());
-                                    }
-                                },
+                        OverlayOutcome::Check { worktree, key } => {
+                            let effect = workspaces.check(worktree, key);
+                            if effect.close {
+                                overlay = None;
                             }
+                            apply!(effect);
                             None
                         }
                         OverlayOutcome::Inbox { item, dismiss } => {
@@ -754,50 +714,24 @@ fn run(
                                     Some(ReviewAction::Send(request)) => {
                                         let _ = daemon.outgoing.send(request);
                                     }
-                                    Some(ReviewAction::Note { path, lines }) => {
-                                        overlay = Some(Overlay::Dialog(Dialog::Prompt {
-                                            title: format!(
-                                                "note on {path} lines {}-{}",
-                                                lines.0, lines.1
-                                            ),
-                                            text: String::new(),
-                                            purpose: Purpose::Note {
-                                                worktree,
-                                                path,
-                                                lines,
-                                            },
-                                        }));
-                                    }
-                                    Some(ReviewAction::Commit) => {
-                                        overlay = Some(Overlay::Dialog(Dialog::Prompt {
-                                            title: "commit message".to_owned(),
-                                            text: String::new(),
-                                            purpose: Purpose::Commit { worktree },
-                                        }));
-                                    }
-                                    Some(ReviewAction::Push) => {
-                                        overlay = Some(Overlay::Dialog(Dialog::Confirm {
-                                            title: "push".to_owned(),
-                                            lines: vec![
-                                                "Push this worktree's branch to its remote. The first push sets the upstream.".to_owned(),
-                                            ],
-                                            keys: vec![('y', "push".to_owned())],
-                                            purpose: Purpose::Push { worktree },
-                                        }));
-                                    }
-                                    Some(ReviewAction::PullRequest) => {
-                                        overlay = Some(Overlay::Dialog(Dialog::Form {
-                                            title: "pull request".to_owned(),
-                                            fields: vec![
-                                                ("title".to_owned(), String::new()),
-                                                ("body".to_owned(), String::new()),
-                                            ],
-                                            at: 0,
-                                            purpose: Purpose::PullRequest { worktree },
-                                        }));
+                                    Some(
+                                        action @ (ReviewAction::Note { .. }
+                                        | ReviewAction::Commit
+                                        | ReviewAction::Push
+                                        | ReviewAction::PullRequest),
+                                    ) => {
+                                        overlay = action.dialog(worktree).map(Overlay::Dialog);
                                     }
                                     Some(ReviewAction::SendNotes) => {
-                                        overlay = notes_target(&follow, &panes, worktree);
+                                        let agents = follow
+                                            .workspace
+                                            .iter()
+                                            .flat_map(|workspace| &workspace.tabs)
+                                            .flat_map(|tab| tab.layout.panes())
+                                            .filter_map(|pane| panes.get(&pane.raw()));
+                                        overlay =
+                                            twyx_protocol::review::notes_target(worktree, agents)
+                                                .map(Overlay::Dialog);
                                         if overlay.is_none() {
                                             workspaces.message =
                                                 Some("no agent runs in this workspace".to_owned());
@@ -1152,41 +1086,6 @@ impl Drop for Screen {
 
 /// The choice of agent pane for a worktree's open notes: the agent panes
 /// of the shown workspace, by digit.
-fn notes_target(follow: &Follow, panes: &HashMap<u64, PaneInfo>, worktree: u64) -> Option<Overlay> {
-    let agents: Vec<&PaneInfo> = follow
-        .workspace
-        .iter()
-        .flat_map(|workspace| &workspace.tabs)
-        .flat_map(|tab| tab.layout.panes())
-        .filter_map(|pane| panes.get(&pane.raw()))
-        .filter(|info| info.agent.is_some())
-        .take(9)
-        .collect();
-    if agents.is_empty() {
-        return None;
-    }
-    let lines = agents
-        .iter()
-        .enumerate()
-        .map(|(number, info)| {
-            let kind = info.agent.as_ref().map_or("", |agent| agent.kind.as_str());
-            format!("{} {kind} · {}", number + 1, info.title)
-        })
-        .collect();
-    let keys = (1..=agents.len())
-        .map(|number| (char::from(b'0' + number as u8), format!("pane {number}")))
-        .collect();
-    Some(Overlay::Dialog(Dialog::Confirm {
-        title: "send the open notes to".to_owned(),
-        lines,
-        keys,
-        purpose: Purpose::SendNotes {
-            worktree,
-            panes: agents.iter().map(|info| info.pane).collect(),
-        },
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

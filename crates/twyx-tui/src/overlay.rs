@@ -8,6 +8,7 @@ use twyx_core::keys::{Chord, Key};
 
 pub use twyx_protocol::dialog::Purpose;
 use twyx_protocol::dialog::{Answer, Dialog};
+use twyx_protocol::lists::{self, CheckKey, InboxKey};
 pub use twyx_protocol::palette::Choice;
 use twyx_protocol::palette::{self, Pick, Picker};
 
@@ -41,12 +42,10 @@ pub enum Outcome {
         item: u64,
         dismiss: bool,
     },
-    /// A key on a check: `r` runs it, `o` shows its last run, `x` cancels
-    /// it, `t` asks to trust the repository check file.
+    /// A key in the checks list of `worktree`.
     Check {
         worktree: u64,
-        name: String,
-        key: char,
+        key: CheckKey,
     },
     /// A form's values, in field order.
     Submitted {
@@ -149,64 +148,30 @@ impl Overlay {
                 Answer::Submitted { purpose, values } => Outcome::Submitted { purpose, values },
                 Answer::Confirmed { purpose, key } => Outcome::Confirmed { purpose, key },
             },
-            Overlay::Inbox { selected } => {
-                let items = scene.inbox;
-                *selected = (*selected).min(items.len().saturating_sub(1));
-                let item = items.get(*selected);
-                match (chord.key, typed) {
-                    (Key::Escape, _) => Outcome::Close,
-                    (Key::Up, _) | (_, Some('k')) => {
-                        *selected = selected.saturating_sub(1);
-                        Outcome::Stay
-                    }
-                    (Key::Down, _) | (_, Some('j')) => {
-                        *selected = (*selected + 1).min(items.len().saturating_sub(1));
-                        Outcome::Stay
-                    }
-                    (Key::Enter, _) => item.map_or(Outcome::Stay, |item| {
-                        Outcome::Choose(match scene.leaf_of(item.pane) {
-                            Some(leaf) => Choice::Leaf(leaf),
-                            None => Choice::Pane(item.pane),
-                        })
-                    }),
-                    (_, Some(key @ ('u' | 'x'))) => {
-                        item.map_or(Outcome::Stay, |item| Outcome::Inbox {
-                            item: item.item,
-                            dismiss: key == 'x',
-                        })
-                    }
-                    _ => Outcome::Stay,
-                }
-            }
+            Overlay::Inbox { selected } => match lists::inbox_key(selected, scene.inbox, chord) {
+                InboxKey::Stay => Outcome::Stay,
+                InboxKey::Close => Outcome::Close,
+                InboxKey::Jump(pane) => Outcome::Choose(match scene.leaf_of(pane) {
+                    Some(leaf) => Choice::Leaf(leaf),
+                    None => Choice::Pane(pane),
+                }),
+                InboxKey::Unread(item) => Outcome::Inbox {
+                    item,
+                    dismiss: false,
+                },
+                InboxKey::Dismiss(item) => Outcome::Inbox {
+                    item,
+                    dismiss: true,
+                },
+            },
             Overlay::Checks { worktree, selected } => {
-                let checks = scene.checks_of(*worktree);
-                *selected = (*selected).min(checks.len().saturating_sub(1));
-                let name = checks.get(*selected).map(|entry| entry.check.name.clone());
-                match (chord.key, typed) {
-                    (Key::Escape, _) => Outcome::Close,
-                    (Key::Up, _) | (_, Some('k')) => {
-                        *selected = selected.saturating_sub(1);
-                        Outcome::Stay
-                    }
-                    (Key::Down, _) | (_, Some('j')) => {
-                        *selected = (*selected + 1).min(checks.len().saturating_sub(1));
-                        Outcome::Stay
-                    }
-                    (Key::Enter, _) | (_, Some('r')) => {
-                        name.map_or(Outcome::Stay, |name| Outcome::Check {
-                            worktree: *worktree,
-                            name,
-                            key: 'r',
-                        })
-                    }
-                    (_, Some(key @ ('o' | 'x' | 't'))) => {
-                        name.map_or(Outcome::Stay, |name| Outcome::Check {
-                            worktree: *worktree,
-                            name,
-                            key,
-                        })
-                    }
-                    _ => Outcome::Stay,
+                match lists::checks_key(selected, scene.checks_of(*worktree), chord) {
+                    CheckKey::Stay => Outcome::Stay,
+                    CheckKey::Close => Outcome::Close,
+                    key => Outcome::Check {
+                        worktree: *worktree,
+                        key,
+                    },
                 }
             }
             Overlay::Rename { tab, name } => match (chord.key, typed) {
@@ -274,24 +239,21 @@ impl Overlay {
                 .render(area, buf);
             }
             Overlay::Inbox { selected } => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |since| since.as_millis() as u64);
+                let now = lists::now_ms();
                 let lines: Vec<(String, String)> = scene
                     .inbox
                     .iter()
                     .map(|item| {
-                        let place = match (&item.project, &item.worktree) {
-                            (Some(project), Some(worktree)) => format!(" · {project} / {worktree}"),
-                            (Some(project), None) => format!(" · {project}"),
-                            (None, _) => String::new(),
-                        };
                         let mark = item.mark.map_or(' ', |mark| mark.glyph());
-                        let state = item.mark.map_or(item.reason.name(), |mark| mark.word());
                         let unread = if item.read { ' ' } else { '•' };
                         (
-                            format!("{unread} {mark} {state}{place} · {}", item.title),
-                            age(now.saturating_sub(item.created_ms)),
+                            format!(
+                                "{unread} {mark} {}{} · {}",
+                                lists::state(item),
+                                lists::place(item),
+                                item.title
+                            ),
+                            lists::age(now.saturating_sub(item.created_ms)),
                         )
                     })
                     .collect();
@@ -309,16 +271,14 @@ impl Overlay {
                 Palette {
                     pen: scene.pen,
                     title: "inbox",
-                    query: "enter jump  u unread  x dismiss",
+                    query: lists::INBOX_KEYS,
                     entries: &entries[skip.min(entries.len())..],
                     selected: selected - skip.min(selected),
                 }
                 .render(area, buf);
             }
             Overlay::Checks { worktree, selected } => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |since| since.as_millis() as u64);
+                let now = lists::now_ms();
                 let checks = scene.checks_of(*worktree);
                 let width = checks
                     .iter()
@@ -328,16 +288,7 @@ impl Overlay {
                 let lines: Vec<(String, String)> = checks
                     .iter()
                     .map(|entry| {
-                        let (result, when) = match &entry.run {
-                            None => ("never run".to_owned(), String::new()),
-                            Some(run) => match run.outcome {
-                                None => ("running".to_owned(), String::new()),
-                                Some(outcome) => (
-                                    twyx_core::check::label(outcome, run.stale),
-                                    age(now.saturating_sub(run.ended_ms.unwrap_or(now))),
-                                ),
-                            },
-                        };
+                        let (result, when) = lists::result(entry, now);
                         let name = &entry.check.name;
                         (
                             format!("{name:width$}  {result} · {}", entry.check.command),
@@ -360,11 +311,7 @@ impl Overlay {
                     .checks
                     .and_then(|info| info.file.as_ref())
                     .is_some_and(|file| !file.trusted);
-                let query = if untrusted {
-                    "enter run  o output  x cancel  t trust the repository's checks"
-                } else {
-                    "enter run  o output  x cancel"
-                };
+                let query = lists::checks_keys(untrusted);
                 Palette {
                     pen: scene.pen,
                     title: "checks",
@@ -455,17 +402,6 @@ impl Overlay {
                 .render(area, buf);
             }
         }
-    }
-}
-
-/// An age in the largest whole unit.
-fn age(ms: u64) -> String {
-    let seconds = ms / 1000;
-    match seconds {
-        0..60 => format!("{seconds}s"),
-        60..3600 => format!("{}m", seconds / 60),
-        3600..86_400 => format!("{}h", seconds / 3600),
-        _ => format!("{}d", seconds / 86_400),
     }
 }
 

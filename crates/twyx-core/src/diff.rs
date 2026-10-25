@@ -53,8 +53,30 @@ impl Hunk {
         text
     }
 
-    /// An id that names this hunk's content wherever it sits in the file:
-    /// FNV-1a over its lines, not its line numbers.
+    /// Each line's number in the old and in the new file, where it has one.
+    pub fn numbers(&self) -> Vec<(Option<u32>, Option<u32>)> {
+        let (mut old, mut new) = (self.old_start, self.new_start);
+        self.lines
+            .iter()
+            .map(|line| match line.kind {
+                LineKind::Context => {
+                    old += 1;
+                    new += 1;
+                    (Some(old - 1), Some(new - 1))
+                }
+                LineKind::Removed => {
+                    old += 1;
+                    (Some(old - 1), None)
+                }
+                LineKind::Added => {
+                    new += 1;
+                    (None, Some(new - 1))
+                }
+                LineKind::NoNewline => (None, None),
+            })
+            .collect()
+    }
+
     /// The lines the hunk changes on one side, without its context, on a
     /// doubled scale: line `n` is `2n` and the gap before it `2n - 1`, so a
     /// change that only adds or only removes has a place on the other side.
@@ -87,6 +109,8 @@ impl Hunk {
         span.unwrap_or((2 * at, 2 * at))
     }
 
+    /// An id that names this hunk's content wherever it sits in the file:
+    /// FNV-1a over its lines, not its line numbers.
     pub fn id(&self) -> u64 {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         for line in &self.lines {

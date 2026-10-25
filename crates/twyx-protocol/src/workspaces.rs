@@ -11,6 +11,7 @@ use crate::client::{
     ChecksInfo, FromDaemon, InboxItem, Overview, PaneInfo, RemovalPlan, ToDaemon, WorkspaceInfo,
 };
 use crate::dialog::{Dialog, Purpose};
+use crate::lists::CheckKey;
 use crate::sidebar::{self, Kind, Row, Target};
 
 /// What a command or an answer asks of the client.
@@ -24,6 +25,8 @@ pub struct Effect {
     pub leave: bool,
     /// The sidebar docked or undocked: the tab area changed.
     pub resized: bool,
+    /// Close the open list.
+    pub close: bool,
 }
 
 #[derive(Debug, Default)]
@@ -526,6 +529,44 @@ impl Workspaces {
             "The file is too long to show here. Run {shell} in a shell to read all of it and trust it."
         ));
         short
+    }
+
+    /// Does what a key in the checks list of `worktree` asks.
+    pub fn check(&mut self, worktree: u64, key: CheckKey) -> Effect {
+        let mut effect = Effect::default();
+        let run = |name: &str| {
+            self.checks
+                .as_ref()
+                .filter(|info| info.worktree == worktree)
+                .and_then(|info| info.checks.iter().find(|entry| entry.check.name == name))
+                .and_then(|entry| entry.run.as_ref())
+        };
+        match key {
+            CheckKey::Stay => {}
+            CheckKey::Close => effect.close = true,
+            CheckKey::Run(name) => effect.requests.push(ToDaemon::RunCheck { worktree, name }),
+            CheckKey::Cancel(name) => {
+                effect
+                    .requests
+                    .push(ToDaemon::CancelCheck { worktree, name });
+            }
+            CheckKey::Show(name) => match run(&name).and_then(|run| run.pane) {
+                Some(pane) => {
+                    effect.close = true;
+                    effect.requests.push(ToDaemon::ShowPane { pane });
+                }
+                None => self.message = Some(format!("check {name} has no output to show")),
+            },
+            CheckKey::Trust => match self
+                .checks
+                .as_ref()
+                .and_then(|checks| self.trust_checks(checks))
+            {
+                Some(prompt) => effect.dialog = Some(prompt),
+                None => self.message = Some("no untrusted repository checks".to_owned()),
+            },
+        }
+        effect
     }
 
     /// The trust prompt for a worktree's repository check file, when it
