@@ -652,6 +652,11 @@ impl Daemon {
             .workspace
             .filter(|workspace| hello.interactive && self.workspaces.contains_key(workspace))
             .unwrap_or(self.active_workspace);
+        // The workspace an interactive client shows is the one the next
+        // client shows, as after a switch.
+        if hello.interactive {
+            self.active_workspace = workspace;
+        }
         let tab = self.landing_tab(workspace);
         self.uses += 1;
         self.clients.insert(

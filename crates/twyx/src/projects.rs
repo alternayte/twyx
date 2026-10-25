@@ -180,6 +180,15 @@ pub fn open(path: &Path, no_switch: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Whether a directory is inside a Git repository: it or a parent holds a
+/// `.git` directory, or the `.git` file of a linked worktree. Only the
+/// daemon runs Git, so this looks for the entry itself.
+pub fn in_repository(directory: &Path) -> bool {
+    directory
+        .ancestors()
+        .any(|ancestor| ancestor.join(".git").exists())
+}
+
 /// Lists every project with its worktrees, and every workspace.
 pub fn ls(json: bool) -> Result<()> {
     let paths = Paths::discover()?;

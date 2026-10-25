@@ -40,7 +40,7 @@ This puts `twyx` in `~/.cargo/bin`.
 
 ## Start
 
-Run `twyx` in your terminal. It starts the daemon when none runs, and it attaches the TUI.
+Run `twyx` in your terminal. It starts the daemon when none runs, and it attaches the TUI. In a Git repository it shows that repository's workspace. Elsewhere it shows the workspace you used last.
 
 The prefix is `ctrl-g`. Every other key goes to the focused pane.
 
