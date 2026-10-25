@@ -14,7 +14,7 @@ Copy mode (`ctrl-g c`) moves a cursor over the pane and its scrollback. `v` star
 
 Workspace mode (`ctrl-g w`) shows the sidebar while it is open and moves a cursor over it: `j` and `k` move, `enter` shows the workspace, worktree or pane under the cursor, `h` and `l` go to the previous and next workspace, `n` makes a worktree of the project under the cursor, `x` removes the worktree under the cursor after a prompt, and `u` sets it up again. `ctrl-g b` keeps the sidebar open beside the panes, and `ctrl-g s` opens the workspace switcher.
 
-These are all the keys twyx can take from a pane: the prefix, and the keys below once the prefix has opened a mode.
+These are all the keys twyx can take from a pane: the prefix, the keys below once the prefix has opened a mode, and the desktop shortcuts.
 
 ## Change a key
 
@@ -208,6 +208,22 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 | `h` | `previous-workspace` |
 | `left` | `previous-workspace` |
 
+
+## Desktop shortcuts
+
+The desktop client also takes these keys from the panes. They are fixed.
+
+| macOS | Linux | Action |
+|---|---|---|
+| `cmd-t` | | new tab |
+| `cmd-d` | | split right |
+| `cmd-shift-d` | | split down |
+| `cmd-w` | | close the pane |
+| `cmd-shift-p` | | palette |
+| `cmd-c` | `ctrl-shift-c` | copy the selection |
+| `cmd-v` | `ctrl-shift-v` | paste |
+
+A mouse drag in a pane selects text, unless the pane's program asked for the mouse. Hold `shift` to select in such a pane.
 
 ## Review view
 

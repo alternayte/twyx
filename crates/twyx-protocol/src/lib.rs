@@ -10,6 +10,7 @@ pub mod dialog;
 pub mod grid;
 pub mod holder;
 pub mod input;
+pub mod palette;
 pub mod peer;
 pub mod sidebar;
 pub mod view;

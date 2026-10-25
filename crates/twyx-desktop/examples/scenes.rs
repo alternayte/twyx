@@ -160,6 +160,31 @@ fn main() -> Result<()> {
     keys(cx, window, &["ctrl-g", "t", "n", "escape"])?;
     shot(cx, window, &out, "10-new-tab")?;
 
+    // The palette narrows as you type; enter runs the choice.
+    let (palette, copy) = if cfg!(target_os = "macos") {
+        (&["cmd-shift-p"][..], "cmd-c")
+    } else {
+        (&["ctrl-g", ":"][..], "ctrl-shift-c")
+    };
+    keys(cx, window, palette)?;
+    keys(cx, window, &["s", "p", "l", "i", "t", " ", "d"])?;
+    shot(cx, window, &out, "10a-palette")?;
+    keys(cx, window, &["enter"])?;
+    shot(cx, window, &out, "10b-palette-ran")?;
+    keys(cx, window, &["ctrl-g", "s"])?;
+    shot(cx, window, &out, "10c-switcher")?;
+    keys(cx, window, &["escape"])?;
+    // A drag in a shell selects; copy puts the text on the clipboard. The
+    // first click focuses the pane.
+    click(cx, window, at(20.0, 52.0))?;
+    mouse(cx, window, down(at(20.0, 52.0)))?;
+    mouse(cx, window, drag_to(at(300.0, 75.0)))?;
+    mouse(cx, window, up(at(300.0, 75.0)))?;
+    keys(cx, window, &[copy])?;
+    shot(cx, window, &out, "10d-selected")?;
+    let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    println!("copied: {copied:?}");
+
     // A Git project, opened from the CLI, shows in the sidebar.
     let repo = repository()?;
     let twyx = std::env::var_os("TWYX_BINARY").context("TWYX_BINARY names the twyx binary")?;

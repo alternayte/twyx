@@ -12,34 +12,10 @@ use twyx_protocol::client::ToDaemon;
 use twyx_protocol::grid::MouseMode;
 use twyx_protocol::holder::CopyAction;
 use twyx_protocol::input::{InputEvent, KeyCode, KeyEvent, Modifiers};
+pub use twyx_protocol::view::Selection;
 
 use crate::compositor::Scene;
 use crate::input;
-
-/// Text being selected in one pane, in the pane's own cells.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Selection {
-    pub pane: u64,
-    pub anchor: (u16, u16),
-    pub head: (u16, u16),
-}
-
-impl Selection {
-    /// The first and last cell, in reading order.
-    pub fn span(&self) -> ((u16, u16), (u16, u16)) {
-        let key = |(col, row): (u16, u16)| (row, col);
-        if key(self.anchor) <= key(self.head) {
-            (self.anchor, self.head)
-        } else {
-            (self.head, self.anchor)
-        }
-    }
-
-    pub fn contains(&self, col: u16, row: u16) -> bool {
-        let (start, end) = self.span();
-        (row, col) >= (start.1, start.0) && (row, col) <= (end.1, end.0)
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 enum Drag {

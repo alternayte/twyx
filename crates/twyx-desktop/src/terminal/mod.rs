@@ -3,6 +3,7 @@
 
 mod chrome;
 mod dialog;
+mod palette;
 mod sidebar;
 
 use std::collections::{HashMap, HashSet};
@@ -28,14 +29,15 @@ use twyx_protocol::client::{
 };
 use twyx_protocol::connection;
 use twyx_protocol::dialog::{Answer, Dialog, Purpose};
-use twyx_protocol::grid::{Frame, Snapshot};
+use twyx_protocol::grid::{Frame, MouseMode, Snapshot};
 use twyx_protocol::holder::CopyAction;
 use twyx_protocol::input::{InputEvent, Modifiers, MouseAction, MouseEvent};
-use twyx_protocol::view::View;
+use twyx_protocol::palette::{Choice, Entry, Pick, Picker, entries};
+use twyx_protocol::view::{Selection, View};
 use twyx_protocol::wire;
 use twyx_protocol::workspaces::{Effect, Workspaces};
 
-use crate::keys;
+use crate::keys::{self, Shortcut};
 use crate::paint::{self, Metrics, Tones};
 use crate::panes::{self, FocusMark, Grid, Scene, Shown};
 
@@ -101,6 +103,9 @@ enum Drag {
     /// A tiled leaf dragged by its title, to drop beside another, into a
     /// stack, or into the floating layer.
     Move { leaf: LeafId },
+    /// Text being selected in a pane whose program did not ask for the
+    /// mouse, or with shift held.
+    Select,
     /// The pane took the press; its moves and release go to it too.
     Pane,
 }
@@ -113,6 +118,8 @@ struct Placement {
     placed: Vec<Placed>,
     focus: Option<LeafId>,
     floating: Vec<(LeafId, Fractions)>,
+    /// Panes whose program asked for the mouse.
+    mouse: HashSet<u64>,
 }
 
 pub struct Terminal {
@@ -136,6 +143,10 @@ pub struct Terminal {
     tab_mark: Option<panes::Travel<u64>>,
     /// The agent a new task starts, from config.
     default_agent: Option<String>,
+    /// The palette or the switcher, while it is open.
+    picker: Option<Picker>,
+    /// Text selected with the mouse, for copy.
+    selection: Option<Selection>,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -198,6 +209,8 @@ impl Terminal {
             mark: None,
             tab_mark: None,
             default_agent,
+            picker: None,
+            selection: None,
         }
     }
 
@@ -368,6 +381,10 @@ impl Terminal {
             self.keymap.reset();
             self.shared().dialog = Some(dialog);
         }
+        if effect.switcher {
+            self.keymap.reset();
+            self.picker = Some(Picker::switcher());
+        }
         if effect.leave {
             self.keymap.reset();
         }
@@ -414,10 +431,42 @@ impl Terminal {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        if keys::is_paste(&event.keystroke) {
+        match keys::shortcut(&event.keystroke) {
+            Some(Shortcut::Paste) => self.paste(cx),
+            Some(Shortcut::Copy) => {
+                let text = self.selection.and_then(|selection| {
+                    let shared = self.shared();
+                    let text = shared.views.get(&selection.pane)?.selected_text(&selection);
+                    (!text.is_empty()).then_some(text)
+                });
+                if let Some(text) = text {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            // A shortcut runs only where a key would reach the panes.
+            Some(Shortcut::Run(command))
+                if self.picker.is_none() && self.shared().dialog.is_none() && !self.keys =>
+            {
+                self.keymap.reset();
+                self.run(command, cx);
+            }
+            Some(Shortcut::Run(_)) => {}
+            None => self.key(event, cx),
+        }
+    }
+
+    /// Pastes the clipboard where typing goes: the palette, a dialog, or
+    /// the pane.
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        {
             if let Some(item) = cx.read_from_clipboard()
                 && let Some(text) = item.text()
             {
+                if let Some(picker) = self.picker.as_mut() {
+                    picker.paste(&text.replace(['\n', '\r'], ""));
+                    cx.notify();
+                    return;
+                }
                 let mut shared = self.shared();
                 match shared.dialog.as_mut() {
                     Some(dialog) => {
@@ -431,9 +480,10 @@ impl Terminal {
                     }
                 }
             }
-            return;
         }
+    }
 
+    fn key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let Some(key) = keys::key_event(event) else {
             return;
         };
@@ -441,6 +491,19 @@ impl Terminal {
         if self.shared().dialog.is_some() {
             if let Some(chord) = key.chord() {
                 self.dialog_key(chord);
+            }
+            cx.notify();
+            return;
+        }
+        if let Some(mut picker) = self.picker.take() {
+            let pick = match key.chord() {
+                Some(chord) => picker.key(chord, &self.entries(picker.switcher)),
+                None => Pick::Stay,
+            };
+            match pick {
+                Pick::Stay => self.picker = Some(picker),
+                Pick::Close => {}
+                Pick::Choose(choice) => self.choose(choice, cx),
             }
             cx.notify();
             return;
@@ -487,22 +550,66 @@ impl Terminal {
         match outcome {
             Outcome::ToPane => self.send(InputEvent::Key(key)),
             Outcome::Consumed => {}
-            Outcome::Run(Command::Detach) => cx.quit(),
-            Outcome::Run(Command::Help) => {
+            Outcome::Run(command) => self.run(command, cx),
+        }
+    }
+
+    /// What the palette or the switcher offers now.
+    fn entries(&self, switcher: bool) -> Vec<Entry> {
+        let shared = self.shared();
+        entries(
+            &self.keymap,
+            shared.workspace.as_ref(),
+            shared.workspaces.overview.as_ref(),
+            |leaf| shared.title(leaf),
+            |pane| {
+                shared
+                    .panes
+                    .get(&pane)
+                    .map(PaneInfo::label)
+                    .unwrap_or_default()
+            },
+            switcher,
+        )
+    }
+
+    /// Does what a palette entry stands for.
+    fn choose(&mut self, choice: Choice, cx: &mut Context<Self>) {
+        self.picker = None;
+        match choice {
+            Choice::Command(command) => self.run(command, cx),
+            choice => {
+                if let Some(request) = choice.request() {
+                    self.request(request);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Runs a command from a key or the palette.
+    fn run(&mut self, command: Command, cx: &mut Context<Self>) {
+        match command {
+            Command::Detach => cx.quit(),
+            Command::Palette => {
+                self.keymap.reset();
+                self.picker = Some(Picker::palette());
+                cx.notify();
+            }
+            Command::Help => {
                 self.keys = true;
                 cx.notify();
             }
-            Outcome::Run(
-                command @ (Command::ToggleSidebar
-                | Command::SidebarUp
-                | Command::SidebarDown
-                | Command::SidebarOpen
-                | Command::NextWorkspace
-                | Command::PreviousWorkspace
-                | Command::NewWorktree
-                | Command::RemoveWorktree
-                | Command::SetupWorktree),
-            ) => {
+            command @ (Command::ToggleSidebar
+            | Command::SidebarUp
+            | Command::SidebarDown
+            | Command::SidebarOpen
+            | Command::NextWorkspace
+            | Command::PreviousWorkspace
+            | Command::NewWorktree
+            | Command::RemoveWorktree
+            | Command::SetupWorktree
+            | Command::Switcher) => {
                 let in_mode = self.keymap.mode() == Mode::Workspace;
                 let effect = {
                     let mut shared = self.shared();
@@ -512,7 +619,7 @@ impl Terminal {
                 self.apply(effect);
                 cx.notify();
             }
-            Outcome::Run(Command::NewTask) => {
+            Command::NewTask => {
                 self.keymap.reset();
                 let effect = {
                     let mut shared = self.shared();
@@ -524,7 +631,7 @@ impl Terminal {
                 self.apply(effect);
                 cx.notify();
             }
-            Outcome::Run(command) => {
+            command => {
                 let request = {
                     let shared = self.shared();
                     let focused = focused_pane(&shared).and_then(|pane| shared.panes.get(&pane));
@@ -646,10 +753,25 @@ impl Terminal {
             cx.notify();
             return;
         }
-        if target.local(col, row).is_some() {
+        let Some(local) = target.local(col, row) else {
+            return;
+        };
+        let Some(pane) = target.leaf.terminal().map(|pane| pane.raw()) else {
+            return;
+        };
+        self.selection = None;
+        if self.placement.mouse.contains(&pane) && !event.modifiers.shift {
             self.drag = Some(Drag::Pane);
             self.to_pane(&target, col, row, event.button, MouseAction::Press);
+        } else {
+            self.drag = Some(Drag::Select);
+            self.selection = Some(Selection {
+                pane,
+                anchor: local,
+                head: local,
+            });
         }
+        cx.notify();
     }
 
     fn on_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
@@ -708,6 +830,28 @@ impl Terminal {
                 let drop = self.drop_at(leaf, col, row, event.modifiers.alt);
                 if drop != self.drop {
                     self.drop = drop;
+                    cx.notify();
+                }
+            }
+            Drag::Select => {
+                let Some(selection) = self.selection else {
+                    return;
+                };
+                let Some(target) = self
+                    .placement
+                    .placed
+                    .iter()
+                    .find(|p| p.leaf.terminal().map(|pane| pane.raw()) == Some(selection.pane))
+                else {
+                    return;
+                };
+                let inner = target.inner;
+                let head = (
+                    col.clamp(inner.x, inner.right().saturating_sub(1)) - inner.x,
+                    row.clamp(inner.y, inner.bottom().saturating_sub(1)) - inner.y,
+                );
+                if head != selection.head {
+                    self.selection = Some(Selection { head, ..selection });
                     cx.notify();
                 }
             }
@@ -915,11 +1059,15 @@ impl Terminal {
                     view.cursor.visible &= focused;
                     view
                 });
+            let selection = self.selection.filter(|selection| {
+                each.leaf.terminal().map(|pane| pane.raw()) == Some(selection.pane)
+            });
             scene.leaves.push(Shown {
                 placed: *each,
                 title,
                 view,
                 focused,
+                selection,
             });
         }
         if let Some(focused) = placed
@@ -944,6 +1092,17 @@ impl Terminal {
                 .floating
                 .iter()
                 .map(|floating| (floating.leaf.id, floating.geometry))
+                .collect(),
+            mouse: placed
+                .iter()
+                .filter_map(|p| p.leaf.terminal())
+                .map(|pane| pane.raw())
+                .filter(|pane| {
+                    shared
+                        .views
+                        .get(pane)
+                        .is_some_and(|view| view.modes.mouse != MouseMode::Off)
+                })
                 .collect(),
             placed,
         };
@@ -1098,6 +1257,10 @@ impl Render for Terminal {
             .clone()
             .map(|dialog| self.dialog_sheet(&dialog, tones, window));
         let sidebar = (docked || overlaid).then(|| self.sidebar(tones, cx));
+        let picker = self
+            .picker
+            .clone()
+            .map(|picker| self.palette_sheet(&picker, tones, window, cx));
 
         let main = div()
             .flex_1()
@@ -1179,6 +1342,6 @@ impl Render for Terminal {
             }
             None => root = root.child(main),
         }
-        root.children(sheet).children(dialog)
+        root.children(sheet).children(picker).children(dialog)
     }
 }

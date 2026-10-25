@@ -25,7 +25,6 @@ use twyx_protocol::client::{
 use twyx_protocol::grid::{Frame, Snapshot};
 use twyx_protocol::holder::CopyAction;
 use twyx_protocol::input::InputEvent;
-use twyx_protocol::sidebar::Target;
 use twyx_protocol::wire;
 
 use crate::chrome::sidebar::Sidebar;
@@ -716,27 +715,10 @@ fn run(
                             overlay = None;
                             match choice {
                                 Choice::Command(command) => Some(command),
-                                Choice::Tab(tab) => {
-                                    let _ = daemon.outgoing.send(ToDaemon::SelectTab { tab });
-                                    None
-                                }
-                                Choice::Leaf(leaf) => {
-                                    let _ = daemon.outgoing.send(ToDaemon::FocusLeaf { leaf });
-                                    None
-                                }
-                                Choice::Pane(pane) => {
-                                    let _ = daemon.outgoing.send(ToDaemon::ShowPane { pane });
-                                    None
-                                }
-                                Choice::Go(target) => {
-                                    let request = match target {
-                                        Target::Workspace(workspace) => {
-                                            ToDaemon::SwitchWorkspace { workspace }
-                                        }
-                                        Target::Open(path) => ToDaemon::Open { path, switch: true },
-                                        Target::Pane(leaf) => ToDaemon::FocusLeaf { leaf },
-                                    };
-                                    let _ = daemon.outgoing.send(request);
+                                choice => {
+                                    if let Some(request) = choice.request() {
+                                        let _ = daemon.outgoing.send(request);
+                                    }
                                     None
                                 }
                             }

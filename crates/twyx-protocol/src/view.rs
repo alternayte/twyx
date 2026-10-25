@@ -5,6 +5,31 @@ use std::collections::HashMap;
 use crate::grid::{Cell, Cursor, CursorShape, Frame, Modes, Snapshot};
 
 /// What a client knows about the pane's screen.
+/// Text being selected in one pane, in the pane's own cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Selection {
+    pub pane: u64,
+    pub anchor: (u16, u16),
+    pub head: (u16, u16),
+}
+
+impl Selection {
+    /// The first and last cell, in reading order.
+    pub fn span(&self) -> ((u16, u16), (u16, u16)) {
+        let key = |(col, row): (u16, u16)| (row, col);
+        if key(self.anchor) <= key(self.head) {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
+    }
+
+    pub fn contains(&self, col: u16, row: u16) -> bool {
+        let (start, end) = self.span();
+        (row, col) >= (start.1, start.0) && (row, col) <= (end.1, end.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct View {
     pub cols: u16,
@@ -22,6 +47,32 @@ pub struct View {
 }
 
 impl View {
+    /// The text a selection covers, a line per row, without the blanks at
+    /// the end of each line.
+    pub fn selected_text(&self, selection: &Selection) -> String {
+        let ((start_col, start_row), (end_col, end_row)) = selection.span();
+        let mut lines = Vec::new();
+        for row in start_row..=end_row {
+            let Some(cells) = self.cells.get(usize::from(row)) else {
+                break;
+            };
+            let from = if row == start_row { start_col } else { 0 };
+            let to = if row == end_row {
+                end_col
+            } else {
+                self.cols.saturating_sub(1)
+            };
+            let line: String = cells
+                .iter()
+                .skip(usize::from(from))
+                .take(usize::from(to.saturating_sub(from)) + 1)
+                .map(|cell| cell.text.as_str())
+                .collect();
+            lines.push(line.trim_end().to_owned());
+        }
+        lines.join("\n")
+    }
+
     pub fn new(cols: u16, rows: u16) -> Self {
         Self {
             cols,

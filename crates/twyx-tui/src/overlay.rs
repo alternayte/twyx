@@ -4,30 +4,17 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
-use twyx_core::keys::{Chord, Command, Key};
-use twyx_core::layout::LeafId;
-use twyx_core::palette::search;
+use twyx_core::keys::{Chord, Key};
 
 pub use twyx_protocol::dialog::Purpose;
 use twyx_protocol::dialog::{Answer, Dialog};
-use twyx_protocol::sidebar::Target;
+pub use twyx_protocol::palette::Choice;
+use twyx_protocol::palette::{self, Pick, Picker};
 
 use crate::chrome::dialog::Dialog as DialogBox;
 use crate::chrome::keys::KeySheet;
 use crate::chrome::palette::{Entry, Palette};
 use crate::compositor::Scene;
-
-/// What a palette entry does.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Choice {
-    Command(Command),
-    Tab(u64),
-    Leaf(LeafId),
-    /// Show a pane: its leaf, or a new tab for a pane without one.
-    Pane(u64),
-    /// Show a workspace, or open a worktree that has none.
-    Go(Target),
-}
 
 /// What one key in an overlay comes to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,21 +57,15 @@ pub enum Outcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Overlay {
-    Palette {
-        query: String,
-        selected: usize,
-    },
+    /// The command palette, or the switcher over projects, worktrees and
+    /// workspaces.
+    Picker(Picker),
     Rename {
         tab: u64,
         name: String,
     },
     /// The needle for a copy mode search.
     Search(String),
-    /// The palette over projects, worktrees and workspaces only.
-    Switcher {
-        query: String,
-        selected: usize,
-    },
     /// A prompt, a form or a confirmation.
     Dialog(Dialog),
     /// The inbox, newest first.
@@ -102,26 +83,13 @@ pub enum Overlay {
     },
 }
 
-/// One line of the palette, before the query filters it.
-struct Line {
-    label: String,
-    kind: String,
-    choice: Choice,
-}
-
 impl Overlay {
     pub fn palette() -> Self {
-        Overlay::Palette {
-            query: String::new(),
-            selected: 0,
-        }
+        Overlay::Picker(Picker::palette())
     }
 
     pub fn switcher() -> Self {
-        Overlay::Switcher {
-            query: String::new(),
-            selected: 0,
-        }
+        Overlay::Picker(Picker::switcher())
     }
 
     /// Takes one key. Typing edits the line, up and down move the choice,
@@ -132,40 +100,12 @@ impl Overlay {
             _ => None,
         };
         match self {
-            Overlay::Palette { .. } | Overlay::Switcher { .. } => {
-                let switcher = matches!(self, Overlay::Switcher { .. });
-                let (query, selected) = match self {
-                    Overlay::Palette { query, selected }
-                    | Overlay::Switcher { query, selected } => (query, selected),
-                    _ => return Outcome::Stay,
-                };
-                let lines = lines(scene, switcher);
-                let found = search(lines.iter().map(|line| line.label.as_str()), query);
-                let count = found.len();
-                match (chord.key, typed) {
-                    (Key::Escape, _) => Outcome::Close,
-                    (Key::Enter, _) => found.get(*selected).map_or(Outcome::Close, |found| {
-                        Outcome::Choose(lines[found.index].choice.clone())
-                    }),
-                    (Key::Up, _) => {
-                        *selected = selected.saturating_sub(1);
-                        Outcome::Stay
-                    }
-                    (Key::Down, _) => {
-                        *selected = (*selected + 1).min(count.saturating_sub(1));
-                        Outcome::Stay
-                    }
-                    (Key::Backspace, _) => {
-                        query.pop();
-                        *selected = 0;
-                        Outcome::Stay
-                    }
-                    (_, Some(ch)) => {
-                        query.push(ch);
-                        *selected = 0;
-                        Outcome::Stay
-                    }
-                    _ => Outcome::Stay,
+            Overlay::Picker(picker) => {
+                let entries = entries(scene, picker.switcher);
+                match picker.key(chord, &entries) {
+                    Pick::Stay => Outcome::Stay,
+                    Pick::Close => Outcome::Close,
+                    Pick::Choose(choice) => Outcome::Choose(choice),
                 }
             }
             Overlay::Keys { scroll } => {
@@ -292,10 +232,7 @@ impl Overlay {
     pub fn paste(&mut self, text: &str) {
         let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
         match self {
-            Overlay::Palette { query, selected } | Overlay::Switcher { query, selected } => {
-                query.push_str(&text);
-                *selected = 0;
-            }
+            Overlay::Picker(picker) => picker.paste(&text),
             Overlay::Rename { name, .. } => name.push_str(&text),
             Overlay::Dialog(dialog) => dialog.paste(&text),
             Overlay::Search(needle) => needle.push_str(&text),
@@ -305,30 +242,34 @@ impl Overlay {
 
     pub fn render(&self, scene: &Scene<'_>, area: Rect, buf: &mut Buffer) {
         match self {
-            Overlay::Palette { query, selected } | Overlay::Switcher { query, selected } => {
-                let switcher = matches!(self, Overlay::Switcher { .. });
-                let lines = lines(scene, switcher);
-                let found = search(lines.iter().map(|line| line.label.as_str()), query);
-                let entries: Vec<Entry<'_>> = found
+            Overlay::Picker(picker) => {
+                let entries = entries(scene, picker.switcher);
+                let found = picker.found(&entries);
+                let shown: Vec<Entry<'_>> = found
                     .iter()
                     .map(|found| {
-                        let line = &lines[found.index];
+                        let entry = &entries[found.index];
                         Entry {
-                            text: &line.label,
-                            kind: &line.kind,
+                            text: &entry.label,
+                            kind: &entry.kind,
                             matched: &found.positions,
                         }
                     })
                     .collect();
                 // The list scrolls so the choice stays in view.
                 let room = usize::from(area.height.saturating_sub(6)).max(1);
+                let selected = picker.selected;
                 let skip = selected.saturating_sub(room - 1);
                 Palette {
                     pen: scene.pen,
-                    title: if switcher { "workspaces" } else { "palette" },
-                    query,
-                    entries: &entries[skip.min(entries.len())..],
-                    selected: selected - skip.min(*selected),
+                    title: if picker.switcher {
+                        "workspaces"
+                    } else {
+                        "palette"
+                    },
+                    query: &picker.query,
+                    entries: &shown[skip.min(shown.len())..],
+                    selected: selected - skip.min(selected),
                 }
                 .render(area, buf);
             }
@@ -528,114 +469,14 @@ fn age(ms: u64) -> String {
     }
 }
 
-/// Everything the palette offers: the commands with their keys, the tabs
-/// of this workspace, the projects, worktrees and workspaces, and the panes
-/// of every workspace. The switcher offers the projects, worktrees and
-/// workspaces alone.
-fn lines(scene: &Scene<'_>, switcher: bool) -> Vec<Line> {
-    let mut lines = Vec::new();
-    if !switcher {
-        lines.extend(
-            Command::every()
-                .into_iter()
-                .filter(|command| {
-                    !matches!(
-                        command,
-                        Command::Enter(_) | Command::GoToTab(_) | Command::Palette
-                    )
-                })
-                // Every command stays in reach of the keyboard, bound or not;
-                // copy motions act only inside copy mode.
-                .filter(|command| !matches!(command, Command::CopyMove(_)))
-                .map(|command| Line {
-                    label: command.name().replace('-', " "),
-                    kind: scene
-                        .keys_for(command)
-                        .unwrap_or_else(|| "command".to_owned()),
-                    choice: Choice::Command(command),
-                }),
-        );
-        if let Some(workspace) = scene.workspace {
-            for (number, tab) in workspace.tabs.iter().enumerate() {
-                let name = if tab.name.is_empty() {
-                    format!("tab {}", number + 1)
-                } else {
-                    format!("tab {} {}", number + 1, tab.name)
-                };
-                lines.push(Line {
-                    label: name,
-                    kind: "tab".to_owned(),
-                    choice: Choice::Tab(tab.tab),
-                });
-            }
-        }
-    }
-    let Some(overview) = scene.overview else {
-        // Before the first overview, this workspace's panes.
-        if let (false, Some(workspace)) = (switcher, scene.workspace) {
-            for tab in &workspace.tabs {
-                for leaf in tab.layout.leaves() {
-                    lines.push(Line {
-                        label: scene.leaf_title(&leaf),
-                        kind: "pane".to_owned(),
-                        choice: Choice::Leaf(leaf.id),
-                    });
-                }
-            }
-        }
-        return lines;
-    };
-    for project in &overview.projects {
-        if !project.git {
-            continue;
-        }
-        for worktree in &project.worktrees {
-            let target = match worktree.workspace {
-                Some(workspace) => Target::Workspace(workspace),
-                None => Target::Open(worktree.path.clone()),
-            };
-            lines.push(Line {
-                label: format!("{} / {}", project.name, worktree.name),
-                kind: "worktree".to_owned(),
-                choice: Choice::Go(target),
-            });
-        }
-    }
-    for summary in &overview.workspaces {
-        if summary.worktree.is_some() {
-            continue;
-        }
-        let is_project = summary.project.is_some_and(|project| {
-            overview
-                .projects
-                .iter()
-                .any(|entry| entry.project == project && !entry.git)
-        });
-        lines.push(Line {
-            label: summary.name.clone(),
-            kind: if is_project { "project" } else { "workspace" }.to_owned(),
-            choice: Choice::Go(Target::Workspace(summary.workspace)),
-        });
-    }
-    if switcher {
-        return lines;
-    }
-    for summary in &overview.workspaces {
-        for pane in &summary.panes {
-            lines.push(Line {
-                label: format!("{} · {}", scene.title(pane.pane), summary.name),
-                kind: "pane".to_owned(),
-                choice: Choice::Leaf(pane.leaf),
-            });
-            if let Some(agent) = &pane.agent {
-                let state = pane.mark.map_or("", |mark| mark.word());
-                lines.push(Line {
-                    label: format!("{agent} {state} · {}", summary.name),
-                    kind: "agent session".to_owned(),
-                    choice: Choice::Leaf(pane.leaf),
-                });
-            }
-        }
-    }
-    lines
+/// What the palette or the switcher offers in this scene.
+fn entries(scene: &Scene<'_>, switcher: bool) -> Vec<palette::Entry> {
+    palette::entries(
+        scene.keymap,
+        scene.workspace,
+        scene.overview,
+        |leaf| scene.leaf_title(leaf),
+        |pane| scene.title(pane),
+        switcher,
+    )
 }

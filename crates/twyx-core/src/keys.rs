@@ -662,6 +662,30 @@ impl Keymap {
         self.mode = mode;
     }
 
+    /// The keys that run a command: the prefix and its key, or the prefix,
+    /// a mode's key and the key in that mode.
+    pub fn keys_for(&self, command: Command) -> Option<String> {
+        let prefix = self.prefix.to_string();
+        let direct = self
+            .bindings(Mode::Command)
+            .iter()
+            .find(|(_, bound)| *bound == command);
+        if let Some((chord, _)) = direct {
+            return Some(format!("{prefix} {chord}"));
+        }
+        for (mode_key, entry) in self.bindings(Mode::Command) {
+            if let Command::Enter(mode) = entry
+                && let Some((chord, _)) = self
+                    .bindings(*mode)
+                    .iter()
+                    .find(|(_, bound)| *bound == command)
+            {
+                return Some(format!("{prefix} {mode_key} {chord}"));
+            }
+        }
+        None
+    }
+
     pub fn bindings(&self, mode: Mode) -> &[(Chord, Command)] {
         self.bindings
             .iter()

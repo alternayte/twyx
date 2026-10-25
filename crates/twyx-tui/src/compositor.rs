@@ -122,30 +122,10 @@ impl<'a> Scene<'a> {
     /// The text a selection covers: rows joined by newlines, each without
     /// its trailing blanks.
     pub fn selected_text(&self, selection: &Selection) -> String {
-        let Some(view) = self.views.get(&selection.pane) else {
-            return String::new();
-        };
-        let ((start_col, start_row), (end_col, end_row)) = selection.span();
-        let mut lines = Vec::new();
-        for row in start_row..=end_row {
-            let Some(cells) = view.cells.get(usize::from(row)) else {
-                break;
-            };
-            let from = if row == start_row { start_col } else { 0 };
-            let to = if row == end_row {
-                end_col
-            } else {
-                view.cols.saturating_sub(1)
-            };
-            let line: String = cells
-                .iter()
-                .skip(usize::from(from))
-                .take(usize::from(to.saturating_sub(from)) + 1)
-                .map(|cell| cell.text.as_str())
-                .collect();
-            lines.push(line.trim_end().to_owned());
-        }
-        lines.join("\n")
+        self.views
+            .get(&selection.pane)
+            .map(|view| view.selected_text(selection))
+            .unwrap_or_default()
     }
 
     /// The column the tab area starts at: right of a docked sidebar.
@@ -252,27 +232,7 @@ impl<'a> Scene<'a> {
 
     /// The keys that run a command, from the prefix: `ctrl-g p a`.
     pub fn keys_for(&self, command: Command) -> Option<String> {
-        let prefix = self.keymap.prefix.to_string();
-        let direct = self
-            .keymap
-            .bindings(Mode::Command)
-            .iter()
-            .find(|(_, bound)| *bound == command);
-        if let Some((chord, _)) = direct {
-            return Some(format!("{prefix} {chord}"));
-        }
-        for (mode_key, entry) in self.keymap.bindings(Mode::Command) {
-            if let Command::Enter(mode) = entry
-                && let Some((chord, _)) = self
-                    .keymap
-                    .bindings(*mode)
-                    .iter()
-                    .find(|(_, bound)| *bound == command)
-            {
-                return Some(format!("{prefix} {mode_key} {chord}"));
-            }
-        }
-        None
+        self.keymap.keys_for(command)
     }
 
     /// The screen between the tab bar and the status bar, beside a docked

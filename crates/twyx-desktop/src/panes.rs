@@ -6,7 +6,7 @@ use std::time::Instant;
 use gpui::{App, Bounds, ContentMask, Pixels, Point, Window, fill, point, px, size};
 use twyx_core::layout::{Cells, Content, LeafId, Placed};
 use twyx_core::theme::{DESKTOP, Motion};
-use twyx_protocol::view::View;
+use twyx_protocol::view::{Selection, View};
 
 use crate::paint::{self, Metrics, Palette, Tones, lerp, outline, text};
 
@@ -65,6 +65,8 @@ pub struct Shown {
     /// pane whose screen has not come yet.
     pub view: Option<View>,
     pub focused: bool,
+    /// The text selected in this pane, if any.
+    pub selection: Option<Selection>,
 }
 
 /// What the tab area draws in one frame.
@@ -124,6 +126,9 @@ fn leaf(scene: &Scene, shown: &Shown, window: &mut Window, cx: &mut App) {
             let clip = inner.intersect(&scene.bounds);
             window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
                 paint::paint(view, inner, &grid.metrics, scene.palette, window, cx);
+                if let Some(selection) = &shown.selection {
+                    selected(selection, view, inner, &grid.metrics, tones, window);
+                }
             });
         } else if let Content::Review(_) = placed.leaf.content {
             text(
@@ -148,6 +153,37 @@ fn leaf(scene: &Scene, shown: &Shown, window: &mut Window, cx: &mut App) {
         ));
     }
     title(scene, shown, window, cx);
+}
+
+/// The selected cells, tinted in the accent, row by row.
+fn selected(
+    selection: &Selection,
+    view: &View,
+    inner: Bounds<Pixels>,
+    metrics: &Metrics,
+    tones: Tones,
+    window: &mut Window,
+) {
+    let ((start_col, start_row), (end_col, end_row)) = selection.span();
+    for row in start_row..=end_row.min(view.rows.saturating_sub(1)) {
+        let from = if row == start_row { start_col } else { 0 };
+        let to = if row == end_row {
+            end_col
+        } else {
+            view.cols.saturating_sub(1)
+        };
+        let cells = f32::from(to.saturating_sub(from) + 1);
+        window.paint_quad(fill(
+            Bounds::new(
+                point(
+                    inner.origin.x + metrics.cell_width * f32::from(from),
+                    inner.origin.y + metrics.line_height * f32::from(row),
+                ),
+                size(metrics.cell_width * cells, metrics.line_height),
+            ),
+            tones.accent.opacity(0.25),
+        ));
+    }
 }
 
 /// The title over a frame's top rule, on paper so the rule breaks for it.

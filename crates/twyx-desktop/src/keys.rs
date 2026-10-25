@@ -1,7 +1,50 @@
 //! GPUI keystrokes as the input events a pane receives.
 
 use gpui::{KeyDownEvent, Keystroke};
+use twyx_core::keys::Command;
 use twyx_protocol::input::{KeyCode, KeyEvent, KeyKind, Modifiers};
+
+/// A key the desktop client keeps for itself, beside the prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shortcut {
+    /// Copy the selection.
+    Copy,
+    /// Paste the clipboard into the pane.
+    Paste,
+    Run(Command),
+}
+
+/// The desktop shortcut a keystroke is, if any. On macOS: Cmd-T new tab,
+/// Cmd-D and Cmd-Shift-D split right and down, Cmd-W close the pane,
+/// Cmd-Shift-P the palette, Cmd-C and Cmd-V copy and paste. On Linux:
+/// Ctrl-Shift-C and Ctrl-Shift-V.
+pub fn shortcut(keystroke: &Keystroke) -> Option<Shortcut> {
+    let mods = &keystroke.modifiers;
+    let key = keystroke.key.to_ascii_lowercase();
+    if cfg!(target_os = "macos") {
+        if !mods.platform || mods.control || mods.alt {
+            return None;
+        }
+        return Some(match (key.as_str(), mods.shift) {
+            ("c", false) => Shortcut::Copy,
+            ("v", false) => Shortcut::Paste,
+            ("t", false) => Shortcut::Run(Command::NewTab),
+            ("d", false) => Shortcut::Run(Command::SplitRight),
+            ("d", true) => Shortcut::Run(Command::SplitDown),
+            ("w", false) => Shortcut::Run(Command::ClosePane),
+            ("p", true) => Shortcut::Run(Command::Palette),
+            _ => return None,
+        });
+    }
+    if !(mods.control && mods.shift) || mods.alt || mods.platform {
+        return None;
+    }
+    match key.as_str() {
+        "c" => Some(Shortcut::Copy),
+        "v" => Some(Shortcut::Paste),
+        _ => None,
+    }
+}
 
 /// The input event a key press carries, if any.
 pub fn key_event(event: &KeyDownEvent) -> Option<KeyEvent> {
@@ -58,11 +101,6 @@ fn text(keystroke: &Keystroke) -> Option<String> {
         return None;
     }
     keystroke.key_char.as_ref().map(|text| text.to_string())
-}
-
-/// Whether this keystroke is the platform paste shortcut.
-pub fn is_paste(keystroke: &Keystroke) -> bool {
-    keystroke.modifiers.platform && keystroke.key == "v"
 }
 
 #[cfg(test)]
