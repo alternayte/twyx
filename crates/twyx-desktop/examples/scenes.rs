@@ -272,7 +272,33 @@ fn review(cx: &mut HeadlessAppContext, window: AnyWindowHandle, out: &Path) -> R
     shot(cx, window, out, "23-review-sides")?;
     keys(cx, window, &["shift-c"])?;
     shot(cx, window, out, "24-review-commit")?;
-    keys(cx, window, &["escape"])
+    keys(cx, window, &["escape"])?;
+
+    // Repository checks ask for trust, run, and leave inbox items.
+    std::fs::create_dir_all(repo.join(".twyx"))?;
+    std::fs::write(
+        repo.join(".twyx/checks.toml"),
+        "[[check]]\nname = \"test\"\ncommand = \"true\"\n\n[[check]]\nname = \"lint\"\ncommand = \"echo two warnings; exit 3\"\n",
+    )?;
+    keys(cx, window, &["ctrl-g", "e"])?;
+    pump(cx, window, Duration::from_secs(1))?;
+    shot(cx, window, out, "25-checks-untrusted")?;
+    keys(cx, window, &["t"])?;
+    shot(cx, window, out, "26-checks-trust")?;
+    keys(cx, window, &["y", "ctrl-g", "e"])?;
+    pump(cx, window, Duration::from_secs(1))?;
+    keys(cx, window, &["enter"])?;
+    pump(cx, window, Duration::from_secs(2))?;
+    keys(cx, window, &["j", "enter"])?;
+    pump(cx, window, Duration::from_secs(2))?;
+    shot(cx, window, out, "27-checks-ran")?;
+    keys(cx, window, &["escape", "ctrl-g", "i"])?;
+    shot(cx, window, out, "28-inbox")?;
+    keys(cx, window, &["x"])?;
+    pump(cx, window, Duration::from_secs(1))?;
+    shot(cx, window, out, "29-inbox-dismissed")?;
+    keys(cx, window, &["enter"])?;
+    shot(cx, window, out, "30-inbox-jumped")
 }
 
 /// A Git repository with one commit, in a new temporary directory.

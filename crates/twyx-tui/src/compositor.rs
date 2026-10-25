@@ -184,21 +184,11 @@ impl<'a> Scene<'a> {
         }
     }
 
-    /// The leaf that shows a pane, in any workspace.
     /// The checks of `worktree`, once the daemon sent them.
     pub fn checks_of(&self, worktree: u64) -> &'a [twyx_protocol::client::CheckInfo] {
         self.checks
             .filter(|info| info.worktree == worktree)
             .map_or(&[], |info| info.checks.as_slice())
-    }
-
-    pub fn leaf_of(&self, pane: u64) -> Option<LeafId> {
-        self.overview?
-            .workspaces
-            .iter()
-            .flat_map(|workspace| &workspace.panes)
-            .find(|each| each.pane == pane)
-            .map(|each| each.leaf)
     }
 
     /// A pane's status mark, from the overview.

@@ -3,6 +3,7 @@
 
 mod chrome;
 mod dialog;
+mod lists;
 mod palette;
 mod review;
 mod sidebar;
@@ -44,6 +45,7 @@ use crate::highlight::Highlighter;
 use crate::keys::{self, Shortcut};
 use crate::paint::{self, Metrics, Tones};
 use crate::panes::{self, FocusMark, Grid, Layer, Scene, Shown};
+use lists::List;
 use review::ReviewLeaf;
 
 /// State the daemon task and the window both touch.
@@ -172,6 +174,8 @@ pub struct Terminal {
     default_agent: Option<String>,
     /// The palette or the switcher, while it is open.
     picker: Option<Picker>,
+    /// The inbox or the checks, while one is open.
+    list: Option<List>,
     /// Text selected with the mouse, for copy.
     selection: Option<Selection>,
     /// The review leaves the last render placed.
@@ -243,6 +247,7 @@ impl Terminal {
             tab_mark: None,
             default_agent,
             picker: None,
+            list: None,
             selection: None,
             review_leaves: Vec::new(),
             review_wheel: 0.0,
@@ -490,7 +495,10 @@ impl Terminal {
             }
             // A shortcut runs only where a key would reach the panes.
             Some(Shortcut::Run(command))
-                if self.picker.is_none() && self.shared().dialog.is_none() && !self.keys =>
+                if self.picker.is_none()
+                    && self.list.is_none()
+                    && self.shared().dialog.is_none()
+                    && !self.keys =>
             {
                 self.keymap.reset();
                 self.run(command, cx);
@@ -549,6 +557,15 @@ impl Terminal {
                 Pick::Stay => self.picker = Some(picker),
                 Pick::Close => {}
                 Pick::Choose(choice) => self.choose(choice, cx),
+            }
+            cx.notify();
+            return;
+        }
+        if let Some(list) = self.list.take() {
+            if let Some(chord) = key.chord() {
+                self.list_key(list, chord);
+            } else {
+                self.list = Some(list);
             }
             cx.notify();
             return;
@@ -697,6 +714,33 @@ impl Terminal {
                     shared.workspaces.command(command, in_mode, shown.as_ref())
                 };
                 self.apply(effect);
+                cx.notify();
+            }
+            Command::Inbox => {
+                self.keymap.reset();
+                self.list = Some(List::Inbox { selected: 0 });
+                cx.notify();
+            }
+            Command::Checks => {
+                self.keymap.reset();
+                let worktree = self
+                    .shared()
+                    .workspace
+                    .as_ref()
+                    .and_then(|shown| shown.worktree.as_ref())
+                    .map(|worktree| worktree.worktree);
+                match worktree {
+                    Some(worktree) => {
+                        self.request(ToDaemon::Checks { worktree });
+                        self.list = Some(List::Checks {
+                            worktree,
+                            selected: 0,
+                        });
+                    }
+                    None => {
+                        self.shared().workspaces.message = Some("not in a Git worktree".to_owned());
+                    }
+                }
                 cx.notify();
             }
             Command::NewTask => {
@@ -1371,6 +1415,9 @@ impl Render for Terminal {
             window.request_animation_frame();
         }
         let sheet = self.keys.then(|| self.key_sheet(tones, window));
+        let list = self
+            .list
+            .map(|list| self.list_sheet(list, tones, window, cx));
         let dialog = self
             .shared()
             .dialog
@@ -1479,6 +1526,9 @@ impl Render for Terminal {
             }
             None => root = root.child(main),
         }
-        root.children(sheet).children(picker).children(dialog)
+        root.children(sheet)
+            .children(picker)
+            .children(list)
+            .children(dialog)
     }
 }

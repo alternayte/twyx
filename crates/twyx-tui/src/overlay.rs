@@ -151,10 +151,7 @@ impl Overlay {
             Overlay::Inbox { selected } => match lists::inbox_key(selected, scene.inbox, chord) {
                 InboxKey::Stay => Outcome::Stay,
                 InboxKey::Close => Outcome::Close,
-                InboxKey::Jump(pane) => Outcome::Choose(match scene.leaf_of(pane) {
-                    Some(leaf) => Choice::Leaf(leaf),
-                    None => Choice::Pane(pane),
-                }),
+                InboxKey::Jump(pane) => Outcome::Choose(lists::jump(pane, scene.overview)),
                 InboxKey::Unread(item) => Outcome::Inbox {
                     item,
                     dismiss: false,

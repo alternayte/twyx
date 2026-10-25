@@ -3,7 +3,8 @@
 
 use twyx_core::keys::{Chord, Key};
 
-use crate::client::{CheckInfo, InboxItem};
+use crate::client::{CheckInfo, InboxItem, Overview};
+use crate::palette::Choice;
 
 /// What a key in the inbox list asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,17 @@ pub fn inbox_key(selected: &mut usize, items: &[InboxItem], chord: Chord) -> Inb
         (_, Some('x')) => item.map_or(InboxKey::Stay, |item| InboxKey::Dismiss(item.item)),
         _ => InboxKey::Stay,
     }
+}
+
+/// What shows an inbox item's pane: its leaf, wherever it is, or a new tab
+/// for a pane without one.
+pub fn jump(pane: u64, overview: Option<&Overview>) -> Choice {
+    overview
+        .into_iter()
+        .flat_map(|overview| &overview.workspaces)
+        .flat_map(|workspace| &workspace.panes)
+        .find(|each| each.pane == pane)
+        .map_or(Choice::Pane(pane), |each| Choice::Leaf(each.leaf))
 }
 
 /// The keys of the inbox list, for its hint line.
