@@ -69,10 +69,7 @@ impl Terminal {
             InboxKey::Close => self.list = None,
             InboxKey::Jump(pane) => {
                 self.list = None;
-                let choice = lists::jump(pane, self.shared().workspaces.overview.as_ref());
-                if let Some(request) = choice.request() {
-                    self.request(request);
-                }
+                self.jump(pane);
             }
             InboxKey::Unread(item) => self.request(ToDaemon::MarkUnread { item }),
             InboxKey::Dismiss(item) => self.request(ToDaemon::Dismiss { item }),

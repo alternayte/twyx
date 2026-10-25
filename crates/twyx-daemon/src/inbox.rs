@@ -140,6 +140,7 @@ impl Daemon {
                 title: "twyx".to_owned(),
                 body,
                 sound,
+                pane: pane.raw(),
             },
         );
         self.notified.insert(pane, now);

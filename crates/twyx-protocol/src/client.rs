@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 12;
+pub const MINOR: u16 = 13;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -906,6 +906,8 @@ pub enum FromDaemon {
         title: String,
         body: String,
         sound: bool,
+        /// The pane the item is for, to show on a click. Since minor 13.
+        pane: u64,
     },
     /// A worktree's review. Since minor 6.
     Review(ReviewInfo),

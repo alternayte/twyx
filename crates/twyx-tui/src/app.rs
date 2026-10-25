@@ -419,7 +419,9 @@ fn run(
                 FromDaemon::Notes { worktree, notes } => {
                     reviews.notes.insert(worktree, notes);
                 }
-                FromDaemon::Notify { title, body, sound } => {
+                FromDaemon::Notify {
+                    title, body, sound, ..
+                } => {
                     if let Some(form) = screen.notice {
                         screen.write(&form.encode(&title, &body))?;
                     }

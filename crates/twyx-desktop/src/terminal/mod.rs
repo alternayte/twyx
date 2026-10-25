@@ -16,8 +16,8 @@ use std::time::Duration;
 use gpui::prelude::*;
 use gpui::{
     Bounds, ClipboardItem, Context, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, Window, canvas, div,
-    point, px, size,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, SystemNotification,
+    Window, canvas, div, point, px, size,
 };
 
 use twyx_core::keys::{Command, Keymap, Mode, Outcome};
@@ -71,6 +71,9 @@ struct Shared {
     /// The question open over the panes, if any.
     dialog: Option<Dialog>,
     reviews: Reviews,
+    /// Notifications the daemon asked this client to show: title, body,
+    /// sound, and the pane.
+    notices: Vec<(String, String, bool, u64)>,
 }
 
 impl Shared {
@@ -226,7 +229,18 @@ impl Terminal {
             workspaces: Workspaces::new(true, None),
             dialog: None,
             reviews: Reviews::default(),
+            notices: Vec::new(),
         }));
+        let this = cx.weak_entity();
+        cx.on_system_notification_response(move |response, cx| {
+            if let Ok(pane) = response.tag.parse::<u64>() {
+                let _ = this.update(cx, |terminal, cx| {
+                    terminal.jump(pane);
+                    cx.activate(true);
+                    cx.notify();
+                });
+            }
+        });
         // The task that reads the daemon needs the entity to be registered,
         // so the connection starts on the first render.
         Self {
@@ -395,9 +409,26 @@ impl Terminal {
                     let _ = outgoing.send(request);
                 }
                 drop(state);
+                let notices = std::mem::take(
+                    &mut shared
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .notices,
+                );
                 let updated = this.update(cx, |terminal, cx| {
                     for effect in effects {
                         terminal.apply(effect);
+                    }
+                    for (title, body, sound, pane) in notices {
+                        cx.show_system_notification(SystemNotification {
+                            tag: pane.to_string().into(),
+                            title: title.into(),
+                            body: body.into(),
+                            actions: Vec::new(),
+                        });
+                        if sound {
+                            notice_sound();
+                        }
                     }
                     if dirty {
                         cx.notify();
@@ -1311,6 +1342,12 @@ fn receive(state: &mut Shared, message: FromDaemon) -> Option<Effect> {
         | FromDaemon::CheckStarted { .. }
         | FromDaemon::CheckEnded(_)
         | FromDaemon::Shipped(_)) => return Some(state.workspaces.answer(&answer)),
+        FromDaemon::Notify {
+            title,
+            body,
+            sound,
+            pane,
+        } => state.notices.push((title, body, sound, pane)),
         FromDaemon::Review(info) => state.reviews.answer(info),
         FromDaemon::Notes { worktree, notes } => {
             state.reviews.notes.insert(worktree, notes);
@@ -1326,7 +1363,6 @@ fn receive(state: &mut Shared, message: FromDaemon) -> Option<Effect> {
         FromDaemon::Welcome(_)
         | FromDaemon::Opened { .. }
         | FromDaemon::Switched { .. }
-        | FromDaemon::Notify { .. }
         | FromDaemon::Synced { .. }
         | FromDaemon::Recipes(_)
         | FromDaemon::RecipeOpened { .. }
@@ -1353,6 +1389,25 @@ fn mouse_button(button: MouseButton) -> twyx_protocol::input::MouseButton {
         MouseButton::Right => twyx_protocol::input::MouseButton::Right,
         MouseButton::Middle => twyx_protocol::input::MouseButton::Middle,
         _ => twyx_protocol::input::MouseButton::None,
+    }
+}
+
+/// The system's notification sound, played beside the notification.
+// workaround: upstream draft gpui-notification-sound
+fn notice_sound() {
+    let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("afplay", &["/System/Library/Sounds/Glass.aiff"])
+    } else {
+        ("canberra-gtk-play", &["--id", "message-new-instant"])
+    };
+    let played = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Ok(mut child) = played {
+        std::thread::spawn(move || child.wait());
     }
 }
 
