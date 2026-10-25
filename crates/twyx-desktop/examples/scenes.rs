@@ -9,6 +9,8 @@
 //! directories, or the window attaches to your own daemon and changes your
 //! layout.
 
+#[path = "../src/dock.rs"]
+mod dock;
 #[allow(dead_code)]
 #[path = "../src/highlight.rs"]
 mod highlight;

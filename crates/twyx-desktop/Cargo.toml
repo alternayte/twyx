@@ -24,3 +24,7 @@ harness = false
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
 gpui-platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["font-kit", "wayland", "x11", "test-support"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSDockTile", "NSResponder"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }

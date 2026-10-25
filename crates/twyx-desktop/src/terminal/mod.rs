@@ -186,6 +186,8 @@ pub struct Terminal {
     /// The wheel's turn over a review leaf not yet taken as a hunk step.
     review_wheel: f32,
     highlighter: Highlighter,
+    /// The unread count the Dock badge shows.
+    badge: usize,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -266,6 +268,7 @@ impl Terminal {
             review_leaves: Vec::new(),
             review_wheel: 0.0,
             highlighter: Highlighter::default(),
+            badge: 0,
         }
     }
 
@@ -418,6 +421,17 @@ impl Terminal {
                 let updated = this.update(cx, |terminal, cx| {
                     for effect in effects {
                         terminal.apply(effect);
+                    }
+                    let unread = terminal
+                        .shared()
+                        .workspaces
+                        .inbox
+                        .iter()
+                        .filter(|item| !item.read)
+                        .count();
+                    if unread != terminal.badge {
+                        terminal.badge = unread;
+                        crate::dock::badge(unread);
                     }
                     for (title, body, sound, pane) in notices {
                         cx.show_system_notification(SystemNotification {
