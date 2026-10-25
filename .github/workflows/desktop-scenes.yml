@@ -1,0 +1,45 @@
+name: Desktop scenes
+
+# Renders the desktop window on Linux without a display and keeps the PNG
+# files as a run artifact, for a person to look at.
+on:
+  push:
+    branches: [main]
+    paths:
+      - crates/twyx-desktop/**
+      - crates/twyx-core/**
+      - crates/twyx-protocol/**
+      - .github/workflows/desktop-scenes.yml
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  scenes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # The terminal engine, libghostty-vt, builds with Zig 0.16.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      # Mesa's lavapipe gives wgpu a Vulkan device without a GPU.
+      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers fonts-dejavu-core
+      - run: cargo build --package twyx --bin twyx
+      - run: cargo build --package twyx-desktop --example scenes
+      - name: Render
+        run: |
+          scratch="$RUNNER_TEMP/twyx"
+          mkdir -p "$scratch/runtime" "$scratch/state" "$scratch/config" scenes
+          chmod 700 "$scratch/runtime"
+          XDG_RUNTIME_DIR="$scratch/runtime" XDG_STATE_HOME="$scratch/state" \
+            XDG_CONFIG_HOME="$scratch/config" TWYX_BINARY="$PWD/target/debug/twyx" \
+            target/debug/examples/scenes scenes
+          XDG_RUNTIME_DIR="$scratch/runtime" target/debug/twyx daemon stop || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-scenes
+          path: scenes/

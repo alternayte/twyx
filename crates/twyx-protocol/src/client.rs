@@ -4,14 +4,14 @@ use serde::{Deserialize, Serialize};
 use twyx_core::agent::{AgentState, Source};
 use twyx_core::inbox::Reason;
 use twyx_core::keys::Command;
-use twyx_core::layout::{Axis, Fractions, Layout, Leaf, LeafId, Side};
+use twyx_core::layout::{Axis, Drop, Fractions, Layout, Leaf, LeafId, Side};
 use twyx_core::theme::AgentState as Mark;
 
 use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 11;
+pub const MINOR: u16 = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -535,6 +535,11 @@ pub enum ToDaemon {
     MoveFloating {
         leaf: LeafId,
         geometry: Fractions,
+    },
+    /// Moves a leaf where a drag dropped it. Since minor 12.
+    DropLeaf {
+        leaf: LeafId,
+        drop: Drop,
     },
     /// Moves the rule on `side` of a tiled leaf by whole cells.
     DragRule {

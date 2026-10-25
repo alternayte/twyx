@@ -75,6 +75,8 @@ pub struct Scene {
     pub leaves: Vec<Shown>,
     /// Where the focus mark is on its way to the focused frame.
     pub mark: Option<Bounds<Pixels>>,
+    /// Where a pane being moved would land.
+    pub preview: Option<Bounds<Pixels>>,
     pub tones: Tones,
     pub palette: Palette,
     pub family: &'static str,
@@ -93,6 +95,10 @@ pub fn paint(scene: &Scene, window: &mut Window, cx: &mut App) {
             for shown in scene.leaves.iter().filter(|shown| shown.placed.floating) {
                 window.paint_quad(fill(scene.grid.rect(shown.placed.outer), scene.tones.paper));
                 leaf(scene, shown, window, cx);
+            }
+            if let Some(preview) = scene.preview {
+                window.paint_quad(fill(preview, scene.tones.accent.opacity(0.12)));
+                outline(window, preview, px(DESKTOP.mark), scene.tones.accent);
             }
             if let Some(mark) = scene.mark {
                 outline(window, mark, px(DESKTOP.mark), scene.tones.accent);

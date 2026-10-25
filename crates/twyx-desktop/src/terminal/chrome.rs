@@ -159,7 +159,21 @@ impl Terminal {
             )
         };
         let mode = self.keymap.mode();
+        let moving = matches!(self.drag, Some(super::Drag::Move { .. }));
         let hints = match mode {
+            _ if moving => vec![
+                ("edge".to_owned(), "split".to_owned()),
+                ("middle".to_owned(), "stack".to_owned()),
+                (
+                    if cfg!(target_os = "macos") {
+                        "option"
+                    } else {
+                        "alt"
+                    }
+                    .to_owned(),
+                    "float".to_owned(),
+                ),
+            ],
             Mode::Normal => {
                 let prefix = self.keymap.prefix.to_string();
                 vec![

@@ -940,6 +940,9 @@ impl Daemon {
             ToDaemon::MoveFloating { leaf, geometry } => {
                 self.edit_leaf(leaf, |layout, _| layout.move_floating(leaf, geometry));
             }
+            ToDaemon::DropLeaf { leaf, drop } => {
+                self.edit_leaf(leaf, |layout, _| layout.drop_leaf(leaf, drop));
+            }
             ToDaemon::DragRule { leaf, side, cells } => {
                 self.edit_leaf(leaf, |layout, area| {
                     layout.drag_rule(leaf, side, cells, area)

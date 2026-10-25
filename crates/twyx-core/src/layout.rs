@@ -145,6 +145,18 @@ pub struct Floating {
     pub geometry: Fractions,
 }
 
+/// Where a dragged leaf lands.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Drop {
+    /// Beside a tiled leaf, on this side of it. A leaf in a stack splits
+    /// the whole stack.
+    Beside(LeafId, Side),
+    /// In a stack with a tiled leaf, expanded.
+    Stack(LeafId),
+    /// In the floating layer, at this place.
+    Float(Fractions),
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Layout {
     pub root: Option<Node>,
@@ -282,6 +294,56 @@ pub fn rule_at(placed: &[Placed], area: Cells, col: u16, row: u16) -> Option<(Le
         })
 }
 
+/// Where a leaf dragged by its title lands when it is let go over a cell of
+/// `area`: near another tiled leaf's edge, beside it on that side; in its
+/// middle, in a stack with it. With `float`, in the floating layer, centred
+/// on the cell. Over the dragged leaf itself, nowhere.
+pub fn drop_at(
+    placed: &[Placed],
+    area: Cells,
+    dragged: LeafId,
+    col: u16,
+    row: u16,
+    float: bool,
+) -> Option<Drop> {
+    if float {
+        let size = tuning::FLOATING_SIZE;
+        let at = |offset: u16, length: u16| {
+            (f32::from(offset) / f32::from(length.max(1)) - size / 2.0).clamp(0.0, 1.0 - size)
+        };
+        return Some(Drop::Float(Fractions {
+            x: at(col.saturating_sub(area.x), area.width),
+            y: at(row.saturating_sub(area.y), area.height),
+            width: size,
+            height: size,
+        }));
+    }
+    let target = placed.iter().filter(|p| !p.floating && p.frame).find(|p| {
+        let outer = p.outer;
+        col >= outer.x && col < outer.right() && row >= outer.y && row < outer.bottom()
+    })?;
+    if target.leaf.id == dragged {
+        return None;
+    }
+    let outer = target.outer;
+    let x = (f32::from(col - outer.x) + 0.5) / f32::from(outer.width.max(1));
+    let y = (f32::from(row - outer.y) + 0.5) / f32::from(outer.height.max(1));
+    let middle = 0.3..0.7;
+    if middle.contains(&x) && middle.contains(&y) {
+        return Some(Drop::Stack(target.leaf.id));
+    }
+    let side = [
+        (x, Side::Left),
+        (1.0 - x, Side::Right),
+        (y, Side::Up),
+        (1.0 - y, Side::Down),
+    ]
+    .into_iter()
+    .min_by(|a, b| a.0.total_cmp(&b.0))
+    .map_or(Side::Right, |(_, side)| side);
+    Some(Drop::Beside(target.leaf.id, side))
+}
+
 /// A frame title, marked when a zoom hides other tiled panes.
 pub fn frame_title(placed: &[Placed], title: String) -> String {
     match placed.iter().filter(|p| !p.floating && !p.frame).count() {
@@ -379,6 +441,11 @@ impl Layout {
     /// stack splits the whole stack. With no tiled target, the new leaf goes
     /// after the whole tiled tree.
     pub fn split(&mut self, target: Option<LeafId>, leaf: Leaf, axis: Axis) {
+        self.split_side(target, leaf, axis, false);
+    }
+
+    /// Splits `target` and puts `leaf` before or after it on `axis`.
+    fn split_side(&mut self, target: Option<LeafId>, leaf: Leaf, axis: Axis, before: bool) {
         self.zoomed = None;
         let Some(root) = self.root.take() else {
             self.root = Some(Node::Leaf(leaf));
@@ -392,9 +459,9 @@ impl Layout {
                 if let Some(Node::Stack { .. }) = parent_of(&root, &path) {
                     path.pop();
                 }
-                split_at(&mut root, &path, leaf, axis);
+                split_at(&mut root, &path, leaf, axis, before);
             }
-            None => split_at(&mut root, &[], leaf, axis),
+            None => split_at(&mut root, &[], leaf, axis, before),
         }
         self.root = Some(root);
     }
@@ -583,6 +650,39 @@ impl Layout {
     }
 
     /// Moves a leaf between the tiled tree and the floating layer.
+    /// Moves a leaf where a drag dropped it. A drop on the leaf itself, on
+    /// a floating leaf or on a leaf of another layout changes nothing.
+    pub fn drop_leaf(&mut self, id: LeafId, drop: Drop) {
+        let Some(leaf) = self.leaf(id) else {
+            return;
+        };
+        if let Drop::Beside(target, _) | Drop::Stack(target) = drop
+            && (target == id || !self.contains(target) || self.is_floating(target))
+        {
+            return;
+        }
+        self.remove(id);
+        match drop {
+            Drop::Beside(target, side) => {
+                let axis = match side {
+                    Side::Left | Side::Right => Axis::Row,
+                    Side::Up | Side::Down => Axis::Column,
+                };
+                self.split_side(
+                    Some(target),
+                    leaf,
+                    axis,
+                    matches!(side, Side::Left | Side::Up),
+                );
+            }
+            Drop::Stack(target) => self.stack(target, leaf),
+            Drop::Float(geometry) => {
+                self.float(leaf);
+                self.move_floating(id, geometry);
+            }
+        }
+    }
+
     pub fn toggle_floating(&mut self, id: LeafId) {
         let Some(leaf) = self.leaf(id) else {
             return;
@@ -770,7 +870,7 @@ fn parent_of<'a>(node: &'a Node, path: &[usize]) -> Option<&'a Node> {
 /// Splits the node at `path` (a split's child, or the root) and puts `leaf`
 /// after it. A parent split on the same axis takes the leaf as a sibling and
 /// gives it half of the target's share.
-fn split_at(root: &mut Node, path: &[usize], leaf: Leaf, axis: Axis) {
+fn split_at(root: &mut Node, path: &[usize], leaf: Leaf, axis: Axis, before: bool) {
     if let Some((&index, parent_path)) = path.split_last()
         && let Some(Node::Split {
             axis: parent_axis,
@@ -781,15 +881,21 @@ fn split_at(root: &mut Node, path: &[usize], leaf: Leaf, axis: Axis) {
     {
         let half = ratios[index] / 2.0;
         ratios[index] = half;
-        ratios.insert(index + 1, half);
-        children.insert(index + 1, Node::Leaf(leaf));
+        let at = if before { index } else { index + 1 };
+        ratios.insert(at, half);
+        children.insert(at, Node::Leaf(leaf));
         return;
     }
     if let Some(node) = node_at_mut(root, path) {
         let existing = std::mem::replace(node, Node::Leaf(leaf));
+        let children = if before {
+            vec![Node::Leaf(leaf), existing]
+        } else {
+            vec![existing, Node::Leaf(leaf)]
+        };
         *node = Node::Split {
             axis,
-            children: vec![existing, Node::Leaf(leaf)],
+            children,
             ratios: vec![0.5, 0.5],
         };
     }
@@ -1273,6 +1379,44 @@ mod tests {
         let next = zoomed.into_iter().flatten().next().expect("a neighbour");
         layout.reveal(next);
         assert_eq!(layout.zoomed, Some(next));
+    }
+
+    #[test]
+    fn a_dropped_leaf_lands_beside_in_a_stack_or_floating() {
+        // 3 dropped left of 1: 3, 1, 2 side by side.
+        let mut layout = three();
+        layout.drop_leaf(LeafId(3), Drop::Beside(LeafId(1), Side::Left));
+        let order: Vec<u16> = [3, 1, 2]
+            .map(|id| outer(&layout, area(60, 20), id).0)
+            .into();
+        assert!(order.is_sorted(), "{order:?}");
+        assert_eq!(outer(&layout, area(60, 20), 3).3, 20, "full height");
+
+        // 1 dropped on 2's centre: one stack with 1 expanded where 2 was.
+        let mut layout = three();
+        layout.drop_leaf(LeafId(1), Drop::Stack(LeafId(2)));
+        assert!(matches!(
+            &layout.root,
+            Some(Node::Split { children, .. })
+                if matches!(&children[0], Node::Stack { children, expanded: 1 }
+                    if children.iter().map(|leaf| leaf.id).eq([LeafId(2), LeafId(1)]))
+        ));
+
+        // A drop on itself changes nothing; a float lands where it was let go.
+        let mut layout = three();
+        layout.drop_leaf(LeafId(2), Drop::Beside(LeafId(2), Side::Up));
+        assert_eq!(layout, three());
+        let place = Fractions {
+            x: 0.1,
+            y: 0.2,
+            width: 0.5,
+            height: 0.5,
+        };
+        layout.drop_leaf(LeafId(2), Drop::Float(place));
+        assert_eq!(
+            layout.floating.last().map(|f| (f.leaf.id, f.geometry)),
+            Some((LeafId(2), place))
+        );
     }
 
     #[test]

@@ -17,7 +17,7 @@ use gpui::{
 
 use twyx_core::keys::{Command, Keymap, Mode, Outcome};
 use twyx_core::layout::{
-    Cells, Fractions, Leaf, LeafId, Placed, Side, frame_title, rule_at, under,
+    Cells, Drop, Fractions, Leaf, LeafId, Placed, Side, drop_at, frame_title, rule_at, under,
 };
 use twyx_core::paths::Paths;
 use twyx_core::theme::DESKTOP;
@@ -90,6 +90,9 @@ enum Drag {
         geometry: Fractions,
         resize: bool,
     },
+    /// A tiled leaf dragged by its title, to drop beside another, into a
+    /// stack, or into the floating layer.
+    Move { leaf: LeafId },
     /// The pane took the press; its moves and release go to it too.
     Pane,
 }
@@ -119,6 +122,8 @@ pub struct Terminal {
     connected: bool,
     placement: Placement,
     drag: Option<Drag>,
+    /// Where the leaf being moved would land now.
+    drop: Option<Drop>,
     mark: Option<FocusMark>,
     tab_mark: Option<panes::Travel<u64>>,
 }
@@ -172,6 +177,7 @@ impl Terminal {
             connected: false,
             placement: Placement::default(),
             drag: None,
+            drop: None,
             mark: None,
             tab_mark: None,
         }
@@ -438,8 +444,9 @@ impl Terminal {
             .copied()
     }
 
-    /// A press on another pane focuses it. A press on a rule between panes
-    /// drags it; on a floating pane's top rule it moves the pane, and on its
+    /// A press on another pane focuses it. A press on a tiled pane's title
+    /// row drags the pane to a new place; on a rule between panes it drags
+    /// the rule; on a floating pane's top rule it moves the pane, and on its
     /// bottom right corner it resizes it. A press in the focused pane goes
     /// to it.
     fn on_press(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
@@ -479,6 +486,21 @@ impl Terminal {
             if Some(leaf) != placement.focus {
                 return;
             }
+        } else if let Some(titled) = under(&placement.placed, col, row)
+            .filter(|p| !p.floating && row == p.outer.y)
+            .copied()
+        {
+            // A title row moves its pane, even where it borders a rule.
+            if Some(titled.leaf.id) != placement.focus {
+                self.request(ToDaemon::FocusLeaf {
+                    leaf: titled.leaf.id,
+                });
+            }
+            self.drag = Some(Drag::Move {
+                leaf: titled.leaf.id,
+            });
+            cx.notify();
+            return;
         } else if let Some((leaf, side)) = rule_at(&placement.placed, placement.area, col, row) {
             self.drag = Some(Drag::Rule {
                 leaf,
@@ -504,12 +526,14 @@ impl Terminal {
         }
     }
 
-    fn on_move(&mut self, event: &MouseMoveEvent) {
+    fn on_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         let Some(drag) = self.drag else {
             return;
         };
         if event.pressed_button.is_none() {
             self.drag = None;
+            self.drop = None;
+            cx.notify();
             return;
         }
         let Some((col, row)) = self.cell(event.position) else {
@@ -554,6 +578,13 @@ impl Terminal {
                 };
                 self.request(ToDaemon::MoveFloating { leaf, geometry });
             }
+            Drag::Move { leaf } => {
+                let drop = self.drop_at(leaf, col, row, event.modifiers.alt);
+                if drop != self.drop {
+                    self.drop = drop;
+                    cx.notify();
+                }
+            }
             Drag::Pane => {
                 if let Some(focused) = self.focused_placed() {
                     let button = event.pressed_button.unwrap_or(MouseButton::Left);
@@ -563,12 +594,80 @@ impl Terminal {
         }
     }
 
-    fn on_release(&mut self, event: &MouseUpEvent) {
-        if let Some(Drag::Pane) = self.drag.take()
-            && let (Some(focused), Some((col, row))) =
-                (self.focused_placed(), self.cell(event.position))
-        {
-            self.to_pane(&focused, col, row, event.button, MouseAction::Release);
+    fn on_release(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) {
+        let Some((col, row)) = self.cell(event.position) else {
+            self.drag = None;
+            self.drop = None;
+            return;
+        };
+        match self.drag.take() {
+            Some(Drag::Pane) => {
+                if let Some(focused) = self.focused_placed() {
+                    self.to_pane(&focused, col, row, event.button, MouseAction::Release);
+                }
+            }
+            Some(Drag::Move { leaf }) => {
+                if let Some(drop) = self.drop_at(leaf, col, row, event.modifiers.alt) {
+                    self.request(ToDaemon::DropLeaf { leaf, drop });
+                }
+                self.drop = None;
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
+    fn drop_at(&self, leaf: LeafId, col: u16, row: u16, float: bool) -> Option<Drop> {
+        let placement = &self.placement;
+        drop_at(&placement.placed, placement.area, leaf, col, row, float)
+    }
+
+    /// The cells a drop would give the moved leaf.
+    fn preview(&self) -> Option<Cells> {
+        let placement = &self.placement;
+        let target = |id: LeafId| {
+            placement
+                .placed
+                .iter()
+                .find(|p| p.leaf.id == id)
+                .map(|p| p.outer)
+        };
+        match self.drop? {
+            Drop::Stack(id) => target(id),
+            Drop::Beside(id, side) => {
+                let outer = target(id)?;
+                let (half_width, half_height) = (outer.width / 2, outer.height / 2);
+                Some(match side {
+                    Side::Left => Cells {
+                        width: half_width,
+                        ..outer
+                    },
+                    Side::Right => Cells {
+                        x: outer.x + outer.width - half_width,
+                        width: half_width,
+                        ..outer
+                    },
+                    Side::Up => Cells {
+                        height: half_height,
+                        ..outer
+                    },
+                    Side::Down => Cells {
+                        y: outer.y + outer.height - half_height,
+                        height: half_height,
+                        ..outer
+                    },
+                })
+            }
+            Drop::Float(geometry) => {
+                let area = placement.area;
+                let cells = |fraction: f32, length: u16| (fraction * f32::from(length)) as u16;
+                Some(Cells {
+                    x: area.x + cells(geometry.x, area.width),
+                    y: area.y + cells(geometry.y, area.height),
+                    width: cells(geometry.width, area.width),
+                    height: cells(geometry.height, area.height),
+                })
+            }
         }
     }
 
@@ -646,10 +745,13 @@ impl Terminal {
             bounds,
             leaves: Vec::new(),
             mark: None,
+            preview: None,
             tones,
             palette,
             family: self.family,
         };
+        // The preview reads the last placement, which the mouse used too.
+        scene.preview = self.preview().map(|cells| grid.rect(cells));
         self.placement = Placement {
             grid: Some(grid.clone()),
             ..Placement::default()
@@ -877,13 +979,13 @@ impl Render for Terminal {
                             cx.stop_propagation();
                         }),
                     )
-                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| {
-                        this.on_move(event);
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                        this.on_move(event, cx);
                     }))
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseUpEvent, _, cx| {
-                            this.on_release(event);
+                            this.on_release(event, cx);
                             cx.stop_propagation();
                         }),
                     )

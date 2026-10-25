@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use gpui::{
     AnyWindowHandle, AppContext, HeadlessAppContext, Keystroke, Modifiers, MouseButton,
-    MouseDownEvent, MouseUpEvent, PlatformInput, point, px, size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, point, px, size,
 };
 
 /// Lets the window and the daemon run for `wait`, then draws a frame.
@@ -56,29 +56,44 @@ fn keys(cx: &mut HeadlessAppContext, window: AnyWindowHandle, keys: &[&str]) -> 
     Ok(())
 }
 
-fn click(cx: &mut HeadlessAppContext, window: AnyWindowHandle, x: f32, y: f32) -> Result<()> {
-    let position = point(px(x), px(y));
+/// One mouse event at a window point.
+fn mouse(cx: &mut HeadlessAppContext, window: AnyWindowHandle, event: PlatformInput) -> Result<()> {
     cx.update_window(window, |_, window, cx| {
-        window.dispatch_event(
-            PlatformInput::MouseDown(MouseDownEvent {
-                button: MouseButton::Left,
-                position,
-                modifiers: Modifiers::default(),
-                click_count: 1,
-                first_mouse: false,
-            }),
-            cx,
-        );
-        window.dispatch_event(
-            PlatformInput::MouseUp(MouseUpEvent {
-                button: MouseButton::Left,
-                position,
-                modifiers: Modifiers::default(),
-                click_count: 1,
-            }),
-            cx,
-        );
+        window.dispatch_event(event, cx);
+    })?;
+    pump(cx, window, Duration::from_millis(150))
+}
+
+fn down(at: Point<Pixels>) -> PlatformInput {
+    PlatformInput::MouseDown(MouseDownEvent {
+        button: MouseButton::Left,
+        position: at,
+        modifiers: Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
     })
+}
+
+fn drag_to(at: Point<Pixels>) -> PlatformInput {
+    PlatformInput::MouseMove(MouseMoveEvent {
+        position: at,
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::default(),
+    })
+}
+
+fn up(at: Point<Pixels>) -> PlatformInput {
+    PlatformInput::MouseUp(MouseUpEvent {
+        button: MouseButton::Left,
+        position: at,
+        modifiers: Modifiers::default(),
+        click_count: 1,
+    })
+}
+
+fn click(cx: &mut HeadlessAppContext, window: AnyWindowHandle, at: Point<Pixels>) -> Result<()> {
+    mouse(cx, window, down(at))?;
+    mouse(cx, window, up(at))
 }
 
 fn shot(
@@ -117,15 +132,27 @@ fn main() -> Result<()> {
     keys(cx, window, &["ctrl-g", "n"])?;
     keys(cx, window, &["ctrl-g", "p", "d", "escape"])?;
     shot(cx, window, &out, "2-three-panes")?;
-    click(cx, window, 100.0, 300.0)?;
+    click(cx, window, point(px(100.0), px(300.0)))?;
     shot(cx, window, &out, "3-clicked-left")?;
+    // The bottom right pane by its title, to the left pane's left edge.
+    mouse(cx, window, down(point(px(830.0), px(410.0))))?;
+    mouse(cx, window, drag_to(point(px(30.0), px(300.0))))?;
+    shot(cx, window, &out, "4-moving")?;
+    mouse(cx, window, up(point(px(30.0), px(300.0))))?;
+    shot(cx, window, &out, "5-dropped-beside")?;
+    // The right pane by its title, to the middle of the leftmost one.
+    mouse(cx, window, down(point(px(900.0), px(40.0))))?;
+    mouse(cx, window, drag_to(point(px(160.0), px(400.0))))?;
+    shot(cx, window, &out, "6-moving-to-stack")?;
+    mouse(cx, window, up(point(px(160.0), px(400.0))))?;
+    shot(cx, window, &out, "7-stacked")?;
     keys(cx, window, &["ctrl-g", "z"])?;
-    shot(cx, window, &out, "4-zoom")?;
+    shot(cx, window, &out, "8-zoom")?;
     keys(cx, window, &["ctrl-g", "z"])?;
     keys(cx, window, &["ctrl-g", "p", "f", "escape"])?;
-    shot(cx, window, &out, "5-floating")?;
+    shot(cx, window, &out, "9-floating")?;
     keys(cx, window, &["ctrl-g", "t", "n", "escape"])?;
-    shot(cx, window, &out, "6-new-tab")?;
+    shot(cx, window, &out, "10-new-tab")?;
     keys(cx, window, &["ctrl-g", "?"])?;
-    shot(cx, window, &out, "7-keys")
+    shot(cx, window, &out, "11-keys")
 }
