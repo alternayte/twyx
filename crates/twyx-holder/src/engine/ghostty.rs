@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use libghostty_vt::fmt::Format;
 use libghostty_vt::render::{CellIterator, RowIterator};
-use libghostty_vt::screen::CellWide;
 use libghostty_vt::screen::TrackedGridRef;
+use libghostty_vt::screen::{CellContentTag, CellWide};
 use libghostty_vt::search::Search;
 use libghostty_vt::selection::{FormatOptions, Selection};
 use libghostty_vt::snapshot::Decoder;
@@ -241,7 +241,10 @@ impl Ghostty {
                 line.push(Cell {
                     text,
                     fg: colour(style.fg_color),
-                    bg: colour(style.bg_color),
+                    bg: match cell.raw_cell().map(content_background) {
+                        Ok(Some(erased)) => erased,
+                        _ => colour(style.bg_color),
+                    },
                     attrs,
                     underline: underline(style.underline),
                     underline_colour: match style.underline_color {
@@ -636,6 +639,23 @@ impl Ghostty {
     }
 }
 
+/// The background a cell holds in place of text: a line or a screen
+/// erased while a background was set keeps it in each cell, with no style.
+fn content_background(raw: libghostty_vt::screen::Cell) -> Option<Colour> {
+    match raw.content_tag().ok()? {
+        CellContentTag::BgColorPalette => Some(Colour::Palette(raw.bg_color_palette().ok()?.0)),
+        CellContentTag::BgColorRgb => {
+            let rgb = raw.bg_color_rgb().ok()?;
+            Some(Colour::Rgb {
+                r: rgb.r,
+                g: rgb.g,
+                b: rgb.b,
+            })
+        }
+        _ => None,
+    }
+}
+
 fn colour(colour: StyleColor) -> Colour {
     match colour {
         StyleColor::None => Colour::Default,
@@ -868,5 +888,15 @@ mod tests {
         assert_eq!(view.rows[0].cells[0].text, "字");
         assert_eq!(view.rows[0].cells[1].text, "");
         assert_eq!(view.cursor.col, 2);
+    }
+
+    #[test]
+    fn a_line_erased_with_a_background_keeps_it_in_every_cell() {
+        let mut engine = engine();
+        engine.advance(b"\x1b[41mab\x1b[K\x1b[0m");
+        let view = engine.view();
+        let red = Colour::Palette(1);
+        assert_eq!(view.rows[0].cells[0].bg, red, "a written cell");
+        assert_eq!(view.rows[0].cells[10].bg, red, "an erased cell");
     }
 }
