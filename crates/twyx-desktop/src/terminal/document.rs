@@ -139,7 +139,9 @@ impl Terminal {
             .document
             .blocks
             .iter()
-            .map(|block| draw.block(block, cx).into_any_element())
+            // A scrolled column would shrink a block that clips its content to
+            // nothing.
+            .map(|block| draw.block(block, cx).flex_shrink_0().into_any_element())
             .collect();
         self.pictures = pictures;
         let body = div()
@@ -547,6 +549,8 @@ impl Draw<'_> {
                     div()
                         .id(("table", (self.leaf.0 << 20) | self.tables))
                         .overflow_x_scroll()
+                        .flex()
+                        .flex_row()
                         .child(table),
                 )
             }

@@ -18,7 +18,7 @@ use twyx_core::theme::{AgentState, SPACE};
 use twyx_protocol::client::{
     InboxItem, Launch, Overview, PaneInfo, PaneState, TabInfo, WorkspaceInfo,
 };
-use twyx_protocol::grid::{Attrs, Cell, Colour, Cursor};
+use twyx_protocol::grid::{Attrs, Cell, Colour, Cursor, Underline};
 use twyx_protocol::sidebar::Row;
 use twyx_protocol::view::View;
 
@@ -630,14 +630,25 @@ fn convert(cell: &ratatui::buffer::Cell) -> Cell {
         _ => Colour::Default,
     };
     let mut attrs = Attrs::empty();
-    if cell.modifier.contains(Modifier::BOLD) {
-        attrs |= Attrs::BOLD;
+    for (modifier, attr) in [
+        (Modifier::BOLD, Attrs::BOLD),
+        (Modifier::ITALIC, Attrs::ITALIC),
+        (Modifier::CROSSED_OUT, Attrs::STRIKE),
+    ] {
+        if cell.modifier.contains(modifier) {
+            attrs |= attr;
+        }
     }
     Cell {
         text: cell.symbol().to_owned(),
         fg: colour(cell.fg),
         bg: colour(cell.bg),
         attrs,
+        underline: if cell.modifier.contains(Modifier::UNDERLINED) {
+            Underline::Single
+        } else {
+            Underline::None
+        },
         ..Cell::blank()
     }
 }

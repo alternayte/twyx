@@ -966,6 +966,8 @@ impl Terminal {
             }
             Command::OpenFile => {
                 self.keymap.reset();
+                // A file made a moment ago is in the list.
+                self.files_asked = None;
                 self.picker = Some(Picker::files());
                 cx.notify();
             }

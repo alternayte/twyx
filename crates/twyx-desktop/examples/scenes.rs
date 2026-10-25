@@ -342,7 +342,7 @@ fn review(
     shot(cx, window, out, "35-open-file")?;
     keys(cx, window, &["enter"])?;
     pump(cx, window, Duration::from_secs(2))?;
-    shot(cx, window, out, "36-opened-in-neovim")?;
+    shot(cx, window, out, "36-opened-document")?;
     keys(cx, window, &["ctrl-g", "/", "s", "a", "t", "u", "r"])?;
     pump(cx, window, Duration::from_secs(1))?;
     shot(cx, window, out, "37-find")?;
@@ -350,6 +350,24 @@ fn review(
     pump(cx, window, Duration::from_secs(2))?;
     shot(cx, window, out, "38-found-in-neovim")?;
     keys(cx, window, &["ctrl-g", "shift-f"])?;
+
+    // A Markdown document: its blocks, a chosen link, the end with its
+    // images, and a remote address waiting for the reader.
+    std::fs::create_dir_all(repo.join("docs"))?;
+    std::fs::write(repo.join("docs/swatch.png"), SWATCH)?;
+    std::fs::write(repo.join("docs/guide.md"), GUIDE)?;
+    keys(cx, window, &["ctrl-g", "o"])?;
+    pump(cx, window, Duration::from_secs(1))?;
+    keys(cx, window, &["g", "u", "i", "d", "e", "enter"])?;
+    pump(cx, window, Duration::from_secs(2))?;
+    shot(cx, window, out, "39-document")?;
+    keys(cx, window, &["tab", "tab"])?;
+    shot(cx, window, out, "40-document-link")?;
+    keys(cx, window, &["G"])?;
+    shot(cx, window, out, "41-document-end")?;
+    keys(cx, window, &["g", "escape", "tab", "enter"])?;
+    shot(cx, window, out, "42-document-remote-link")?;
+    keys(cx, window, &["escape"])?;
 
     // The theme follows config.toml as it changes; a bad file keeps it.
     std::fs::create_dir_all(file.parent().context("a config directory")?)?;
@@ -403,3 +421,17 @@ fn git(repo: &Path, args: &[&str]) -> Result<()> {
     anyhow::ensure!(status.success(), "git {args:?} failed");
     Ok(())
 }
+
+/// A document with every kind of block.
+const GUIDE: &str = "# Guide\n\n\
+A paragraph with *emphasis*, **strong text**, ~~struck~~ and `inline code`, \
+long enough to wrap. See [the site](https://example.com) or [the readme](../README.md).\n\n\
+## Tasks\n\n- [x] parse the tree\n- [ ] draw the tree\n  1. headings\n  2. tables\n\n\
+## Table\n\n| Name | Kind | Size |\n|:--|:--:|--:|\n| core | lib | 12 |\n| desktop | bin | 340 |\n\n\
+## Code\n\n```rust\nfn main() {\n    let name = \"twyx\"; // a comment\n    println!(\"{name}\");\n}\n```\n\n\
+> A quote that says [where to start](#guide).\n\n\
+![a swatch](swatch.png)\n\n![a remote logo](https://example.com/logo.png)\n\n\
+<script>alert(\"never runs\")</script>\n\n---\n\nThe end.\n";
+
+/// A 64 by 16 PNG in one blue.
+const SWATCH: &[u8] = include_bytes!("swatch.png");
