@@ -169,8 +169,8 @@ pub struct Daemon {
     pub(crate) tasks: BTreeMap<PaneId, crate::tasks::Waiting>,
     /// One worktree add at a time per project.
     pub(crate) add_locks: BTreeMap<u64, std::sync::Arc<std::sync::Mutex<()>>>,
-    /// One review job at a time per worktree.
-    pub(crate) review_locks: BTreeMap<u64, std::sync::Arc<std::sync::Mutex<()>>>,
+    /// Each worktree's review jobs, run one at a time in the order sent.
+    pub(crate) review_queues: BTreeMap<u64, Sender<crate::review::Job>>,
     /// Pastes a holder has yet to answer, by id.
     pub(crate) injections: BTreeMap<u64, crate::inject::Pending>,
     pub(crate) next_injection: u64,
@@ -223,7 +223,7 @@ pub fn run(paths: Paths) -> Result<()> {
         notified: BTreeMap::new(),
         last_notice: None,
         tasks: BTreeMap::new(),
-        review_locks: BTreeMap::new(),
+        review_queues: BTreeMap::new(),
         injections: BTreeMap::new(),
         next_injection: 0,
         check_runs: BTreeMap::new(),

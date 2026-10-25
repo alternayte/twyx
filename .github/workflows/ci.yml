@@ -32,10 +32,15 @@ jobs:
         with:
           version: 0.16.0
       # The Neovim conformance cases need Neovim 0.11 or later on PATH.
-      - uses: rhysd/action-setup-vim@v1
-        with:
-          neovim: true
-          version: stable
+      - name: Neovim
+        run: |
+          case "$RUNNER_OS-$(uname -m)" in
+            Linux-x86_64) asset=nvim-linux-x86_64 ;;
+            macOS-arm64) asset=nvim-macos-arm64 ;;
+            *) echo "no Neovim asset for $RUNNER_OS-$(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/neovim/neovim/releases/download/stable/$asset.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$asset/bin" >> "$GITHUB_PATH"
       # checks/linux-target.sh type-checks the Linux build from macOS too.
       - run: rustup target add x86_64-unknown-linux-gnu
       - run: just check
@@ -58,9 +63,14 @@ jobs:
         with:
           version: 0.16.0
       # The Neovim conformance cases need Neovim 0.11 or later on PATH.
-      - uses: rhysd/action-setup-vim@v1
-        with:
-          neovim: true
-          version: stable
+      - name: Neovim
+        run: |
+          case "$RUNNER_OS-$(uname -m)" in
+            Linux-x86_64) asset=nvim-linux-x86_64 ;;
+            macOS-arm64) asset=nvim-macos-arm64 ;;
+            *) echo "no Neovim asset for $RUNNER_OS-$(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/neovim/neovim/releases/download/stable/$asset.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$asset/bin" >> "$GITHUB_PATH"
       - run: just test
 

@@ -1,14 +1,17 @@
 //! Review requests: each runs as a background job, one at a time per
-//! worktree, since they share its review index.
+//! worktree and in the order sent, since they share its review index and a
+//! marking must land before the staging that follows it.
 
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
 
 use twyx_core::layout::Content;
 use twyx_protocol::client::{IndexState, ReviewFile, ReviewInfo, Reviewed, ShipReport};
 
-use crate::daemon::Daemon;
+use crate::daemon::{Daemon, Event};
 use crate::git;
 use crate::worktrees::Done;
+
+pub(crate) type Job = Box<dyn FnOnce() -> Done + Send>;
 
 impl Daemon {
     /// Shows the review leaf of a worktree to the client: the one its
@@ -68,13 +71,17 @@ impl Daemon {
             .projects
             .get(&entry.project)
             .and_then(|project| project.base_branch.clone());
-        let lock = Arc::clone(
-            self.review_locks
-                .entry(worktree)
-                .or_insert_with(|| Arc::new(Mutex::new(()))),
-        );
-        self.job(move || {
-            let _one_at_a_time = lock.lock();
+        let events = self.events.clone();
+        let queue = self.review_queues.entry(worktree).or_insert_with(|| {
+            let (queue, jobs) = mpsc::channel::<Job>();
+            std::thread::spawn(move || {
+                for job in jobs {
+                    let _ = events.send(Event::Git(job()));
+                }
+            });
+            queue
+        });
+        let _ = queue.send(Box::new(move || {
             let (failed, shipped) = match change {
                 Some(change) => apply(&path, &name, base_branch.as_deref(), worktree, change),
                 None => (None, None),
@@ -97,7 +104,7 @@ impl Daemon {
                 review,
                 shipped,
             }
-        });
+        }));
     }
 }
 
