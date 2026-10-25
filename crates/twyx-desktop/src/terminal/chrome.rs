@@ -156,7 +156,9 @@ impl Terminal {
             (
                 location,
                 lease.is_some_and(|holder| holder != shared.client),
-                shared.workspaces.message.clone(),
+                self.config_error
+                    .clone()
+                    .or_else(|| shared.workspaces.message.clone()),
             )
         };
         let mode = self.keymap.mode();

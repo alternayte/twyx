@@ -15,7 +15,7 @@ use crossterm::event::{
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, terminal};
 
-use twyx_core::config::{Config, ConfigError, ThemeConfig};
+use twyx_core::config::{Config, ThemeConfig};
 use twyx_core::keys::{Command, Mode, Outcome};
 use twyx_core::layout::{Content, LeafId};
 use twyx_core::theme::Rgb;
@@ -48,7 +48,7 @@ pub fn attach(paths: &twyx_core::paths::Paths, workspace: Option<u64>) -> Result
     // apply, and the status bar shows the error until a reload fixes it.
     let (config, config_error) = match twyx_core::config::load(&config_file) {
         Ok(config) => (config, None),
-        Err(error) => (Config::default(), Some(error.to_string())),
+        Err(error) => (Config::default(), Some(error.brief())),
     };
     let (cols, rows) = clamp_size(terminal::size().context("read the terminal size")?);
     let (cols, rows) = (cols.max(2), rows.max(1 + CHROME_ROWS));
@@ -274,7 +274,7 @@ fn run(
 ) -> Result<()> {
     let mut keymap = config.keymap;
     let default_agent = config.default_agent;
-    let mut watch = Watch::new(config_file);
+    let mut watch = twyx_core::config::Watch::new(config_file);
     // The last reload's error, until a good one replaces it.
     let mut notice: Option<String> = config_error;
     let mut size = size;
@@ -533,7 +533,7 @@ fn run(
                     notice = None;
                 }
                 // A bad file keeps the last good config.
-                Err(error) => notice = Some(error.to_string()),
+                Err(error) => notice = Some(error.brief()),
             }
             dirty = true;
         }
@@ -895,45 +895,6 @@ fn run(
             }
         }
     }
-}
-
-/// Notices when `config.toml` changes, by its modification time, at most
-/// once per reload interval.
-#[derive(Debug)]
-struct Watch {
-    file: std::path::PathBuf,
-    modified: Option<std::time::SystemTime>,
-    checked: Instant,
-}
-
-impl Watch {
-    fn new(file: &std::path::Path) -> Self {
-        Self {
-            file: file.to_path_buf(),
-            modified: modified(file),
-            checked: Instant::now(),
-        }
-    }
-
-    /// The config again, if the file changed since the last look.
-    fn poll(&mut self) -> Option<Result<Config, ConfigError>> {
-        if self.checked.elapsed() < twyx_core::tuning::CONFIG_POLL {
-            return None;
-        }
-        self.checked = Instant::now();
-        let now = modified(&self.file);
-        if now == self.modified {
-            return None;
-        }
-        self.modified = now;
-        Some(twyx_core::config::load(&self.file))
-    }
-}
-
-fn modified(file: &std::path::Path) -> Option<std::time::SystemTime> {
-    std::fs::metadata(file)
-        .and_then(|meta| meta.modified())
-        .ok()
 }
 
 /// A terminal that reports no size is not one twyx can lay out; fall back to

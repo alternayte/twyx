@@ -145,6 +145,17 @@ impl fmt::Display for ConfigError {
     }
 }
 
+impl ConfigError {
+    /// The error with the file's name alone, for a status bar.
+    pub fn brief(&self) -> String {
+        let name = self.file.file_name().map_or_else(
+            || self.file.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        format!("{name}:{}: {}", self.line, self.reason)
+    }
+}
+
 impl std::error::Error for ConfigError {}
 
 type Bindings = BTreeMap<Spanned<String>, Spanned<String>>;
@@ -418,6 +429,45 @@ pub fn parse(file: &Path, text: &str) -> Result<Config, ConfigError> {
         checks,
         osc52,
     })
+}
+
+/// Notices when `config.toml` changes, by its modification time, at most
+/// once per reload interval.
+#[derive(Debug)]
+pub struct Watch {
+    file: PathBuf,
+    modified: Option<std::time::SystemTime>,
+    checked: std::time::Instant,
+}
+
+impl Watch {
+    pub fn new(file: &Path) -> Self {
+        Self {
+            file: file.to_path_buf(),
+            modified: modified(file),
+            checked: std::time::Instant::now(),
+        }
+    }
+
+    /// The config again, if the file changed since the last look.
+    pub fn poll(&mut self) -> Option<Result<Config, ConfigError>> {
+        if self.checked.elapsed() < crate::tuning::CONFIG_POLL {
+            return None;
+        }
+        self.checked = std::time::Instant::now();
+        let now = modified(&self.file);
+        if now == self.modified {
+            return None;
+        }
+        self.modified = now;
+        Some(load(&self.file))
+    }
+}
+
+fn modified(file: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(file)
+        .and_then(|meta| meta.modified())
+        .ok()
 }
 
 #[cfg(test)]

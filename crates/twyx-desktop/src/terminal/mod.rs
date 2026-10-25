@@ -20,6 +20,7 @@ use gpui::{
     Window, canvas, div, point, px, size,
 };
 
+use twyx_core::config::{Config, ThemeConfig, Watch};
 use twyx_core::keys::{Command, Keymap, Mode, Outcome};
 use twyx_core::layout::{
     Cells, Content, Drop, Fractions, Leaf, LeafId, Placed, Side, drop_at, frame_title, rule_at,
@@ -163,6 +164,11 @@ pub struct Terminal {
     /// The tab area, in cells.
     grid: (u16, u16),
     keymap: Keymap,
+    theme: ThemeConfig,
+    /// Reloads the keys and the theme when the config file changes.
+    watch: Option<Watch>,
+    /// Why the config file could not be used; the last good config stays.
+    config_error: Option<String>,
     /// Whether the key sheet shows over the panes.
     keys: bool,
     focused_once: bool,
@@ -206,11 +212,14 @@ impl Terminal {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
+    /// A window on `config`. `watch` reloads it when its file changes;
+    /// `error` says why the file at start could not be used.
     pub fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
-        keymap: Keymap,
-        default_agent: Option<String>,
+        config: Config,
+        watch: Option<Watch>,
+        error: Option<String>,
     ) -> Self {
         let family = paint::family(window.text_system());
         let metrics = Metrics::measure(window.text_system(), family, px(DESKTOP.size.body));
@@ -252,7 +261,10 @@ impl Terminal {
             family,
             focus: cx.focus_handle(),
             grid: (80, 24),
-            keymap,
+            keymap: config.keymap,
+            theme: config.theme,
+            watch,
+            config_error: error,
             keys: false,
             focused_once: false,
             connected: false,
@@ -261,7 +273,7 @@ impl Terminal {
             drop: None,
             mark: None,
             tab_mark: None,
-            default_agent,
+            default_agent: config.default_agent,
             picker: None,
             list: None,
             selection: None,
@@ -422,6 +434,9 @@ impl Terminal {
                     for effect in effects {
                         terminal.apply(effect);
                     }
+                    if terminal.reload() {
+                        cx.notify();
+                    }
                     let unread = terminal
                         .shared()
                         .workspaces
@@ -465,6 +480,34 @@ impl Terminal {
             let _ = this.update(cx, |terminal, cx| terminal.connect(cx));
         })
         .detach();
+    }
+
+    /// Takes the config again when its file changed; a bad file keeps the
+    /// last good config. Whether anything changed.
+    fn reload(&mut self) -> bool {
+        let Some(reloaded) = self.watch.as_mut().and_then(Watch::poll) else {
+            return false;
+        };
+        match reloaded {
+            Ok(config) => {
+                self.keymap = config.keymap;
+                self.theme = config.theme;
+                self.default_agent = config.default_agent;
+                self.config_error = None;
+            }
+            Err(error) => self.config_error = Some(error.brief()),
+        }
+        true
+    }
+
+    /// The tones for this window: the config's variant, else the system's,
+    /// with the config's accent.
+    fn tones(&self, window: &Window) -> Tones {
+        let variant = self
+            .theme
+            .variant
+            .unwrap_or_else(|| paint::variant(window.appearance()));
+        Tones::of(variant).with_accent(self.theme.accent)
     }
 
     /// Sends a workspace action's requests and opens its dialog.
@@ -1178,7 +1221,10 @@ impl Terminal {
     fn scene(&mut self, grid: Grid, bounds: Bounds<Pixels>, tones: Tones, reduced: bool) -> Scene {
         let shared = Arc::clone(&self.shared);
         let shared = shared.lock().unwrap_or_else(|poison| poison.into_inner());
-        let palette = paint::Palette::of(tones.theme.variant);
+        let palette = paint::Palette {
+            cursor: tones.accent,
+            ..paint::Palette::of(tones.theme.variant)
+        };
         let mut scene = Scene {
             grid: grid.clone(),
             bounds,
@@ -1449,7 +1495,7 @@ impl Render for Terminal {
         );
         self.sync(area, window, cx);
 
-        let tones = Tones::of(paint::variant(window.appearance()));
+        let tones = self.tones(window);
         let reduced = cx.reduce_motion();
         let origin = point(left, px(DESKTOP.tab_bar));
         let grid = Grid {

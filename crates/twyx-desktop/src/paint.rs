@@ -317,6 +317,21 @@ impl Tones {
         }
     }
 
+    /// These tones with `accent` in place of the sheet's, when there is one.
+    pub fn with_accent(self, accent: Option<Rgb>) -> Self {
+        match accent {
+            Some(accent) => {
+                let theme = self.theme.with_accent(accent);
+                Self {
+                    accent: hsla(theme.accent),
+                    theme,
+                    ..self
+                }
+            }
+            None => self,
+        }
+    }
+
     pub fn agent(&self, state: AgentState) -> Hsla {
         match self.theme.agent(state) {
             twyx_core::theme::Tone::Ink => self.ink,

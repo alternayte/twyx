@@ -131,17 +131,28 @@ fn main() -> Result<()> {
         gpui_platform::current_headless_renderer,
     );
     cx.update(|cx| cx.set_reduce_motion(true));
-    let keymap = twyx_core::keys::Keymap::default();
+    let file = twyx_core::paths::Paths::discover()?
+        .config
+        .join("config.toml");
+    let watch = twyx_core::config::Watch::new(&file);
     let window: AnyWindowHandle = cx
         .open_window(size(px(1280.0), px(800.0)), |window, cx| {
-            cx.new(|cx| terminal::Terminal::new(window, cx, keymap, None))
+            cx.new(|cx| {
+                terminal::Terminal::new(
+                    window,
+                    cx,
+                    twyx_core::config::Config::default(),
+                    Some(watch),
+                    None,
+                )
+            })
         })?
         .into();
     let cx = &mut cx;
     pump(cx, window, Duration::from_secs(3))?;
     // `review` as the second argument renders only the review scenes.
     if std::env::args().nth(2).as_deref() == Some("review") {
-        return review(cx, window, &out);
+        return review(cx, window, &out, &file);
     }
     shot(cx, window, &out, "1-one-pane")?;
     keys(cx, window, &["ctrl-g", "n"])?;
@@ -220,11 +231,16 @@ fn main() -> Result<()> {
     keys(cx, window, &["ctrl-g", "b", "ctrl-g", "?"])?;
     shot(cx, window, &out, "17-keys")?;
     keys(cx, window, &["escape"])?;
-    review(cx, window, &out)
+    review(cx, window, &out, &file)
 }
 
 /// A repository with changes since its base, opened and reviewed.
-fn review(cx: &mut HeadlessAppContext, window: AnyWindowHandle, out: &Path) -> Result<()> {
+fn review(
+    cx: &mut HeadlessAppContext,
+    window: AnyWindowHandle,
+    out: &Path,
+    file: &Path,
+) -> Result<()> {
     let repo = repository("review")?;
     std::fs::write(repo.join("README.md"), "scenes\nwith a second line\n")?;
     std::fs::create_dir_all(repo.join("src"))?;
@@ -300,7 +316,19 @@ fn review(cx: &mut HeadlessAppContext, window: AnyWindowHandle, out: &Path) -> R
     pump(cx, window, Duration::from_secs(1))?;
     shot(cx, window, out, "29-inbox-dismissed")?;
     keys(cx, window, &["enter"])?;
-    shot(cx, window, out, "30-inbox-jumped")
+    shot(cx, window, out, "30-inbox-jumped")?;
+
+    // The theme follows config.toml as it changes; a bad file keeps it.
+    std::fs::create_dir_all(file.parent().context("a config directory")?)?;
+    std::fs::write(file, "[theme]\nvariant = \"dark\"\naccent = \"#c8401c\"\n")?;
+    keys(cx, window, &["ctrl-g", "t", "2", "escape"])?;
+    pump(cx, window, Duration::from_secs(2))?;
+    shot(cx, window, out, "31-dark-theme")?;
+    std::fs::write(file, "[theme]\nvariant = \"sepia\"\n")?;
+    pump(cx, window, Duration::from_secs(2))?;
+    shot(cx, window, out, "32-bad-config")?;
+    std::fs::remove_file(file)?;
+    pump(cx, window, Duration::from_secs(2))
 }
 
 /// A Git repository with one commit, in a new temporary directory named

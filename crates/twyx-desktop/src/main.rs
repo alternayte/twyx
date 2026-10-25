@@ -27,18 +27,21 @@ fn main() {
         specimen(paper);
         return;
     }
-    let (keymap, default_agent) = match twyx_core::paths::Paths::discover()
-        .map_err(|error| format!("{error:#}"))
-        .and_then(|paths| {
-            twyx_core::config::load(&paths.config.join("config.toml"))
-                .map_err(|error| error.to_string())
-        }) {
-        Ok(config) => (config.keymap, config.default_agent),
-        Err(error) => {
-            eprintln!("twyx-desktop: {error}");
-            std::process::exit(1);
-        }
+    // A bad config starts the window on the defaults, with the error in
+    // the status bar until the file is fixed.
+    let paths = twyx_core::paths::Paths::discover();
+    let file = paths
+        .as_ref()
+        .ok()
+        .map(|paths| paths.config.join("config.toml"));
+    let (config, error) = match &file {
+        Some(file) => match twyx_core::config::load(file) {
+            Ok(config) => (config, None),
+            Err(error) => (twyx_core::config::Config::default(), Some(error.brief())),
+        },
+        None => (twyx_core::config::Config::default(), None),
     };
+    let watch = file.as_deref().map(twyx_core::config::Watch::new);
     gpui_platform::application().run(move |cx: &mut App| {
         cx.set_reduce_motion(system_reduces_motion());
         let bounds = Bounds::centered(None, size(px(1100.0), px(700.0)), cx);
@@ -47,7 +50,7 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| terminal::Terminal::new(window, cx, keymap, default_agent)),
+            |window, cx| cx.new(|cx| terminal::Terminal::new(window, cx, config, watch, error)),
         );
         match opened {
             Ok(_) => cx.activate(true),
