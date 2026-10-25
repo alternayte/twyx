@@ -29,9 +29,12 @@ for arg do
 done
 exec zig cc -target x86_64-linux-gnu "$@"
 WRAPPER
+  # C++ sources (FreeType, for the desktop's Linux text) go the same way.
+  sed 's/zig cc /zig c++ /' "$wrapper/cc" > "$wrapper/c++"
   printf '#!/bin/sh\nexec zig ar "$@"\n' > "$wrapper/ar"
-  chmod +x "$wrapper/cc" "$wrapper/ar"
+  chmod +x "$wrapper/cc" "$wrapper/c++" "$wrapper/ar"
   export CC_x86_64_unknown_linux_gnu="$wrapper/cc"
+  export CXX_x86_64_unknown_linux_gnu="$wrapper/c++"
   export AR_x86_64_unknown_linux_gnu="$wrapper/ar"
 fi
 
