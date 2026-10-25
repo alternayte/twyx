@@ -55,6 +55,7 @@ IDs come from earlier results: `open` and `overview` give workspace, project and
 | `daemon.stop` | | none; the connection closes. Panes keep running. |
 | `daemon.kill_legacy` | | `null` |
 | `open` | `path`, `switch` (bool) | `workspace`, `client`: the project of `path` opens; with `switch`, the client that last had input shows it |
+| `document.open` | `path` (absolute), `switch` (bool) | `null`: the file shows as a Markdown document in the workspace that holds it; with `switch`, the client that last had input shows it |
 | `overview` | `refresh` (bool) | projects, worktrees with branch and dirty state, workspaces |
 | `workspace.switch` | `workspace` | `workspace`, `client` |
 | `tab.list` | `workspace` | the workspace's tabs |

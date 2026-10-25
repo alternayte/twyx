@@ -388,6 +388,13 @@ impl Session {
                     }),
                 )
             }
+            "document.open" => {
+                let open: api::OpenDocument = params(value)?;
+                self.synced(vec![ToDaemon::OpenDocument {
+                    path: open.path,
+                    switch: open.switch,
+                }])
+            }
             "overview" => {
                 let asked: api::OverviewParams = params(value)?;
                 Start::Send(

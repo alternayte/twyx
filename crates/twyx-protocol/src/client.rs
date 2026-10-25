@@ -822,11 +822,14 @@ pub enum ToDaemon {
     /// The paper and ink this client shows panes on; the panes of the
     /// tabs whose size it leases report them. Since minor 15.
     Colours(crate::holder::PaneColours),
-    /// Shows the document leaf of a file in this client's workspace, or
-    /// opens one in a new tab. A relative path is relative to the
-    /// workspace's directory. Since minor 16.
+    /// Shows the document leaf of a file, or opens one in a new tab of
+    /// the workspace whose directory holds it. A relative path is relative
+    /// to this client's workspace. A command client only records it, or
+    /// with `switch` shows it in the interactive client that last had
+    /// input. Since minor 16.
     OpenDocument {
         path: String,
+        switch: bool,
     },
     /// Sends the `Document` of a document leaf, unless the file is still
     /// as it was at `since`, its modification time in milliseconds.

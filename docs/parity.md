@@ -65,7 +65,9 @@ twyx has two clients: the TUI and the desktop app. Both attach to the same daemo
 | File tree | none: by design, quick open opens files | full |
 | Quick open | full | full; the palette also lists the files |
 | Find in files | full | full |
-| Markdown document view | none: not built yet | none: not built yet |
+| Markdown documents: headings, lists, task lists, tables, code, links, reload on change | full | full |
+| Images in documents | partial: the description shows; a terminal shows no picture | full |
+| Syntax highlighting in document code | none | full |
 | Open in Neovim | full | full |
 
 ## Chrome

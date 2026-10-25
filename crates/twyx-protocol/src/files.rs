@@ -22,7 +22,10 @@ pub struct TreeRow {
 /// other in Neovim.
 pub fn open(path: String) -> ToDaemon {
     if twyx_core::markdown::is_markdown(&path) {
-        ToDaemon::OpenDocument { path }
+        ToDaemon::OpenDocument {
+            path,
+            switch: false,
+        }
     } else {
         ToDaemon::OpenInEditor { path, line: None }
     }

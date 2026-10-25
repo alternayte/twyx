@@ -12,32 +12,35 @@ use crate::daemon::Daemon;
 use crate::worktrees::Done;
 
 impl Daemon {
-    /// Shows the document leaf of `path` in the client's workspace, or
-    /// opens one in a new tab named after the file.
-    pub(crate) fn open_document(&mut self, client: u64, path: String) {
-        let workspace = self.client_workspace(client);
-        let path = match self.file_root(workspace) {
+    /// Shows the document leaf of `path`, or opens one in a new tab named
+    /// after the file, in the workspace whose directory holds the file.
+    pub(crate) fn open_document(&mut self, client: u64, path: String, switch: bool) {
+        let own = self.client_workspace(client);
+        let path = match self.file_root(own) {
             Some((root, _)) => root.join(&path),
             None => PathBuf::from(&path),
         };
         let path = match path.canonicalize() {
-            Ok(path) if path.is_file() => path.to_string_lossy().into_owned(),
+            Ok(path) if path.is_file() => path,
             _ => {
                 self.refuse(client, format!("{} is not a file", path.display()));
                 return;
             }
         };
+        let workspace = self.workspace_holding(&path, own);
+        let path = path.to_string_lossy().into_owned();
         let content = Content::Document(path.clone());
         let existing = self.workspace_tabs(workspace).into_iter().find_map(|tab| {
-            self.tab(tab)?
+            let leaf = self
+                .tab(tab)?
                 .layout
                 .leaves()
                 .into_iter()
-                .find(|leaf| leaf.content == content)
-                .map(|leaf| leaf.id)
+                .find(|leaf| leaf.content == content)?;
+            Some((tab, leaf.id))
         });
-        let leaf = match existing {
-            Some(leaf) => leaf,
+        let (tab, leaf) = match existing {
+            Some(found) => found,
             None => {
                 let name = std::path::Path::new(&path)
                     .file_name()
@@ -53,10 +56,38 @@ impl Daemon {
                     entry.layout.split(None, Leaf { id, content }, Axis::Row);
                     entry.focus = Some(id);
                 }
-                id
+                (tab, id)
             }
         };
-        self.show_leaf(client, workspace, leaf);
+        let interactive = self.client(client).is_some_and(|entry| entry.interactive);
+        if interactive || switch {
+            self.show_leaf(client, workspace, leaf);
+        } else {
+            // A client that attaches to the workspace lands on it.
+            if let Some(entry) = self.tab_mut(tab) {
+                entry.focus = Some(leaf);
+            }
+            if let Some(entry) = self.workspaces.get_mut(&workspace) {
+                entry.active_tab = Some(tab);
+            }
+            self.broadcast_workspace();
+        }
+    }
+
+    /// The workspace whose directory holds `path` most closely; `own`
+    /// when none does.
+    fn workspace_holding(&self, path: &std::path::Path, own: u64) -> u64 {
+        let holds = |workspace: u64| {
+            self.file_root(workspace)
+                .and_then(|(root, _)| root.canonicalize().ok())
+                .filter(|root| path.starts_with(root))
+                .map(|root| root.components().count())
+        };
+        self.workspaces
+            .keys()
+            .filter_map(|workspace| Some((holds(*workspace)?, *workspace)))
+            .max()
+            .map_or(own, |(_, workspace)| workspace)
     }
 
     /// Sends a document leaf's text, unless the file is unchanged since

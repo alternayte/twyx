@@ -749,7 +749,7 @@ impl Daemon {
             ToDaemon::Files { workspace } => self.files(id, workspace),
             ToDaemon::FindInFiles { workspace, query } => self.find_in_files(id, workspace, query),
             ToDaemon::OpenInEditor { path, line } => self.open_in_editor(id, path, line),
-            ToDaemon::OpenDocument { path } => self.open_document(id, path),
+            ToDaemon::OpenDocument { path, switch } => self.open_document(id, path, switch),
             ToDaemon::Document { leaf, since } => self.document(id, leaf, since),
             ToDaemon::Colours(colours) => self.set_client_colours(id, colours),
             ToDaemon::OpenReview { worktree } => self.open_review(id, worktree),

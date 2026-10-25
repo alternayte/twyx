@@ -59,7 +59,7 @@ The prefix is `ctrl-g`. Every other key goes to the focused pane.
 
 A workspace is the tabs of one Git worktree or one plain directory. twyx starts in a default workspace at your home directory.
 
-- `twyx open <path>` opens the project that the path is in and attaches this terminal to its workspace. If the workspace is already open, it attaches to it. In a twyx pane, it shows the workspace in the client that last had input.
+- `twyx open <path>` opens the project that the path is in and attaches this terminal to its workspace. A Markdown file also opens as a document. If the workspace is already open, it attaches to it. In a twyx pane, it shows the workspace in the client that last had input.
 - `ctrl-g b` shows the sidebar: projects, worktrees, workspaces and their panes.
 - `ctrl-g s` opens the workspace switcher.
 - `ctrl-g w` opens workspace mode. In it, `n` makes a worktree and `x` removes one.

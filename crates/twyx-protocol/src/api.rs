@@ -90,6 +90,17 @@ pub struct Open {
     pub switch: bool,
 }
 
+/// `document.open`: a file shown as a Markdown document.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenDocument {
+    /// An absolute path.
+    pub path: String,
+    /// Show it in the interactive client that last had input.
+    #[serde(default)]
+    pub switch: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OverviewParams {

@@ -65,7 +65,8 @@ enum Command {
     /// attach this terminal to it; inside a pane, show it in the client that
     /// last had input.
     Open {
-        /// A path in a repository, or a plain directory.
+        /// A path in a repository, or a plain directory. A Markdown file
+        /// also shows as a document.
         #[arg(default_value = ".")]
         path: PathBuf,
         /// Only record it; switch no client and attach nothing.

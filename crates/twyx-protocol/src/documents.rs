@@ -216,6 +216,7 @@ mod tests {
             documents.key(leaf, enter),
             DocKey::Send(ToDaemon::OpenDocument {
                 path: root.join("other.md").to_string_lossy().into_owned(),
+                switch: false,
             }),
             "a Markdown file opens as a document"
         );

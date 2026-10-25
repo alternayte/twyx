@@ -156,7 +156,22 @@ pub fn open(path: &Path, no_switch: bool, json: bool) -> Result<()> {
     let mut connection = connect(&paths)?;
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let here = !no_switch && !json && interactive && std::env::var_os("TWYX_PANE_ID").is_none();
-    let (workspace, client) = open_path(&mut connection, path, !no_switch && !here)?;
+    let document = path.is_file() && twyx_core::markdown::is_markdown(&path.to_string_lossy());
+    let project = match path.parent() {
+        Some(parent) if document && !parent.as_os_str().is_empty() => parent,
+        Some(_) if document => Path::new("."),
+        _ => path,
+    };
+    let (workspace, client) = open_path(&mut connection, project, !no_switch && !here)?;
+    if document {
+        let _: serde_json::Value = connection.call(
+            "document.open",
+            &api::OpenDocument {
+                path: absolute(path)?,
+                switch: !no_switch && !here,
+            },
+        )?;
+    }
     let overview = overview(&mut connection, false)?;
     let summary = overview
         .workspaces

@@ -259,8 +259,28 @@ These keys work while a review leaf has the focus. They are fixed. The view show
 
 ## Files
 
-`ctrl-g o` lists the files of the workspace. Type to narrow the list, and `enter` opens the file in Neovim. `ctrl-g /` finds text in the files: type the text, and `enter` opens the chosen line in Neovim. A query with no capital letter ignores case. The list has the tracked files and the untracked files that Git does not ignore. In a directory that is not a Git repository, the list has the files that its ignore files do not hide.
+`ctrl-g o` lists the files of the workspace. Type to narrow the list, and `enter` opens the file: a Markdown file as a document, any other file in Neovim. `ctrl-g /` finds text in the files: type the text, and `enter` opens the chosen line in Neovim. A query with no capital letter ignores case. The list has the tracked files and the untracked files that Git does not ignore. In a directory that is not a Git repository, the list has the files that its ignore files do not hide.
 
 twyx opens the file in the Neovim of a pane in the workspace. With no Neovim in the workspace, it starts Neovim in a new pane.
 
 In the desktop client, `ctrl-g F` shows the file tree in the sidebar and gives it the keys. In the tree, `j` and `k` move, `enter` opens a directory or opens a file, `l` opens a directory, `h` closes it or goes to its parent, and `esc` gives the keys back to the panes. The TUI has no file tree.
+
+## Documents
+
+A document shows a Markdown file in a tab of its own. `twyx open README.md` opens one from the shell. The document reads the file again when it changes.
+
+| Key | Action |
+|---|---|
+| `j` `k`, `down` `up` | scroll a line |
+| `space`, `page down`, `ctrl-d` | next page |
+| `page up`, `ctrl-u` | previous page |
+| `g` `G`, `home` `end` | top, end |
+| `tab`, `shift-tab` | choose the next or previous link |
+| `enter` | follow the chosen link |
+| `esc` | drop the chosen link |
+| `e` | open the file in Neovim |
+| `a` | load the remote images, or hide them again (desktop) |
+
+A link to a Markdown file in the project opens it as a document. A link to another file in the project opens it in Neovim. A link to a heading goes to the heading. A link to an `http` or `https` address shows the address first; `enter` again opens it in the browser, and any other key cancels. Over SSH, the TUI copies the address to the clipboard instead.
+
+HTML in a document shows as its source and never runs. Images and links to files outside the project do not open. A remote image loads only after you press `a`, and only for that document while it is open. The TUI shows each image as its description.

@@ -260,6 +260,7 @@ fn a_document_opens_once_and_is_sent_again_only_when_it_changes() {
         client
             .send(&ToDaemon::OpenDocument {
                 path: "docs/guide.md".to_owned(),
+                switch: false,
             })
             .unwrap();
         client.wait_until("the document leaf", |c| documents(c).len() == 1);
@@ -293,4 +294,44 @@ fn a_document_opens_once_and_is_sent_again_only_when_it_changes() {
     std::fs::remove_file(&guide).unwrap();
     let gone = read(&mut client, leaf, second.modified);
     assert!(gone.error.is_some(), "{gone:?}");
+}
+
+#[test]
+fn twyx_open_on_a_markdown_file_records_a_document_that_its_workspace_lands_on() {
+    let mut sandbox = Sandbox::new("do");
+    sandbox.start();
+    let main = repo(&sandbox, "app");
+    write(&main.join("docs/guide.md"), "# Guide\n");
+    let output = sandbox
+        .command(&["open", "docs/guide.md", "--no-switch", "--json"])
+        .current_dir(&main)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut client = sandbox.connect(80, 24);
+    open(&mut client, &main);
+    client.wait_until("the document tab", |c| {
+        let Some(shown) = &c.workspace else {
+            return false;
+        };
+        shown
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.tab) == c.tab)
+            .is_some_and(|tab| {
+                tab.layout.leaves().iter().any(|leaf| {
+                    leaf.content
+                        == Content::Document(
+                            main.join("docs/guide.md").to_string_lossy().into_owned(),
+                        )
+                })
+            })
+    });
 }
