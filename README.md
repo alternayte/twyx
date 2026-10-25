@@ -7,7 +7,7 @@ twyx runs Neovim, shells and agent CLIs unmodified, locally or over SSH. It need
 no account, no cloud, no model and no credentials.
 
 Status: early. Version 0.1.0 is the first release.
-The terminal client works. The desktop client is not ready for use.
+The terminal client works. The desktop client is not ready for use yet. [docs/parity.md](docs/parity.md) lists what each client does.
 
 ![twyx with Claude Code at work in a task worktree, Neovim on the file it changes, a test pane, and the sidebar with each agent's state](docs/images/workspace.png)
 
