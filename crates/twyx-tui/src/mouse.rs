@@ -7,8 +7,7 @@
 //! copies it. Shift always selects.
 
 use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use twyx_core::layout::{Fractions, LeafId, Placed, Side};
-use twyx_core::theme::SPACE;
+use twyx_core::layout::{Cells, Fractions, LeafId, Side, rule_at, under};
 use twyx_protocol::client::ToDaemon;
 use twyx_protocol::grid::MouseMode;
 use twyx_protocol::holder::CopyAction;
@@ -102,7 +101,7 @@ impl Mouse {
         if let Some(floating) = placed
             .iter()
             .rev()
-            .find(|p| p.floating && holds(p, col, row))
+            .find(|p| p.floating && p.holds(col, row))
         {
             if Some(floating.leaf.id) != scene.focus {
                 actions.push(Action::Send(ToDaemon::FocusLeaf {
@@ -125,7 +124,9 @@ impl Mouse {
             if !actions.is_empty() {
                 return actions;
             }
-        } else if let Some((leaf, side)) = rule_at(scene, &placed, col, row) {
+        } else if let Some((leaf, side)) =
+            tab_area(scene).and_then(|area| rule_at(&placed, area, col, row))
+        {
             self.drag = Some(Drag::Rule {
                 leaf,
                 side,
@@ -143,7 +144,7 @@ impl Mouse {
             }));
             return actions;
         }
-        let Some(local) = local(target, col, row) else {
+        let Some(local) = target.local(col, row) else {
             return actions;
         };
         let Some(pane) = target.leaf.terminal().map(|pane| pane.raw()) else {
@@ -316,78 +317,13 @@ fn to_focused(scene: &Scene<'_>, mouse: MouseEvent) -> Option<Action> {
     input::to_input(Event::Mouse(local)).map(|event| Action::Send(ToDaemon::Input(event)))
 }
 
-fn local(placed: &Placed, col: u16, row: u16) -> Option<(u16, u16)> {
-    let inner = placed.inner;
-    let inside = placed.content
-        && col >= inner.x
-        && row >= inner.y
-        && col < inner.right()
-        && row < inner.bottom();
-    inside.then(|| (col - inner.x, row - inner.y))
-}
-
-fn holds(placed: &Placed, col: u16, row: u16) -> bool {
-    let outer = placed.outer;
-    let bottom = if placed.content {
-        outer.bottom()
-    } else {
-        outer.y + 1
-    };
-    placed.frame && col >= outer.x && col < outer.right() && row >= outer.y && row < bottom
-}
-
-/// The leaf whose frame holds a cell: the top floating one, else the tiled
-/// one. A collapsed stack child holds only its title row, which is also the
-/// rule below its neighbour, so the title wins.
-fn under(placed: &[Placed], col: u16, row: u16) -> Option<&Placed> {
-    placed
-        .iter()
-        .rev()
-        .filter(|p| p.floating)
-        .find(|p| holds(p, col, row))
-        .or_else(|| {
-            placed
-                .iter()
-                .filter(|p| !p.floating && !p.content)
-                .find(|p| holds(p, col, row))
-        })
-        .or_else(|| {
-            placed
-                .iter()
-                .filter(|p| !p.floating)
-                .find(|p| holds(p, col, row))
-        })
-}
-
-/// The rules between two tiled panes: a pane's right or bottom rule, the
-/// blanks after it and the neighbour's rule across them all drag the leaf on
-/// the left or above, on that side. The tab's own edges are not rules to
-/// drag.
-fn rule_at(scene: &Scene<'_>, placed: &[Placed], col: u16, row: u16) -> Option<(LeafId, Side)> {
+/// The area the scene placed the tab's leaves in.
+fn tab_area(scene: &Scene<'_>) -> Option<Cells> {
     let (cols, rows) = scene.tab_size()?;
-    let (right_edge, bottom_edge) = ((scene.origin() + cols).saturating_sub(1), rows);
-    let reach = SPACE.panes + 1;
-    placed
-        .iter()
-        .filter(|p| !p.floating && p.frame && p.content)
-        .find_map(|p| {
-            let outer = p.outer;
-            let right = outer.right().saturating_sub(1);
-            let bottom = outer.bottom().saturating_sub(1);
-            if (right..=right + reach).contains(&col)
-                && right < right_edge
-                && row > outer.y
-                && row < bottom
-            {
-                Some((p.leaf.id, Side::Right))
-            } else if (bottom..=bottom + reach).contains(&row)
-                && bottom < bottom_edge
-                && col > outer.x
-                && col < right
-            {
-                Some((p.leaf.id, Side::Down))
-            } else {
-                None
-            }
-        })
+    Some(Cells {
+        x: scene.origin(),
+        y: 1,
+        width: cols,
+        height: rows,
+    })
 }

@@ -199,6 +199,97 @@ pub struct Placed {
     pub floating: bool,
 }
 
+impl Placed {
+    /// Whether the frame holds a cell. A collapsed stack child holds only its
+    /// title row.
+    pub fn holds(&self, col: u16, row: u16) -> bool {
+        let outer = self.outer;
+        let bottom = if self.content {
+            outer.bottom()
+        } else {
+            outer.y + 1
+        };
+        self.frame && col >= outer.x && col < outer.right() && row >= outer.y && row < bottom
+    }
+
+    /// A cell in the pane's own cells, when the content shows it.
+    pub fn local(&self, col: u16, row: u16) -> Option<(u16, u16)> {
+        let inner = self.inner;
+        let inside = self.content
+            && col >= inner.x
+            && row >= inner.y
+            && col < inner.right()
+            && row < inner.bottom();
+        inside.then(|| (col - inner.x, row - inner.y))
+    }
+}
+
+/// The leaf whose frame holds a cell: the top floating one, else the tiled
+/// one. A collapsed stack child holds only its title row, which is also the
+/// rule below its neighbour, so the title wins.
+pub fn under(placed: &[Placed], col: u16, row: u16) -> Option<&Placed> {
+    placed
+        .iter()
+        .rev()
+        .filter(|p| p.floating)
+        .find(|p| p.holds(col, row))
+        .or_else(|| {
+            placed
+                .iter()
+                .filter(|p| !p.floating && !p.content)
+                .find(|p| p.holds(col, row))
+        })
+        .or_else(|| {
+            placed
+                .iter()
+                .filter(|p| !p.floating)
+                .find(|p| p.holds(col, row))
+        })
+}
+
+/// The rules between two tiled panes placed in `area`: a pane's right or
+/// bottom rule, the blanks after it and the neighbour's rule across them all
+/// drag the leaf on the left or above, on that side. The area's own edges
+/// are not rules to drag.
+pub fn rule_at(placed: &[Placed], area: Cells, col: u16, row: u16) -> Option<(LeafId, Side)> {
+    let (right_edge, bottom_edge) = (
+        area.right().saturating_sub(1),
+        area.bottom().saturating_sub(1),
+    );
+    let reach = SPACE.panes + 1;
+    placed
+        .iter()
+        .filter(|p| !p.floating && p.frame && p.content)
+        .find_map(|p| {
+            let outer = p.outer;
+            let right = outer.right().saturating_sub(1);
+            let bottom = outer.bottom().saturating_sub(1);
+            if (right..=right + reach).contains(&col)
+                && right < right_edge
+                && row > outer.y
+                && row < bottom
+            {
+                Some((p.leaf.id, Side::Right))
+            } else if (bottom..=bottom + reach).contains(&row)
+                && bottom < bottom_edge
+                && col > outer.x
+                && col < right
+            {
+                Some((p.leaf.id, Side::Down))
+            } else {
+                None
+            }
+        })
+}
+
+/// A frame title, marked when a zoom hides other tiled panes.
+pub fn frame_title(placed: &[Placed], title: String) -> String {
+    match placed.iter().filter(|p| !p.floating && !p.frame).count() {
+        0 => title,
+        hidden => format!("zoom · {hidden} hidden · {title}"),
+    }
+}
+
 impl Layout {
     pub fn leaves(&self) -> Vec<Leaf> {
         let mut leaves = Vec::new();

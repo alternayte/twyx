@@ -9,16 +9,16 @@ use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, KeyDownEvent, Pixels, Render,
-    SharedString, TextAlign, TextRun, Window, canvas, div, fill, font, point, px, size,
+    Bounds, Context, Div, FocusHandle, FontWeight, KeyDownEvent, Pixels, Render, Window, canvas,
+    div, fill, point, px, size,
 };
 use twyx_core::palette;
 use twyx_core::specimen::{AGENT, EDITOR, Run, SHELL};
-use twyx_core::theme::{AgentState, DESKTOP, Sheet, Theme, Variant};
+use twyx_core::theme::{AgentState, DESKTOP, Variant};
 use twyx_protocol::grid::{Attrs, Colour};
 use twyx_protocol::view::View;
 
-use crate::paint::{self, Metrics, Palette, hsla};
+use crate::paint::{self, Metrics, Palette, Tones, lerp, outline, text};
 
 const SCENES: [&str; 3] = ["workspace", "document", "review"];
 const PANES: [&str; 3] = ["zsh", "nvim theme.rs", "claude"];
@@ -34,39 +34,6 @@ const ENTRIES: [(&str, &str, &str); 4] = [
         "",
     ),
 ];
-
-/// The colours of one paper.
-#[derive(Debug, Clone, Copy)]
-struct Tones {
-    paper: Hsla,
-    ink: Hsla,
-    graphite: Hsla,
-    rule: Hsla,
-    accent: Hsla,
-    theme: Theme,
-}
-
-impl Tones {
-    fn of(variant: Variant) -> Self {
-        let sheet = Sheet::of(variant);
-        let theme = Theme::sheet(variant);
-        Self {
-            paper: hsla(sheet.paper),
-            ink: hsla(sheet.ink),
-            graphite: hsla(theme.graphite),
-            rule: hsla(theme.rule),
-            accent: hsla(theme.accent),
-            theme,
-        }
-    }
-
-    fn agent(&self, state: AgentState) -> Hsla {
-        match self.theme.agent(state) {
-            twyx_core::theme::Tone::Ink => self.ink,
-            twyx_core::theme::Tone::Rgb(colour) => hsla(colour),
-        }
-    }
-}
 
 /// The pencil mark on its way from one place to another. A new move starts
 /// from where the last one was going.
@@ -956,66 +923,4 @@ fn pane_rects(bounds: Bounds<Pixels>) -> [Bounds<Pixels>; 3] {
             size(right, bounds.size.height - top),
         ),
     ]
-}
-
-/// A rectangle drawn in four strokes of `width`, inside `bounds`.
-fn outline(window: &mut Window, bounds: Bounds<Pixels>, width: Pixels, colour: Hsla) {
-    let Bounds { origin, size: area } = bounds;
-    for side in [
-        Bounds::new(origin, size(area.width, width)),
-        Bounds::new(
-            point(origin.x, origin.y + area.height - width),
-            size(area.width, width),
-        ),
-        Bounds::new(origin, size(width, area.height)),
-        Bounds::new(
-            point(origin.x + area.width - width, origin.y),
-            size(width, area.height),
-        ),
-    ] {
-        window.paint_quad(fill(side, colour));
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn text(
-    window: &mut Window,
-    cx: &mut App,
-    family: &'static str,
-    content: &str,
-    origin: gpui::Point<Pixels>,
-    text_size: f32,
-    colour: Hsla,
-    semibold: bool,
-) {
-    let mut face = font(family);
-    if semibold {
-        face.weight = FontWeight::SEMIBOLD;
-    }
-    let run = TextRun {
-        len: content.len(),
-        font: face,
-        color: colour,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let line = window.text_system().shape_line(
-        SharedString::from(content.to_owned()),
-        px(text_size),
-        &[run],
-        None,
-    );
-    let _ = line.paint(
-        origin,
-        px(DESKTOP.unit * 4.0),
-        TextAlign::Left,
-        None,
-        window,
-        cx,
-    );
-}
-
-fn lerp(from: f32, to: f32, t: f32) -> f32 {
-    from + (to - from) * t
 }

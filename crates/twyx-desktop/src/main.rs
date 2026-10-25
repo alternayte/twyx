@@ -3,6 +3,7 @@
 
 mod keys;
 mod paint;
+mod panes;
 mod specimen;
 mod terminal;
 

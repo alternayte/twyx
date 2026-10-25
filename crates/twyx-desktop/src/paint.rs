@@ -2,9 +2,9 @@
 
 use gpui::{
     App, Bounds, Font, FontWeight, Hsla, Pixels, Point, SharedString, TextAlign, TextRun,
-    TextSystem, UnderlineStyle, Window, WindowAppearance, fill, font, point, px, rgb,
+    TextSystem, UnderlineStyle, Window, WindowAppearance, fill, font, point, px, rgb, size,
 };
-use twyx_core::theme::{DESKTOP, Rgb, Sheet, Theme, Variant};
+use twyx_core::theme::{AgentState, DESKTOP, Rgb, Sheet, Theme, Variant};
 use twyx_protocol::grid::{Attrs, Cell, Colour, Underline};
 use twyx_protocol::view::View;
 
@@ -90,13 +90,6 @@ impl Metrics {
         let line = f32::from(self.line_height).max(1.0);
         ((f32::from(height) / line).floor() as u16).max(1)
     }
-
-    /// The cell a point falls in.
-    pub fn cell_at(&self, bounds: Bounds<Pixels>, position: Point<Pixels>) -> (u16, u16) {
-        let x = f32::from(position.x - bounds.origin.x) / f32::from(self.cell_width).max(1.0);
-        let y = f32::from(position.y - bounds.origin.y) / f32::from(self.line_height).max(1.0);
-        (x.max(0.0) as u16, y.max(0.0) as u16)
-    }
 }
 
 /// Draws every row of the view inside `bounds`.
@@ -127,7 +120,7 @@ pub fn paint(
             bounds.origin.y + metrics.line_height * view.cursor.row as f32,
         );
         window.paint_quad(fill(
-            Bounds::new(origin, gpui::size(metrics.cell_width, metrics.line_height)),
+            Bounds::new(origin, size(metrics.cell_width, metrics.line_height)),
             palette.cursor.opacity(0.55),
         ));
     }
@@ -294,4 +287,99 @@ mod tests {
         assert_eq!(runs.len(), 4);
         assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len());
     }
+}
+
+/// The colours of one paper.
+#[derive(Debug, Clone, Copy)]
+pub struct Tones {
+    pub paper: Hsla,
+    pub ink: Hsla,
+    pub graphite: Hsla,
+    pub rule: Hsla,
+    pub accent: Hsla,
+    pub theme: Theme,
+}
+
+impl Tones {
+    pub fn of(variant: Variant) -> Self {
+        let sheet = Sheet::of(variant);
+        let theme = Theme::sheet(variant);
+        Self {
+            paper: hsla(sheet.paper),
+            ink: hsla(sheet.ink),
+            graphite: hsla(theme.graphite),
+            rule: hsla(theme.rule),
+            accent: hsla(theme.accent),
+            theme,
+        }
+    }
+
+    pub fn agent(&self, state: AgentState) -> Hsla {
+        match self.theme.agent(state) {
+            twyx_core::theme::Tone::Ink => self.ink,
+            twyx_core::theme::Tone::Rgb(colour) => hsla(colour),
+        }
+    }
+}
+
+/// A rectangle drawn in four strokes of `width`, inside `bounds`.
+pub fn outline(window: &mut Window, bounds: Bounds<Pixels>, width: Pixels, colour: Hsla) {
+    let Bounds { origin, size: area } = bounds;
+    for side in [
+        Bounds::new(origin, size(area.width, width)),
+        Bounds::new(
+            point(origin.x, origin.y + area.height - width),
+            size(area.width, width),
+        ),
+        Bounds::new(origin, size(width, area.height)),
+        Bounds::new(
+            point(origin.x + area.width - width, origin.y),
+            size(width, area.height),
+        ),
+    ] {
+        window.paint_quad(fill(side, colour));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn text(
+    window: &mut Window,
+    cx: &mut App,
+    family: &'static str,
+    content: &str,
+    origin: Point<Pixels>,
+    text_size: f32,
+    colour: Hsla,
+    semibold: bool,
+) {
+    let mut face = font(family);
+    if semibold {
+        face.weight = FontWeight::SEMIBOLD;
+    }
+    let run = TextRun {
+        len: content.len(),
+        font: face,
+        color: colour,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let line = window.text_system().shape_line(
+        SharedString::from(content.to_owned()),
+        px(text_size),
+        &[run],
+        None,
+    );
+    let _ = line.paint(
+        origin,
+        px(DESKTOP.unit * 4.0),
+        TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
+}
+
+pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
+    from + (to - from) * t
 }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use twyx_core::agent::{AgentState, Source};
 use twyx_core::inbox::Reason;
 use twyx_core::keys::Command;
-use twyx_core::layout::{Axis, Fractions, Layout, LeafId, Side};
+use twyx_core::layout::{Axis, Fractions, Layout, Leaf, LeafId, Side};
 use twyx_core::theme::AgentState as Mark;
 
 use crate::holder::CopyAction;
@@ -142,6 +142,74 @@ pub struct WorktreeInfo {
     pub error: Option<String>,
     /// The worktree's workspace, once it has one.
     pub workspace: Option<u64>,
+}
+
+impl PaneInfo {
+    /// What a frame and a tab call the pane: the title it set, else its
+    /// program.
+    pub fn label(&self) -> String {
+        if !self.title.is_empty() {
+            return self.title.clone();
+        }
+        match &self.launch {
+            Launch::Command(argv) => argv
+                .first()
+                .map(|program| program.rsplit('/').next().unwrap_or(program).to_owned())
+                .unwrap_or_default(),
+            Launch::Shell => "shell".to_owned(),
+            Launch::Unknown => "recovered".to_owned(),
+        }
+    }
+}
+
+impl TabInfo {
+    /// The tab's name, else the title of its first leaf.
+    pub fn label(&self, leaf_title: impl Fn(&Leaf) -> String) -> String {
+        if self.name.is_empty() {
+            self.layout
+                .leaves()
+                .first()
+                .map(leaf_title)
+                .unwrap_or_default()
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
+/// Where a status bar says the client is.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Location {
+    /// The worktree's name, or a plain directory's own name.
+    pub name: String,
+    /// Empty for a plain directory.
+    pub branch: String,
+    pub dirty: bool,
+}
+
+impl WorkspaceInfo {
+    pub fn location(&self) -> Location {
+        let Some(worktree) = &self.worktree else {
+            return Location {
+                name: self
+                    .directory
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned(),
+                ..Location::default()
+            };
+        };
+        let git = worktree.git.as_ref();
+        Location {
+            name: worktree.name.clone(),
+            branch: git
+                .map_or(worktree.branch.as_deref(), |git| git.branch.as_deref())
+                .unwrap_or("detached")
+                .to_owned(),
+            dirty: git.is_some_and(|git| git.changed > 0),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

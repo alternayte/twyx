@@ -12,7 +12,7 @@ use ratatui::style::{Color, Modifier};
 use ratatui::widgets::Widget;
 use twyx_core::inbox::most_urgent;
 use twyx_core::keys::{Command, Keymap, Mode};
-use twyx_core::layout::{Cells, Content, Fractions, Leaf, LeafId, Placed};
+use twyx_core::layout::{Cells, Content, Fractions, Leaf, LeafId, Placed, frame_title};
 use twyx_core::pane::PaneId;
 use twyx_core::theme::{AgentState, SPACE};
 use twyx_protocol::client::{
@@ -79,20 +79,7 @@ pub struct SidebarScene<'a> {
 
 /// A pane's name: its title, else its program.
 pub fn pane_title(panes: &HashMap<u64, PaneInfo>, pane: u64) -> String {
-    let Some(info) = panes.get(&pane) else {
-        return String::new();
-    };
-    if !info.title.is_empty() {
-        return info.title.clone();
-    }
-    match &info.launch {
-        Launch::Command(argv) => argv
-            .first()
-            .map(|program| program.rsplit('/').next().unwrap_or(program).to_owned())
-            .unwrap_or_default(),
-        Launch::Shell => "shell".to_owned(),
-        Launch::Unknown => "recovered".to_owned(),
-    }
+    panes.get(&pane).map(PaneInfo::label).unwrap_or_default()
 }
 
 /// The sidebar's width on a screen `cols` wide.
@@ -322,14 +309,9 @@ impl<'a> Scene<'a> {
 
         let placed = self.placed();
         let tiled: Vec<&Placed> = placed.iter().filter(|p| !p.floating && p.frame).collect();
-        // Only a zoom hides a tiled frame.
-        let hidden = placed.iter().filter(|p| !p.floating && !p.frame).count();
         let titles: Vec<String> = tiled
             .iter()
-            .map(|p| match hidden {
-                0 => self.leaf_title(&p.leaf),
-                _ => format!("zoom · {hidden} hidden · {}", self.leaf_title(&p.leaf)),
-            })
+            .map(|p| frame_title(&placed, self.leaf_title(&p.leaf)))
             .collect();
         let frames: Vec<Frame<'_>> = tiled
             .iter()
@@ -419,17 +401,7 @@ impl<'a> Scene<'a> {
         let names: Vec<String> = workspace
             .tabs
             .iter()
-            .map(|tab| {
-                if tab.name.is_empty() {
-                    tab.layout
-                        .leaves()
-                        .first()
-                        .map(|leaf| self.leaf_title(leaf))
-                        .unwrap_or_default()
-                } else {
-                    tab.name.clone()
-                }
-            })
+            .map(|tab| tab.label(|leaf| self.leaf_title(leaf)))
             .collect();
         let tabs: Vec<Tab<'_>> = names
             .iter()
@@ -461,27 +433,10 @@ impl<'a> Scene<'a> {
     }
 
     fn status_bar(&self, buf: &mut Buffer) {
-        let workspace = self.workspace;
-        let worktree = workspace.and_then(|workspace| workspace.worktree.as_ref());
-        // A plain directory shows its own name and no branch.
-        let place = match (worktree, workspace) {
-            (Some(worktree), _) => worktree.name.clone(),
-            (None, Some(workspace)) => workspace
-                .directory
-                .rsplit('/')
-                .next()
-                .unwrap_or_default()
-                .to_owned(),
-            (None, None) => String::new(),
-        };
-        let git = worktree.and_then(|worktree| worktree.git.as_ref());
-        let branch = match worktree {
-            Some(worktree) => git
-                .map_or(worktree.branch.as_deref(), |git| git.branch.as_deref())
-                .unwrap_or("detached")
-                .to_owned(),
-            None => String::new(),
-        };
+        let location = self
+            .workspace
+            .map(WorkspaceInfo::location)
+            .unwrap_or_default();
         let lease = self.tab_info().and_then(|tab| tab.lease);
         let note = match self.notice {
             Some(notice) => notice,
@@ -491,9 +446,9 @@ impl<'a> Scene<'a> {
         StatusBar {
             pen: self.pen,
             mode: self.keymap.mode().name(),
-            worktree: &place,
-            branch: &branch,
-            dirty: git.is_some_and(|git| git.changed > 0),
+            worktree: &location.name,
+            branch: &location.branch,
+            dirty: location.dirty,
             note,
             roll_up: &self.roll_up(),
         }

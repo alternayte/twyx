@@ -19,3 +19,7 @@ twyx-protocol = { workspace = true }
 [[test]]
 name = "text_system"
 harness = false
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+gpui-platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["font-kit", "test-support"] }
