@@ -134,6 +134,17 @@ fn paint_row(
     cx: &mut App,
     palette: Palette,
 ) {
+    // GPUI paints a text run's background only on request, and at the
+    // glyphs' advances; the cells' own backgrounds go on the grid.
+    for (column, width, background) in backgrounds(cells, palette) {
+        window.paint_quad(fill(
+            Bounds::new(
+                point(origin.x + metrics.cell_width * column as f32, origin.y),
+                size(metrics.cell_width * width as f32, metrics.line_height),
+            ),
+            background,
+        ));
+    }
     let (text, runs) = shape_input(cells, metrics, palette);
     if text.is_empty() {
         return;
@@ -152,6 +163,36 @@ fn paint_row(
     );
 }
 
+/// Each run of cells whose background is not the paper: its first column,
+/// its width in cells, and its colour.
+fn backgrounds(cells: &[Cell], palette: Palette) -> Vec<(usize, usize, Hsla)> {
+    let mut spans: Vec<(usize, usize, Hsla)> = Vec::new();
+    for (column, cell) in cells.iter().enumerate() {
+        let (_, background) = colours(cell, palette);
+        if background == palette.background {
+            continue;
+        }
+        match spans.last_mut() {
+            Some((start, width, colour)) if *start + *width == column && *colour == background => {
+                *width += 1;
+            }
+            _ => spans.push((column, 1, background)),
+        }
+    }
+    spans
+}
+
+/// A cell's foreground and background, after reverse video.
+fn colours(cell: &Cell, palette: Palette) -> (Hsla, Hsla) {
+    let foreground = colour(cell.fg, palette.foreground, &palette);
+    let background = colour(cell.bg, palette.background, &palette);
+    if cell.attrs.contains(Attrs::REVERSE) {
+        (background, foreground)
+    } else {
+        (foreground, background)
+    }
+}
+
 /// The text of one row and its styled runs, whose lengths cover the text exactly.
 fn shape_input(cells: &[Cell], metrics: &Metrics, palette: Palette) -> (String, Vec<TextRun>) {
     let mut text = String::new();
@@ -168,7 +209,6 @@ fn shape_input(cells: &[Cell], metrics: &Metrics, palette: Palette) -> (String, 
         match runs.last_mut() {
             Some(last)
                 if last.color == run.color
-                    && last.background_color == run.background_color
                     && last.underline == run.underline
                     && last.strikethrough == run.strikethrough
                     && last.font.weight == run.font.weight
@@ -188,11 +228,7 @@ fn shape_input(cells: &[Cell], metrics: &Metrics, palette: Palette) -> (String, 
 }
 
 fn style_of(cell: &Cell, metrics: &Metrics, palette: Palette) -> TextRun {
-    let mut foreground = colour(cell.fg, palette.foreground, &palette);
-    let mut background = colour(cell.bg, palette.background, &palette);
-    if cell.attrs.contains(Attrs::REVERSE) {
-        std::mem::swap(&mut foreground, &mut background);
-    }
+    let (foreground, _) = colours(cell, palette);
     let mut run_font = metrics.font.clone();
     if cell.attrs.contains(Attrs::BOLD) {
         run_font.weight = FontWeight::BOLD;
@@ -204,7 +240,7 @@ fn style_of(cell: &Cell, metrics: &Metrics, palette: Palette) -> TextRun {
         len: cell.text.len().max(1),
         font: run_font,
         color: foreground,
-        background_color: (background != palette.background).then_some(background),
+        background_color: None,
         underline: match cell.underline {
             Underline::None => None,
             _ => Some(UnderlineStyle {
@@ -286,6 +322,36 @@ mod tests {
         assert_eq!(text, "➜ 字x");
         assert_eq!(runs.len(), 4);
         assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len());
+    }
+
+    #[test]
+    fn reversed_and_coloured_cells_get_backgrounds_on_the_grid() {
+        let palette = Palette::of(Variant::Light);
+        let reversed = Cell {
+            attrs: Attrs::REVERSE,
+            ..Cell::blank()
+        };
+        let red = Cell {
+            bg: Colour::Palette(1),
+            ..Cell::blank()
+        };
+        let cells = vec![
+            Cell::blank(),
+            reversed.clone(),
+            reversed,
+            red.clone(),
+            Cell::blank(),
+            red,
+        ];
+        assert_eq!(
+            backgrounds(&cells, palette),
+            vec![
+                (1, 2, palette.foreground),
+                (3, 1, palette.ansi[1]),
+                (5, 1, palette.ansi[1]),
+            ],
+            "a selection's reverse video shows as the ink behind the cells"
+        );
     }
 }
 
