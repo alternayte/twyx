@@ -7,6 +7,7 @@ mod agents;
 mod api;
 mod checks;
 pub mod daemon;
+mod files;
 mod git;
 mod holders;
 mod inbox;

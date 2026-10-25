@@ -125,3 +125,15 @@ pub const EXIT_DRAIN: Duration = Duration::from_millis(250);
 
 /// How often the TUI looks at its timers when no key and no message comes.
 pub const CLIENT_TICK: Duration = Duration::from_millis(100);
+
+/// The most files a workspace's file list holds.
+pub const FILES_MAX: usize = 100_000;
+
+/// The most lines a search of a workspace's files returns.
+pub const FOUND_MAX: usize = 500;
+
+/// The longest file a search of a plain directory reads, in bytes.
+pub const FOUND_FILE_BYTES: u64 = 2 << 20;
+
+/// The longest line a search result keeps, in characters.
+pub const FOUND_LINE_CHARS: usize = 300;

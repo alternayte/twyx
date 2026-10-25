@@ -284,6 +284,8 @@ impl Client {
             | FromDaemon::CheckStarted { .. }
             | FromDaemon::CheckEnded(_)
             | FromDaemon::Shipped(_)
+            | FromDaemon::Files(_)
+            | FromDaemon::Found(_)
             | FromDaemon::Synced { .. } => {}
         }
     }
@@ -415,4 +417,34 @@ pub fn sh(script: &str) -> Launch {
         "-c".to_owned(),
         script.to_owned(),
     ])
+}
+
+/// A repository with one commit on `main`, under the sandbox.
+pub fn repo(sandbox: &Sandbox, name: &str) -> PathBuf {
+    let parent = sandbox.root.join("repos");
+    std::fs::create_dir_all(&parent).unwrap();
+    let parent = parent.canonicalize().unwrap();
+    git(&parent, &["init", "--quiet", "--initial-branch=main", name]);
+    let path = parent.join(name);
+    git(&path, &["config", "user.email", "t@example.com"]);
+    git(&path, &["config", "user.name", "t"]);
+    git(&path, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(path.join("README"), "hello\n").unwrap();
+    git(&path, &["add", "README"]);
+    git(&path, &["commit", "--quiet", "-m", "first"]);
+    path
+}
+
+pub fn git(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
 }

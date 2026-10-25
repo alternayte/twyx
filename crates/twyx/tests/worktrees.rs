@@ -15,37 +15,7 @@ use twyx_protocol::client::{
     Reviewed, SetupReport, ShipReport, ToDaemon,
 };
 
-use support::{Client, Sandbox, new_pane_at, sh};
-
-/// A repository with one commit on `main`, under the sandbox.
-fn repo(sandbox: &Sandbox, name: &str) -> PathBuf {
-    let parent = sandbox.root.join("repos");
-    std::fs::create_dir_all(&parent).unwrap();
-    let parent = parent.canonicalize().unwrap();
-    git(&parent, &["init", "--quiet", "--initial-branch=main", name]);
-    let path = parent.join(name);
-    git(&path, &["config", "user.email", "t@example.com"]);
-    git(&path, &["config", "user.name", "t"]);
-    git(&path, &["config", "commit.gpgsign", "false"]);
-    std::fs::write(path.join("README"), "hello\n").unwrap();
-    git(&path, &["add", "README"]);
-    git(&path, &["commit", "--quiet", "-m", "first"]);
-    path
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
+use support::{Client, Sandbox, git, new_pane_at, repo, sh};
 
 fn open(client: &mut Client, path: &Path) -> u64 {
     client

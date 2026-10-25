@@ -1470,6 +1470,8 @@ fn receive(state: &mut Shared, message: FromDaemon) -> Option<Effect> {
         FromDaemon::Welcome(_)
         | FromDaemon::Opened { .. }
         | FromDaemon::Switched { .. }
+        | FromDaemon::Files(_)
+        | FromDaemon::Found(_)
         | FromDaemon::Synced { .. }
         | FromDaemon::Recipes(_)
         | FromDaemon::RecipeOpened { .. }

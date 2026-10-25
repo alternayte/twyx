@@ -28,10 +28,20 @@ use twyx_protocol::holder::{AgentRules, PromptMark, ScreenMatch, ToHolder};
 use crate::daemon::Daemon;
 use crate::store::SavedAgent;
 
+impl PaneAgent {
+    /// The foreground process's pid and program name, while the pane runs.
+    pub(crate) fn foreground(&self) -> Option<(u32, &str)> {
+        self.foreground
+            .as_ref()
+            .map(|(pid, name)| (*pid, name.as_str()))
+    }
+}
+
 /// What the daemon knows of a pane's foreground process and agent.
 #[derive(Debug, Default)]
 pub(crate) struct PaneAgent {
-    foreground: Option<u32>,
+    /// The foreground process's pid and program name.
+    foreground: Option<(u32, String)>,
     pub session: Option<Session>,
     /// The session that ran when the pane ended; Resume continues it.
     pub ended: Option<Session>,
@@ -160,7 +170,7 @@ impl Daemon {
         let Some(entry) = self.panes.get_mut(&pane) else {
             return;
         };
-        entry.agent.foreground = Some(pid);
+        entry.agent.foreground = Some((pid, name.to_owned()));
         let start = match (&mut entry.agent.session, kind) {
             (Some(session), Some(kind)) if session.kind == kind => {
                 session.pid = Some(pid);
@@ -412,7 +422,7 @@ impl Daemon {
             let foreground = self
                 .panes
                 .get(&pane)
-                .and_then(|entry| entry.agent.foreground);
+                .and_then(|entry| entry.agent.foreground.as_ref().map(|(pid, _)| *pid));
             self.begin(pane, kind, foreground);
             self.send_rules(pane);
         }

@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result};
 
 pub(crate) mod checks;
+pub(crate) mod files;
 pub(crate) mod review;
 pub(crate) mod ship;
 

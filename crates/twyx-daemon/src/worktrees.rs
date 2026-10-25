@@ -179,6 +179,14 @@ pub(crate) enum Done {
         worktree: u64,
         argv: Result<Vec<String>, String>,
     },
+    Files {
+        client: u64,
+        list: twyx_protocol::client::FileList,
+    },
+    Found {
+        client: u64,
+        found: twyx_protocol::client::FoundText,
+    },
 }
 
 /// What follows a new worktree's setup.
@@ -388,6 +396,8 @@ impl Daemon {
                 script,
                 after,
             } => self.prepared(worktree, report, script, after),
+            Done::Files { client, list } => self.reply(client, FromDaemon::Files(list)),
+            Done::Found { client, found } => self.reply(client, FromDaemon::Found(found)),
             Done::Reviewed {
                 client,
                 review,

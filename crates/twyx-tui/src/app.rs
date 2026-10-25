@@ -447,6 +447,8 @@ fn run(
                 | FromDaemon::Recipes(_)
                 | FromDaemon::RecipeOpened { .. }
                 | FromDaemon::RecipeTrusted { .. }
+                | FromDaemon::Files(_)
+                | FromDaemon::Found(_)
                 | FromDaemon::Synced { .. } => {}
                 answer @ (FromDaemon::Refused { .. }
                 | FromDaemon::Overview(_)

@@ -740,6 +740,9 @@ impl Daemon {
             ToDaemon::MarkUnread { item } => self.set_read(item, false),
             ToDaemon::Dismiss { item } => self.dismiss(item),
             ToDaemon::Review { worktree } => self.review(id, worktree, None),
+            ToDaemon::Files { workspace } => self.files(id, workspace),
+            ToDaemon::FindInFiles { workspace, query } => self.find_in_files(id, workspace, query),
+            ToDaemon::OpenInEditor { path, line } => self.open_in_editor(id, path, line),
             ToDaemon::OpenReview { worktree } => self.open_review(id, worktree),
             ToDaemon::Notes { worktree } => self.notes(id, worktree),
             ToDaemon::AddNote {

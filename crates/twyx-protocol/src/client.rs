@@ -11,7 +11,7 @@ use crate::holder::CopyAction;
 use crate::input::InputEvent;
 
 pub const MAJOR: u16 = 3;
-pub const MINOR: u16 = 13;
+pub const MINOR: u16 = 14;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
@@ -803,6 +803,22 @@ pub enum ToDaemon {
     ShowTab {
         tab: u64,
     },
+    /// Sends the `Files` of a workspace's directory. Since minor 14.
+    Files {
+        workspace: u64,
+    },
+    /// Finds text in the files of a workspace's directory; sends `Found`.
+    /// Since minor 14.
+    FindInFiles {
+        workspace: u64,
+        query: String,
+    },
+    /// Opens a file in the Neovim of a pane in this client's workspace, at
+    /// a line; starts Neovim in a new pane when none runs. Since minor 14.
+    OpenInEditor {
+        path: String,
+        line: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -939,6 +955,47 @@ pub enum FromDaemon {
     Synced {
         token: u64,
     },
+    /// The files of a workspace's directory. Since minor 14.
+    Files(FileList),
+    /// Text found in a workspace's files. Since minor 14.
+    Found(FoundText),
+}
+
+/// The files of a workspace's directory: the tracked and the untracked
+/// files that are not ignored, or for a plain directory every file its
+/// ignore files do not hide.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileList {
+    pub workspace: u64,
+    /// The directory the paths are relative to.
+    pub root: String,
+    /// Sorted, with `/` between parts.
+    pub paths: Vec<String>,
+    /// More files exist than the list holds.
+    pub truncated: bool,
+    pub error: Option<String>,
+}
+
+/// The lines of a workspace's files that hold a query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FoundText {
+    pub workspace: u64,
+    pub query: String,
+    pub root: String,
+    pub hits: Vec<Hit>,
+    /// More lines hold the query than the list holds.
+    pub truncated: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hit {
+    /// Relative to the root.
+    pub path: String,
+    /// From 1.
+    pub line: u32,
+    /// The line, cut to a length.
+    pub text: String,
 }
 
 /// A worktree's checks: the user's, then the repository's.
