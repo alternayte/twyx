@@ -231,7 +231,7 @@ The desktop client also takes these keys from the panes. They are fixed.
 
 A mouse drag in a pane selects text, unless the pane's program asked for the mouse. Hold `shift` to select in such a pane.
 
-A program in a pane can print a link (OSC 8). In the desktop client, `cmd`-click on the link (`ctrl`-click on Linux) shows its target, and `y` opens it. Only `http`, `https` and `file` links open. The TUI passes links to your terminal, which opens them in its own way.
+A program in a pane can print a link (OSC 8). In the desktop client, the link is underlined while the mouse is over it. `cmd`-click on the link (`ctrl`-click on Linux) shows its target, and `y` opens it. Only `http`, `https` and `file` links open. The TUI passes links to your terminal, which opens them in its own way.
 
 ## Review view
 

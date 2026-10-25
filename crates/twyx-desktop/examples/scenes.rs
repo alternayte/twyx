@@ -240,9 +240,11 @@ fn main() -> Result<()> {
             ..Modifiers::default()
         }
     };
+    mouse(cx, window, drag_to(link))?;
+    shot(cx, window, &out, "10e-link-hover")?;
     mouse(cx, window, down_with(link, modifiers))?;
     mouse(cx, window, up(link))?;
-    shot(cx, window, &out, "10e-open-link")?;
+    shot(cx, window, &out, "10f-open-link")?;
     keys(cx, window, &["escape"])?;
 
     // A Git project, opened from the CLI, shows in the sidebar.

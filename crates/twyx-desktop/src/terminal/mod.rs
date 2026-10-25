@@ -228,6 +228,8 @@ pub struct Terminal {
     files_asked: Option<(u64, std::time::Instant)>,
     /// Text selected with the mouse, for copy.
     selection: Option<Selection>,
+    /// The link from pane output under the mouse: its pane and link id.
+    hover_link: Option<(u64, u32)>,
     /// The review leaves the last render placed.
     review_leaves: Vec<ReviewLeaf>,
     /// The document leaves the last render placed, and where each one is
@@ -338,6 +340,7 @@ impl Terminal {
             files_focus: false,
             files_asked: None,
             selection: None,
+            hover_link: None,
             review_leaves: Vec::new(),
             document_leaves: Vec::new(),
             document_scroll: HashMap::new(),
@@ -1200,7 +1203,27 @@ impl Terminal {
         cx.notify();
     }
 
+    /// The pane and link id of the link from pane output at a point.
+    fn link_at(&self, position: Point<Pixels>) -> Option<(u64, u32)> {
+        let (col, row) = self.cell(position)?;
+        let target = under(&self.placement.placed, col, row)?;
+        let (local_col, local_row) = target.local(col, row)?;
+        let pane = target.leaf.terminal()?.raw();
+        let link = self
+            .shared()
+            .views
+            .get(&pane)?
+            .cell(local_col, local_row)?
+            .link?;
+        Some((pane, link))
+    }
+
     fn on_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let hover = self.link_at(event.position);
+        if hover != self.hover_link {
+            self.hover_link = hover;
+            cx.notify();
+        }
         let Some(drag) = self.drag else {
             return;
         };
@@ -1519,6 +1542,16 @@ impl Terminal {
                 .map(|view| {
                     let mut view = view.clone();
                     view.cursor.visible &= focused;
+                    if let Some((pane, link)) = self.hover_link
+                        && Some(pane) == each.leaf.terminal().map(|pane| pane.raw())
+                    {
+                        // The link under the mouse is underlined, all of it.
+                        for cell in view.cells.iter_mut().flatten() {
+                            if cell.link == Some(link) {
+                                cell.underline = twyx_protocol::grid::Underline::Single;
+                            }
+                        }
+                    }
                     view
                 });
             let selection = self.selection.filter(|selection| {
