@@ -18,8 +18,8 @@ use std::time::Duration;
 use gpui::prelude::*;
 use gpui::{
     Bounds, ClipboardItem, Context, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, SystemNotification,
-    Window, canvas, div, point, px, size,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
+    SystemNotification, Window, canvas, div, point, px, size,
 };
 
 use twyx_core::config::{Config, ThemeConfig, Watch};
@@ -38,7 +38,7 @@ use twyx_protocol::dialog::{Answer, Dialog, Purpose};
 use twyx_protocol::files::Finder;
 use twyx_protocol::grid::{Frame, MouseMode, Snapshot};
 use twyx_protocol::holder::CopyAction;
-use twyx_protocol::input::{InputEvent, Modifiers, MouseAction, MouseEvent};
+use twyx_protocol::input::{InputEvent, KeyCode, KeyEvent, Modifiers, MouseAction, MouseEvent};
 use twyx_protocol::palette::{Choice, Entry, Pick, Picker, Scope, entries};
 use twyx_protocol::review::{Action as ReviewAction, Reviews};
 use twyx_protocol::view::{Selection, View};
@@ -242,6 +242,8 @@ pub struct Terminal {
     pictures: HashMap<String, Picture>,
     /// The wheel's turn over a review leaf not yet taken as a hunk step.
     review_wheel: f32,
+    /// Wheel travel over a pane not yet a whole line.
+    pane_wheel: f32,
     highlighter: Highlighter,
     /// The unread count the Dock badge shows.
     badge: usize,
@@ -349,6 +351,7 @@ impl Terminal {
             document_scroll: HashMap::new(),
             pictures: HashMap::new(),
             review_wheel: 0.0,
+            pane_wheel: 0.0,
             highlighter: Highlighter::default(),
             badge: 0,
             colours_sent: None,
@@ -1404,7 +1407,10 @@ impl Terminal {
         }
     }
 
-    /// The wheel goes to the focused pane under the pointer.
+    /// The wheel over the focused pane scrolls a program that asked for
+    /// the mouse. A full-screen program that did not gets arrow keys, and
+    /// a shell's history scrolls in copy mode, as in the TUI. A wheel
+    /// notch is three lines; a trackpad moves a line per line height.
     fn on_scroll(&mut self, event: &ScrollWheelEvent) {
         let Some((col, row)) = self.cell(event.position) else {
             return;
@@ -1412,24 +1418,59 @@ impl Terminal {
         let Some(focused) = self.focused_placed() else {
             return;
         };
+        let Some(pane) = focused.leaf.terminal().map(|pane| pane.raw()) else {
+            return;
+        };
         if focused.local(col, row).is_none() {
             return;
         }
-        let up = f32::from(event.delta.pixel_delta(px(1.0)).y) >= 0.0;
+        self.pane_wheel += match event.delta {
+            ScrollDelta::Lines(lines) => lines.y * 3.0,
+            ScrollDelta::Pixels(pixels) => pixels.y / self.metrics.line_height,
+        };
+        let lines = self.pane_wheel.trunc();
+        self.pane_wheel -= lines;
+        if lines == 0.0 {
+            return;
+        }
+        let (up, count) = (lines > 0.0, lines.abs() as u32);
+        let modes = self
+            .shared()
+            .views
+            .get(&pane)
+            .map(|view| (view.modes.mouse != MouseMode::Off, view.modes.alt_screen));
         let inner = focused.inner;
-        self.send(InputEvent::Mouse(MouseEvent {
-            col: col - inner.x,
-            row: row - inner.y,
-            button: if up {
-                twyx_protocol::input::MouseButton::WheelUp
-            } else {
-                twyx_protocol::input::MouseButton::WheelDown
-            },
-            action: MouseAction::Press,
-            mods: Modifiers::empty(),
-            pixel_col: None,
-            pixel_row: None,
-        }));
+        match modes {
+            Some((true, _)) => {
+                for _ in 0..count {
+                    self.send(InputEvent::Mouse(MouseEvent {
+                        col: col - inner.x,
+                        row: row - inner.y,
+                        button: if up {
+                            twyx_protocol::input::MouseButton::WheelUp
+                        } else {
+                            twyx_protocol::input::MouseButton::WheelDown
+                        },
+                        action: MouseAction::Press,
+                        mods: Modifiers::empty(),
+                        pixel_col: None,
+                        pixel_row: None,
+                    }));
+                }
+            }
+            Some((false, true)) => {
+                let code = if up { KeyCode::Up } else { KeyCode::Down };
+                for _ in 0..count {
+                    self.send(InputEvent::Key(KeyEvent::press(code, Modifiers::empty())));
+                }
+            }
+            Some((false, false)) => {
+                self.keymap.open(Mode::Copy);
+                let lines = if up { -(count as i32) } else { count as i32 };
+                self.request(ToDaemon::Copy(CopyAction::Scroll(lines)));
+            }
+            None => {}
+        }
     }
 
     /// The tab-area cell under a window point.

@@ -34,7 +34,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use gpui::{
     AnyWindowHandle, AppContext, HeadlessAppContext, Keystroke, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, point, px, size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta,
+    ScrollWheelEvent, point, px, size,
 };
 
 /// Lets the window and the daemon run for `wait`, then draws a frame.
@@ -80,6 +81,15 @@ fn down_with(at: Point<Pixels>, modifiers: Modifiers) -> PlatformInput {
         modifiers,
         click_count: 1,
         first_mouse: false,
+    })
+}
+
+/// A wheel turn of `lines` at a window point; positive scrolls back.
+fn wheel(at: Point<Pixels>, lines: f32) -> PlatformInput {
+    PlatformInput::ScrollWheel(ScrollWheelEvent {
+        position: at,
+        delta: ScrollDelta::Lines(point(0.0, lines)),
+        ..ScrollWheelEvent::default()
     })
 }
 
@@ -245,6 +255,19 @@ fn main() -> Result<()> {
     mouse(cx, window, down_with(link, modifiers))?;
     mouse(cx, window, up(link))?;
     shot(cx, window, &out, "10f-open-link")?;
+    keys(cx, window, &["escape"])?;
+
+    // The wheel over a shell scrolls its history back in copy mode.
+    keys(
+        cx,
+        window,
+        &["s", "e", "q", "space", "3", "0", "0", "enter"],
+    )?;
+    pump(cx, window, Duration::from_secs(1))?;
+    for _ in 0..5 {
+        mouse(cx, window, wheel(at(200.0, 200.0), 3.0))?;
+    }
+    shot(cx, window, &out, "10g-wheel-history")?;
     keys(cx, window, &["escape"])?;
 
     // A Git project, opened from the CLI, shows in the sidebar.
