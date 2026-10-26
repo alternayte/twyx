@@ -285,6 +285,8 @@ pub enum Command {
     NewWorktree,
     RemoveWorktree,
     SetupWorktree,
+    /// Ask for a directory and open it as a project.
+    OpenProject,
 }
 
 const SIDES: [(Side, &str); 4] = [
@@ -358,6 +360,7 @@ impl Command {
             Command::NewWorktree => "new-worktree".to_owned(),
             Command::RemoveWorktree => "remove-worktree".to_owned(),
             Command::SetupWorktree => "setup-worktree".to_owned(),
+            Command::OpenProject => "open-project".to_owned(),
         }
     }
 
@@ -413,6 +416,7 @@ impl Command {
             Command::NewWorktree => "new worktree".to_owned(),
             Command::RemoveWorktree => "remove".to_owned(),
             Command::SetupWorktree => "set up".to_owned(),
+            Command::OpenProject => "open project".to_owned(),
         }
     }
 
@@ -451,6 +455,7 @@ impl Command {
             Command::NewWorktree,
             Command::RemoveWorktree,
             Command::SetupWorktree,
+            Command::OpenProject,
             Command::SidebarUp,
             Command::SidebarDown,
             Command::SidebarOpen,
@@ -636,6 +641,7 @@ impl Default for Keymap {
             key('t', C::NewTask),
             key('x', C::RemoveWorktree),
             key('u', C::SetupWorktree),
+            key('o', C::OpenProject),
             key('s', C::Switcher),
             key('b', C::ToggleSidebar),
             key('j', C::SidebarDown),

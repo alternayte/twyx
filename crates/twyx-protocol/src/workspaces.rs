@@ -219,6 +219,14 @@ impl Workspaces {
                 }
                 _ => self.message = Some("not in a Git repository".to_owned()),
             },
+            Command::OpenProject => {
+                effect.dialog = Some(Dialog::Prompt {
+                    title: "open project".to_owned(),
+                    text: "~/".to_owned(),
+                    purpose: Purpose::OpenProject,
+                });
+                effect.leave = true;
+            }
             Command::RemoveWorktree => match self.subject(in_mode, shown) {
                 (_, Some(worktree)) => {
                     effect.requests.push(ToDaemon::PlanRemoval { worktree });
@@ -270,6 +278,12 @@ impl Workspaces {
             effect.requests.push(ToDaemon::Commit {
                 worktree,
                 message: text.clone(),
+            });
+        }
+        if purpose == Purpose::OpenProject {
+            effect.requests.push(ToDaemon::Open {
+                path: crate::files::home_expanded(&text),
+                switch: true,
             });
         }
         if let Purpose::NewWorktree { project } = purpose {
@@ -328,6 +342,7 @@ impl Workspaces {
             | Purpose::RenameTab { .. }
             | Purpose::CopySearch
             | Purpose::OpenLink { .. }
+            | Purpose::OpenProject
             | Purpose::NewTask { .. }
             | Purpose::Note { .. } => {}
         }
@@ -843,6 +858,25 @@ mod tests {
         workspaces.cursor = 5;
         let effect = workspaces.command(Command::NewWorktree, true, None);
         assert!(effect.dialog.is_none());
+    }
+
+    #[test]
+    fn open_project_asks_for_a_path_from_home_and_opens_it() {
+        let mut workspaces = workspaces();
+        let effect = workspaces.command(Command::OpenProject, false, None);
+        let Some(Dialog::Prompt { text, purpose, .. }) = effect.dialog else {
+            panic!("no prompt");
+        };
+        assert_eq!(text, "~/");
+        let home = std::env::var("HOME").unwrap();
+        let effect = workspaces.prompted(purpose, "~/code/app/".to_owned());
+        assert_eq!(
+            effect.requests,
+            vec![ToDaemon::Open {
+                path: format!("{home}/code/app/"),
+                switch: true,
+            }]
+        );
     }
 
     #[test]

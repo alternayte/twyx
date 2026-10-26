@@ -65,6 +65,8 @@ pub enum Purpose {
     OpenLink {
         target: String,
     },
+    /// A directory to open as a project; tab completes it.
+    OpenProject,
 }
 
 impl Dialog {
@@ -177,6 +179,10 @@ impl Dialog {
                         },
                     }
                 }
+                (Key::Tab, _) if *purpose == Purpose::OpenProject => {
+                    *text = crate::files::complete_directory(text);
+                    Answer::Stay
+                }
                 (Key::Backspace, _) => {
                     text.pop();
                     Answer::Stay
@@ -249,5 +255,50 @@ impl Dialog {
             }
             Dialog::Confirm { .. } => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_in_the_open_project_prompt_completes_directories() {
+        let root = std::env::temp_dir().join(format!("twyx-complete-{}", std::process::id()));
+        for directory in ["alpha", "alpine", "beta", ".hidden"] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        std::fs::write(root.join("bee.txt"), "").unwrap();
+        let root = root.to_string_lossy().into_owned();
+        let tab = |text: &str| {
+            let mut dialog = Dialog::Prompt {
+                title: String::new(),
+                text: text.to_owned(),
+                purpose: Purpose::OpenProject,
+            };
+            assert_eq!(dialog.key(Chord::plain(Key::Tab)), Answer::Stay);
+            let Dialog::Prompt { text, .. } = dialog else {
+                unreachable!()
+            };
+            text
+        };
+        assert_eq!(
+            tab(&format!("{root}/b")),
+            format!("{root}/beta/"),
+            "files never complete"
+        );
+        assert_eq!(
+            tab(&format!("{root}/al")),
+            format!("{root}/alp"),
+            "the common start"
+        );
+        assert_eq!(tab(&format!("{root}/alph")), format!("{root}/alpha/"));
+        assert_eq!(tab(&format!("{root}/.h")), format!("{root}/.hidden/"));
+        assert_eq!(
+            tab(&format!("{root}/x")),
+            format!("{root}/x"),
+            "no match keeps the text"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

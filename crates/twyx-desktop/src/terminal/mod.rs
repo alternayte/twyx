@@ -930,7 +930,7 @@ impl Terminal {
     }
 
     /// Runs a command from a key or the palette.
-    fn run(&mut self, command: Command, cx: &mut Context<Self>) {
+    pub(super) fn run(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
             Command::Detach => cx.quit(),
             Command::Palette => {
@@ -951,6 +951,7 @@ impl Terminal {
             | Command::NewWorktree
             | Command::RemoveWorktree
             | Command::SetupWorktree
+            | Command::OpenProject
             | Command::Switcher) => {
                 let in_mode = self.keymap.mode() == Mode::Workspace;
                 let effect = {

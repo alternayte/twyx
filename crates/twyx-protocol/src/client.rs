@@ -1149,6 +1149,7 @@ pub fn request(command: Command, focused: Option<&PaneInfo>) -> Option<ToDaemon>
         | Command::NewWorktree
         | Command::RemoveWorktree
         | Command::SetupWorktree
+        | Command::OpenProject
         | Command::Enter(_)
         | Command::Palette
         | Command::Help

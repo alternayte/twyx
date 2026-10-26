@@ -7,6 +7,54 @@ use twyx_core::keys::{Chord, Key};
 
 use crate::client::{FileList, FoundText, Hit, ToDaemon};
 
+/// A typed path with a leading `~` as the home directory.
+pub fn home_expanded(text: &str) -> String {
+    match (text.strip_prefix('~'), std::env::var("HOME")) {
+        (Some(rest), Ok(home)) if rest.is_empty() || rest.starts_with('/') => {
+            format!("{home}{rest}")
+        }
+        _ => text.to_owned(),
+    }
+}
+
+/// A typed directory path completed as far as its directories agree: one
+/// match gains its `/`, several their common start. A hidden directory
+/// completes only from a typed dot.
+pub fn complete_directory(text: &str) -> String {
+    let (parent, start) = match text.rfind('/') {
+        Some(at) => (&text[..=at], &text[at + 1..]),
+        None => return text.to_owned(),
+    };
+    let Ok(entries) = std::fs::read_dir(home_expanded(parent)) else {
+        return text.to_owned();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| {
+            name.starts_with(start) && (start.starts_with('.') || !name.starts_with('.'))
+        })
+        .collect();
+    names.sort();
+    match names.as_slice() {
+        [] => text.to_owned(),
+        [only] => format!("{parent}{only}/"),
+        [first, rest @ ..] => {
+            let common = rest.iter().fold(first.len(), |common, name| {
+                first
+                    .chars()
+                    .zip(name.chars())
+                    .take_while(|(a, b)| a == b)
+                    .map(|(a, _)| a.len_utf8())
+                    .sum::<usize>()
+                    .min(common)
+            });
+            format!("{parent}{}", &first[..common])
+        }
+    }
+}
+
 /// One visible row of the tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeRow {

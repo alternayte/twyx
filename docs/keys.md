@@ -12,7 +12,7 @@ Every key goes to the focused pane, except the prefix. The prefix is `ctrl-g`.
 
 Copy mode (`ctrl-g c`) moves a cursor over the pane and its scrollback. `v` starts a selection, and `y` or `enter` copies it to the clipboard and leaves copy mode. `/` searches from the newest output toward the oldest, and `n` and `N` move between the matches. Every client of the pane sees the same copy cursor. The mouse wheel over a shell opens copy mode too.
 
-Workspace mode (`ctrl-g w`) shows the sidebar while it is open and moves a cursor over it: `j` and `k` move, `enter` shows the workspace, worktree or pane under the cursor, `h` and `l` go to the previous and next workspace, `n` makes a worktree of the project under the cursor, `x` removes the worktree under the cursor after a prompt, and `u` sets it up again. `ctrl-g b` keeps the sidebar open beside the panes, and `ctrl-g s` opens the workspace switcher.
+Workspace mode (`ctrl-g w`) shows the sidebar while it is open and moves a cursor over it: `j` and `k` move, `enter` shows the workspace, worktree or pane under the cursor, `h` and `l` go to the previous and next workspace, `n` makes a worktree of the project under the cursor, `x` removes the worktree under the cursor after a prompt, and `u` sets it up again, and `o` opens a project: type its directory, `tab` completes it, and `enter` opens it. The desktop sidebar has an `open project` row that does the same. `ctrl-g b` keeps the sidebar open beside the panes, and `ctrl-g s` opens the workspace switcher.
 
 These are all the keys twyx can take from a pane: the prefix, the keys below once the prefix has opened a mode, and the desktop shortcuts.
 
@@ -200,6 +200,7 @@ You cannot bind the prefix or `esc` in a mode. A wrong key, command or section s
 | `t` | `new-task` |
 | `x` | `remove-worktree` |
 | `u` | `setup-worktree` |
+| `o` | `open-project` |
 | `s` | `switcher` |
 | `b` | `toggle-sidebar` |
 | `j` | `sidebar-down` |

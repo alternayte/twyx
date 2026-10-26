@@ -270,6 +270,27 @@ fn main() -> Result<()> {
     shot(cx, window, &out, "10g-wheel-history")?;
     keys(cx, window, &["escape"])?;
 
+    // Open project asks for a directory; tab completes it. GPUI reads a
+    // typed dash as a separator, so the name has none.
+    let picked =
+        repository_at(std::env::temp_dir().join(format!("twyxpicked{}", std::process::id())))?;
+    let typed = format!(
+        "{}/twyxpick",
+        picked.parent().context("a parent")?.display()
+    );
+    keys(cx, window, &["ctrl-g", "w", "o", "backspace", "backspace"])?;
+    let typed: Vec<String> = typed.chars().map(String::from).collect();
+    keys(
+        cx,
+        window,
+        &typed.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    keys(cx, window, &["tab"])?;
+    shot(cx, window, &out, "10h-open-project")?;
+    keys(cx, window, &["enter"])?;
+    pump(cx, window, Duration::from_secs(2))?;
+    shot(cx, window, &out, "10i-project-opened")?;
+
     // A Git project, opened from the CLI, shows in the sidebar.
     let repo = repository("scenes")?;
     let twyx = std::env::var_os("TWYX_BINARY").context("TWYX_BINARY names the twyx binary")?;
@@ -448,7 +469,10 @@ fn review(
 /// A Git repository with one commit, in a new temporary directory named
 /// after `name`.
 fn repository(name: &str) -> Result<std::path::PathBuf> {
-    let repo = std::env::temp_dir().join(format!("twyx-{name}-{}", std::process::id()));
+    repository_at(std::env::temp_dir().join(format!("twyx-{name}-{}", std::process::id())))
+}
+
+fn repository_at(repo: std::path::PathBuf) -> Result<std::path::PathBuf> {
     std::fs::create_dir_all(&repo)?;
     std::fs::write(repo.join("README.md"), "scenes\n")?;
     for args in [

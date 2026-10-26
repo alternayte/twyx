@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::{Context, Div, FontWeight, MouseButton, MouseDownEvent, div, px};
-use twyx_core::keys::Mode;
+use twyx_core::keys::{Command, Mode};
 use twyx_core::theme::{AgentState, DESKTOP, Motion};
 use twyx_protocol::client::InboxItem;
 use twyx_protocol::lists;
@@ -103,6 +103,24 @@ impl Terminal {
             list =
                 list.child(self.sidebar_row(index, row, selected == Some(index), fade, tones, cx));
         }
+        list = list.child(
+            div()
+                .flex()
+                .items_center()
+                .h(px(DESKTOP.unit * 6.0))
+                .px(px(DESKTOP.pad * 2.0))
+                .text_size(px(DESKTOP.size.caption))
+                .text_color(tones.graphite)
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.run(Command::OpenProject, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .child("+ open project"),
+        );
         if !inbox.is_empty() {
             let unread = inbox.iter().filter(|item| !item.read).count();
             list = list.child(

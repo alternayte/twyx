@@ -927,7 +927,8 @@ fn run(
                         | Command::PreviousWorkspace
                         | Command::NewWorktree
                         | Command::RemoveWorktree
-                        | Command::SetupWorktree),
+                        | Command::SetupWorktree
+                        | Command::OpenProject),
                     ) => {
                         let in_mode = keymap.mode() == Mode::Workspace;
                         apply!(workspaces.command(command, in_mode, follow.workspace.as_ref()));
