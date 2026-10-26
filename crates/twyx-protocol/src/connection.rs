@@ -82,14 +82,24 @@ fn daemon_binary() -> Result<std::path::PathBuf> {
     if let Some(path) = std::env::var_os("TWYX_BINARY") {
         return Ok(path.into());
     }
-    let current = std::env::current_exe().context("find the twyx binary")?;
+    binary_beside(&std::env::current_exe().context("find the twyx binary")?)
+}
+
+fn binary_beside(current: &Path) -> Result<std::path::PathBuf> {
     if let Some(directory) = current.parent() {
         let sibling = directory.join("twyx");
         if sibling.is_file() {
             return Ok(sibling);
         }
     }
-    Ok(current)
+    // Another client binary would start itself, not a daemon.
+    if current.file_name() == Some(std::ffi::OsStr::new("twyx")) {
+        return Ok(current.to_path_buf());
+    }
+    bail!(
+        "no twyx binary next to {}; build it with cargo build -p twyx, or set TWYX_BINARY",
+        current.display()
+    )
 }
 
 /// Waits for a daemon to answer, starting one first when there is none.
@@ -259,5 +269,27 @@ impl Connection {
             outgoing,
             hello: self.hello,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_client_without_the_twyx_binary_beside_it_never_starts_itself_as_the_daemon() {
+        let directory = std::env::temp_dir().join(format!("twyx-binary-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let desktop = directory.join("twyx-desktop");
+        std::fs::write(&desktop, "").unwrap();
+        assert!(
+            binary_beside(&desktop).is_err(),
+            "the desktop binary would open a window for each start"
+        );
+        let twyx = directory.join("twyx");
+        std::fs::write(&twyx, "").unwrap();
+        assert_eq!(binary_beside(&desktop).unwrap(), twyx);
+        assert_eq!(binary_beside(&twyx).unwrap(), twyx);
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 }
