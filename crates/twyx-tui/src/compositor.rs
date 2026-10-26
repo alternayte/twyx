@@ -70,6 +70,8 @@ pub struct Scene<'a> {
     pub checks: Option<&'a twyx_protocol::client::ChecksInfo>,
     /// The shown workspace's files, for quick open.
     pub files: &'a [String],
+    /// Why the shown workspace has no files, such as the default one.
+    pub files_error: Option<&'a str>,
     pub sidebar: Option<SidebarScene<'a>>,
 }
 
@@ -763,6 +765,7 @@ mod tests {
             tops: &Tops::default(),
             checks: None,
             files: &[],
+            files_error: None,
             sidebar: None,
         }
         .compose();

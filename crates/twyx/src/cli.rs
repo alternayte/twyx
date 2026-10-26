@@ -337,7 +337,7 @@ pub fn run() -> Result<()> {
         // and inside a twyx pane, the last one.
         if std::env::var_os("TWYX_PANE_ID").is_none()
             && let Ok(here) = std::env::current_dir()
-            && crate::projects::in_repository(&here)
+            && twyx_core::paths::in_repository(&here)
         {
             return crate::projects::open(&here, false, false);
         }

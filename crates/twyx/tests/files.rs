@@ -121,6 +121,36 @@ fn a_plain_directory_keeps_to_its_ignore_files() {
     );
 }
 
+#[test]
+fn the_default_workspace_lists_no_files_and_finds_nothing() {
+    let mut sandbox = Sandbox::new("fd");
+    sandbox.start();
+    let mut client = sandbox.connect(80, 24);
+    client.wait_until("the default workspace", |c| c.workspace.is_some());
+    let workspace = client.workspace.as_ref().unwrap().workspace;
+    let list = files(&mut client, workspace);
+    assert_eq!(list.paths, Vec::<String>::new(), "no walk of $HOME");
+    assert_eq!(
+        list.error.as_deref(),
+        Some("open a project to list its files")
+    );
+    client
+        .send(&ToDaemon::FindInFiles {
+            workspace,
+            query: "needle".to_owned(),
+        })
+        .unwrap();
+    let found: FoundText = client.expect("the found lines", |message| match message {
+        FromDaemon::Found(found) => Some(found.clone()),
+        _ => None,
+    });
+    assert_eq!(found.hits, []);
+    assert_eq!(
+        found.error.as_deref(),
+        Some("open a project to list its files")
+    );
+}
+
 /// What the Neovim at `socket` edits: the file name and the cursor line.
 fn editing(socket: &Path) -> String {
     let output = Command::new("nvim")

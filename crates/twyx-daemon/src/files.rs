@@ -2,7 +2,8 @@
 //! query, and "Open in Neovim".
 //!
 //! A worktree's files come from Git. A plain directory's come from a walk
-//! that keeps to its ignore files.
+//! that keeps to its ignore files. The default workspace, at `$HOME`, lists
+//! none.
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -14,6 +15,8 @@ use twyx_protocol::client::{FileList, FoundText, Hit, Launch, Place};
 use crate::daemon::Daemon;
 use crate::git;
 use crate::worktrees::Done;
+
+const NO_PROJECT: &str = "open a project to list its files";
 
 impl Daemon {
     /// The workspace's directory, and whether it is a Git worktree.
@@ -33,8 +36,11 @@ impl Daemon {
             self.refuse(client, format!("no workspace {workspace}"));
             return;
         };
+        let home = workspace == self.default_workspace;
         self.job(move || {
-            let listed = if git {
+            let listed = if home {
+                Err(anyhow::anyhow!(NO_PROJECT))
+            } else if git {
                 git::files::list(&root, tuning::FILES_MAX)
             } else {
                 Ok(walk(&root, tuning::FILES_MAX))
@@ -61,8 +67,11 @@ impl Daemon {
             self.refuse(client, format!("no workspace {workspace}"));
             return;
         };
+        let home = workspace == self.default_workspace;
         self.job(move || {
-            let found = if query.is_empty() {
+            let found = if home {
+                Err(anyhow::anyhow!(NO_PROJECT))
+            } else if query.is_empty() {
                 Ok((Vec::new(), false))
             } else if git {
                 git::files::grep(&root, &query, tuning::FOUND_MAX, tuning::FOUND_LINE_CHARS)

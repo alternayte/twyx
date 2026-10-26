@@ -8,7 +8,7 @@ use gpui::{
     px, size,
 };
 use twyx_core::theme::DESKTOP;
-use twyx_protocol::palette::Picker;
+use twyx_protocol::palette::{Picker, Scope};
 
 use super::Terminal;
 use crate::paint::Tones;
@@ -31,6 +31,18 @@ impl Terminal {
         let left = ((f32::from(window.viewport_size().width) - width) / 2.0).max(0.0);
         let entries = self.entries(picker.scope);
         let found = picker.found(&entries);
+        // Quick open with no list says why, such as in the default workspace.
+        let empty = match picker.scope {
+            Scope::Files => self
+                .shared()
+                .workspaces
+                .files
+                .list
+                .as_ref()
+                .and_then(|list| list.error.clone()),
+            Scope::Palette | Scope::Switcher => None,
+        }
+        .unwrap_or_else(|| "nothing matches".to_owned());
         // The list scrolls so the selection stays in view.
         let first = picker.selected.saturating_sub(ROWS - 1);
         let mut list = div().relative().flex().flex_col();
@@ -77,7 +89,7 @@ impl Terminal {
                     .items_center()
                     .px(px(DESKTOP.pad * 2.0))
                     .text_color(tones.graphite)
-                    .child("nothing matches"),
+                    .child(empty),
             );
         }
         div()

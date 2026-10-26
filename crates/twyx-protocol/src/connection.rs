@@ -160,6 +160,27 @@ pub fn attach(
     connect(&paths.socket(), cols, rows, interactive, workspace)
 }
 
+/// The workspace of the repository the client starts in, opened without
+/// moving another client; `None` outside a repository and inside a twyx
+/// pane, where a client shows the workspace it used last.
+pub fn open_here(paths: &twyx_core::paths::Paths) -> Result<Option<u64>> {
+    let here = match std::env::current_dir() {
+        Ok(here) if std::env::var_os("TWYX_PANE_ID").is_none() => here,
+        _ => return Ok(None),
+    };
+    if !twyx_core::paths::in_repository(&here) {
+        return Ok(None);
+    }
+    let shown: serde_json::Value = attach_api(paths)?.call(
+        "open",
+        &crate::api::Open {
+            path: here.to_string_lossy().into_owned(),
+            switch: false,
+        },
+    )?;
+    Ok(shown["workspace"].as_u64())
+}
+
 /// An API v1 client of this build's daemon. A daemon from another build
 /// is replaced when no interactive client is attached, and kept otherwise.
 pub fn attach_api(paths: &twyx_core::paths::Paths) -> Result<crate::api::Client> {

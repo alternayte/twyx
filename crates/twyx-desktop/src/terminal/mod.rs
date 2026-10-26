@@ -230,6 +230,8 @@ pub struct Terminal {
     selection: Option<Selection>,
     /// The link from pane output under the mouse: its pane and link id.
     hover_link: Option<(u64, u32)>,
+    /// The repository the app started in has had its workspace opened.
+    opened_here: bool,
     /// The review leaves the last render placed.
     review_leaves: Vec<ReviewLeaf>,
     /// The document leaves the last render placed, and where each one is
@@ -341,6 +343,7 @@ impl Terminal {
             files_asked: None,
             selection: None,
             hover_link: None,
+            opened_here: false,
             review_leaves: Vec::new(),
             document_leaves: Vec::new(),
             document_scroll: HashMap::new(),
@@ -362,11 +365,22 @@ impl Terminal {
         };
         // The window has no prompt yet, so a daemon from another build that
         // other clients use is kept rather than replaced.
-        let shown = self
+        let mut shown = self
             .shared()
             .workspace
             .as_ref()
             .map(|shown| shown.workspace);
+        // Started in a repository, the first window shows its workspace,
+        // as `twyx` does.
+        if !self.opened_here {
+            match connection::open_here(&paths) {
+                Ok(here) => {
+                    self.opened_here = true;
+                    shown = shown.or(here);
+                }
+                Err(error) => eprintln!("twyx-desktop: {error:#}"),
+            }
+        }
         let attached =
             connection::attach(&paths, self.grid.0, self.grid.1, true, shown, |others| {
                 eprintln!(

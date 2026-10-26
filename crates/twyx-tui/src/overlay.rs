@@ -171,7 +171,7 @@ impl Overlay {
             Overlay::Picker(picker) => {
                 let entries = entries(scene, picker.scope);
                 let found = picker.found(&entries);
-                let shown: Vec<Entry<'_>> = found
+                let mut shown: Vec<Entry<'_>> = found
                     .iter()
                     .map(|found| {
                         let entry = &entries[found.index];
@@ -182,6 +182,17 @@ impl Overlay {
                         }
                     })
                     .collect();
+                // Quick open with no list says why, such as in the default
+                // workspace.
+                if let (true, palette::Scope::Files, Some(error)) =
+                    (shown.is_empty(), picker.scope, scene.files_error)
+                {
+                    shown.push(Entry {
+                        text: error,
+                        kind: "",
+                        matched: &[],
+                    });
+                }
                 // The list scrolls so the choice stays in view.
                 let room = usize::from(area.height.saturating_sub(6)).max(1);
                 let selected = picker.selected;
@@ -206,7 +217,7 @@ impl Overlay {
                         )
                     })
                     .collect();
-                let entries: Vec<Entry<'_>> = lines
+                let mut entries: Vec<Entry<'_>> = lines
                     .iter()
                     .map(|(text, kind)| Entry {
                         text,
@@ -214,6 +225,19 @@ impl Overlay {
                         matched: &[],
                     })
                     .collect();
+                if let (true, Some(error)) = (
+                    entries.is_empty(),
+                    finder
+                        .found
+                        .as_ref()
+                        .and_then(|found| found.error.as_deref()),
+                ) {
+                    entries.push(Entry {
+                        text: error,
+                        kind: "",
+                        matched: &[],
+                    });
+                }
                 let room = usize::from(area.height.saturating_sub(6)).max(1);
                 let selected = finder.selected.min(entries.len().saturating_sub(1));
                 let skip = selected.saturating_sub(room - 1);

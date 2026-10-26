@@ -104,6 +104,15 @@ fn xdg(variable: &str, fallback: &str) -> Result<PathBuf> {
     }
 }
 
+/// Whether a directory is inside a Git repository: it or a parent holds a
+/// `.git` directory, or the `.git` file of a linked worktree. Only the
+/// daemon runs Git, so this looks for the entry itself.
+pub fn in_repository(directory: &Path) -> bool {
+    directory
+        .ancestors()
+        .any(|ancestor| ancestor.join(".git").exists())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

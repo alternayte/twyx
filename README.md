@@ -43,7 +43,7 @@ This puts `twyx` and `twyx-desktop` in `~/.cargo/bin`. Install both from the sam
 
 Run `twyx` in your terminal. It starts the daemon when none runs, and it attaches the TUI. In a Git repository it shows that repository's workspace. Elsewhere it shows the workspace you used last.
 
-Run `twyx-desktop` to open the desktop app. It attaches to the same daemon, so it shows the same panes.
+Run `twyx-desktop` to open the desktop app. It attaches to the same daemon, so it shows the same panes. Like `twyx`, it shows the workspace of the repository it starts in.
 
 The prefix is `ctrl-g`. Every other key goes to the focused pane.
 

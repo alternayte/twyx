@@ -261,7 +261,7 @@ These keys work while a review leaf has the focus. They are fixed. The view show
 
 ## Files
 
-`ctrl-g o` lists the files of the workspace. Type to narrow the list, and `enter` opens the file: a Markdown file as a document, any other file in Neovim. `ctrl-g /` finds text in the files: type the text, and `enter` opens the chosen line in Neovim. A query with no capital letter ignores case. The list has the tracked files and the untracked files that Git does not ignore. In a directory that is not a Git repository, the list has the files that its ignore files do not hide.
+`ctrl-g o` lists the files of the workspace. Type to narrow the list, and `enter` opens the file: a Markdown file as a document, any other file in Neovim. `ctrl-g /` finds text in the files: type the text, and `enter` opens the chosen line in Neovim. A query with no capital letter ignores case. The list has the tracked files and the untracked files that Git does not ignore. In a directory that is not a Git repository, the list has the files that its ignore files do not hide. The default workspace, at your home directory, has no file list: open a project first.
 
 twyx opens the file in the Neovim of a pane in the workspace. With no Neovim in the workspace, it starts Neovim in a new pane.
 

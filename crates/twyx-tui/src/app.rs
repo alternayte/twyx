@@ -364,6 +364,11 @@ fn run(
                     .list
                     .as_ref()
                     .map_or(&[], |list| list.paths.as_slice()),
+                files_error: workspaces
+                    .files
+                    .list
+                    .as_ref()
+                    .and_then(|list| list.error.as_deref()),
                 sidebar: (workspaces.docked || keymap.mode() == Mode::Workspace).then_some(
                     SidebarScene {
                         rows: &workspaces.rows,
