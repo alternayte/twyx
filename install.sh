@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs the twyx binary from a GitHub release.
+# Installs twyx and the twyx-desktop app from a GitHub release.
 #
 #   curl -fsSL https://raw.githubusercontent.com/alternayte/twyx/main/install.sh | sh
 #
@@ -52,10 +52,13 @@ fi
 
 tar -xzf "$work/$archive" -C "$work"
 mkdir -p "$dir"
-# A new inode, so a running daemon keeps its own binary.
-cp "$work/twyx-$target/twyx" "$dir/twyx.new"
-chmod 755 "$dir/twyx.new"
-mv -f "$dir/twyx.new" "$dir/twyx"
+# A new inode, so a running daemon keeps its own binary. The desktop app
+# starts the daemon from the twyx beside it.
+for binary in twyx twyx-desktop; do
+  cp "$work/twyx-$target/$binary" "$dir/$binary.new"
+  chmod 755 "$dir/$binary.new"
+  mv -f "$dir/$binary.new" "$dir/$binary"
+done
 printf 'installed %s\n' "$("$dir/twyx" --version) in $dir"
 
 case ":$PATH:" in

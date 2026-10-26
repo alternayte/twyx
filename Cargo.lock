@@ -6196,7 +6196,7 @@ dependencies = [
 
 [[package]]
 name = "twyx"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -6214,7 +6214,7 @@ dependencies = [
 
 [[package]]
 name = "twyx-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "pulldown-cmark",
@@ -6227,7 +6227,7 @@ dependencies = [
 
 [[package]]
 name = "twyx-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "ignore",
@@ -6244,7 +6244,7 @@ dependencies = [
 
 [[package]]
 name = "twyx-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "gpui-pre",
@@ -6258,7 +6258,7 @@ dependencies = [
 
 [[package]]
 name = "twyx-holder"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "libghostty-vt",
@@ -6270,7 +6270,7 @@ dependencies = [
 
 [[package]]
 name = "twyx-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bitflags 2.13.2",
@@ -6284,7 +6284,7 @@ dependencies = [
 
 [[package]]
 name = "twyx-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

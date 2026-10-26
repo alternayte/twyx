@@ -30,12 +30,14 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
-      - run: cargo build --release --locked --package twyx --bin twyx
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev
+      - run: cargo build --release --locked --package twyx --bin twyx --package twyx-desktop --bin twyx-desktop
       - name: Package
         run: |
           name="twyx-${{ matrix.target }}"
           mkdir "$name"
-          cp target/release/twyx LICENSE README.md "$name/"
+          cp target/release/twyx target/release/twyx-desktop LICENSE README.md "$name/"
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
       - uses: actions/upload-artifact@v4

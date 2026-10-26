@@ -7,7 +7,7 @@ twyx runs Neovim, shells and agent CLIs unmodified, locally or over SSH. It need
 no account, no cloud, no model and no credentials.
 
 Status: early. Version 0.1.0 is the first release.
-The terminal client works. The desktop client is not ready for use yet. [docs/parity.md](docs/parity.md) lists what each client does.
+The terminal client works. The desktop client is in early use. [docs/parity.md](docs/parity.md) lists what each client does.
 
 ![twyx with Claude Code at work in a task worktree, Neovim on the file it changes, a test pane, and the sidebar with each agent's state](docs/images/workspace.png)
 
@@ -19,7 +19,7 @@ Install the latest release on macOS or Linux, on arm64 or x86_64:
 curl -fsSL https://raw.githubusercontent.com/alternayte/twyx/main/install.sh | sh
 ```
 
-This puts `twyx` in `~/.local/bin`. Set `TWYX_INSTALL_DIR` to use another directory, and `TWYX_VERSION` (for example `v0.1.0`) to install one release. You need Git 2.34 or later on PATH. Review uses `git apply --cached --3way`, which older Git refuses.
+This puts `twyx` and the desktop app, `twyx-desktop`, in `~/.local/bin`. Keep the two in the same directory: the desktop app starts the daemon from the `twyx` next to it. Set `TWYX_INSTALL_DIR` to use another directory, and `TWYX_VERSION` (for example `v0.1.0`) to install one release. You need Git 2.34 or later on PATH. Review uses `git apply --cached --3way`, which older Git refuses. On Linux, the desktop app also needs a Vulkan driver, fontconfig, libxkbcommon, libxkbcommon-x11 and libwayland-client.
 
 To update, run the same command again. Then run `twyx daemon stop`. Your panes keep running, and the next `twyx` starts the new daemon, which adopts them.
 
@@ -34,13 +34,16 @@ You need these on PATH:
 git clone https://github.com/alternayte/twyx.git
 cd twyx
 cargo install --locked --path crates/twyx
+cargo install --locked --path crates/twyx-desktop
 ```
 
-This puts `twyx` in `~/.cargo/bin`.
+This puts `twyx` and `twyx-desktop` in `~/.cargo/bin`. Install both from the same source: the daemon and the desktop app must be the same build.
 
 ## Start
 
 Run `twyx` in your terminal. It starts the daemon when none runs, and it attaches the TUI. In a Git repository it shows that repository's workspace. Elsewhere it shows the workspace you used last.
+
+Run `twyx-desktop` to open the desktop app. It attaches to the same daemon, so it shows the same panes.
 
 The prefix is `ctrl-g`. Every other key goes to the focused pane.
 
